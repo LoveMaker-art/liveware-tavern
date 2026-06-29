@@ -27,7 +27,7 @@ skills/tavern/
   server.py            # http.server，do_GET/do_POST，路由按 path（digest server.py:545）
   reader/              # 控制台 web UI（沉静感对话 + master-detail/全屏舞台）
     index.html  app.js  bridge.js  console.css  md.js
-  card_import.py       # 吃 V2 PNG（chara chunk base64-JSON）→ card json
+  card_import.py       # 吃 V2/V3 PNG（chara/ccv3 chunk：base64 或明文 UTF-8 JSON 都正确解）→ card json
   actor.py             # 拼 prompt + 调模型 + 两层记忆喂法
   SKILL.md             # 演员 playbook（出厂行为、安全收敛）
   data-contract.md     # 状态文件契约
@@ -112,6 +112,7 @@ state/
 | `attach_worldbook {production_id, worldbook_id}` | 把独立世界书挂到现有剧组（卡内嵌的在 create_production 自动挂） | production |
 | `add_lore {worldbook_id?, entry}` | 加世界书单条目（**v1 计划，未实现**） | worldbook |
 | `actor_grow {change, reason}` | 改写 `actor_self.md` 相应段 + 记一笔成长（带人话理由）+ 进 meta 快照 | actor_self |
+| `reflect {production_id}` | 复盘整场戏 → 模型蒸馏「对用户的 RP 偏好」→ 追加进技艺层 `actor_self`（「越演越懂你」的**结构化触发**，不靠 agent 临场总结） | learned |
 | `actor_say {production_id, text}`（**v1.1**） | enqueue 进 IM 队列（仿 digest `DISCUSS_QUEUE` handle_discuss:271-279）→ 搭子 agent drain 后代发进 IM | `{queued:true}` |
 
 读路由（GET，仿 digest read 路由）：`/api/cards`、`/api/worldbooks`、`/api/productions`、`/api/actor`。
@@ -121,7 +122,8 @@ state/
 墨在聊天里能自己找卡 / 导卡，不靠用户在控制台上传，也**不该手搓 PNG / 跑 JS 怼 /api/event**（旧硬凑法会撞作用域错、`btoa(UTF-8)` 把中文搞乱码、世界书 Promise 不 resolve）。
 
 - **来源 = Chub.ai**（角色卡事实标准库，6 万+，公开 API 免鉴权，墙内 Clash 实测可达）：搜 `https://api.chub.ai/search?search=…`；下载真卡 `https://avatars.charhub.io/avatars/<fullPath>/chara_card_v2.png`（带 chara chunk，喂 `card_import`）。
-- **CLI `tools/tavern_cli.py`**（纯 stdlib，POST 本地控制台 `/api/event`）：`search "<q>"` / `add <fullPath>`（拉真卡→`import_card`→`create_production`）/ `add-original <json>`（`import_card_json`，原创卡）/ `add-worldbook <json> [--production]`（`import_worldbook`+`attach_worldbook`）/ `list`。
+- **CLI `tools/tavern_cli.py`**（纯 stdlib，POST 本地控制台 `/api/event` + GET 读路由）：`search "<q>"` / `add <fullPath>`（拉真卡→`import_card`→`create_production`）/ `add-original <json>`（`import_card_json`，原创卡）/ `add-worldbook <json> [--production]`（`import_worldbook`+`attach_worldbook`）/ `list` / `recall <剧组> [--last N]`（读该剧组 `story`——墨读酒馆对戏的入口）/ `learn "<…>" [--reason]`（`actor_grow`，手动写技艺层）/ `reflect <剧组>`（复盘整场→模型自动蒸馏对用户偏好→写技艺层）。
+- **记忆桥接（持久搭子的关键，2026-06-29）**：控制台对戏存 `production.story`、走同源 server，**不经 gateway**，所以 ClawChat 里的墨默认看不到（实测墨会答「我看不到酒馆里聊了什么」）。`recall` 让墨按需读某场戏（故事隔离不变——只是墨的元认知能读，不往别的剧组生成里串）；`learn`→`actor_grow` 让墨把「对你的了解」沉淀进跨剧组共享的 `actor_self`（注入每场生成）。两者合起来 = 「越演越懂你」。注：另有 Hermes 自带 user-profile 记忆层，RP 演法/口味走我们的 `actor_self`（它喂得到控制台），通用事实可留给 Hermes。**结构性 > 软性（2026-06-29 教训）**：光改 SOUL 扭 agent 行为不可靠（墨曾无视「用 add-original」继续手搓 PNG、复盘也不自发 `learn`）——所以①「越演越懂你」用 `reflect`（**服务端模型蒸馏**，不靠 agent 临场）②原创卡不手搓 PNG，靠**删掉墨自创的竞争技能** `sillytavern-character-cards`（标了废弃却仍 enabled、诱它走 PNG）+ `card_import` 解析层兜底乱码。结构性机制比改 prompt 靠谱。
 - **策略**：优先真源（存在的角色一律 `search` 拉真卡，绝不凭记忆瞎编）；只有用户明确要原创才 `add-original` 并标注「这是原创」。
 - 容器注册路径 `skills/creative/tavern/SKILL.md`，**gateway 启动时扫描**（新加技能要 gateway/容器重启才进 ClawChat 会话；`hermes chat` fresh CLI 即时生效）。
 

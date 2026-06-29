@@ -133,6 +133,56 @@ def cmd_add_worldbook(a):
         print(f"   已挂到剧组 {a.production}")
 
 
+def cmd_recall(a):
+    # 读某个剧组在控制台里实际演了什么（墨在 ClawChat 里看不到 production.story，
+    # 这是它唯一的「读酒馆对话」入口——别再说「我看不到酒馆里聊了什么」）。
+    prods = _get_productions()
+    q = a.production
+    matches = [p for p in prods if p.get("id") == q or q in (p.get("name") or "")]
+    if not matches:
+        _die(f"没找到剧组「{q}」——先 `list` 看有哪些。")
+    p = matches[0]
+    story = p.get("story", [])
+    cards = {c["id"]: c for c in json.loads(_http(CONSOLE + "/api/cards", timeout=15)).get("cards", [])}
+    cname = (cards.get(p.get("card_id")) or {}).get("name") or "角色"
+    print(f"=== 剧组「{p.get('name')}」（{p['id']}）· 角色 {cname} · 共 {len(story)} 条 ===")
+    shown = story[-a.last:] if a.last and len(story) > a.last else story
+    if len(shown) < len(story):
+        print(f"（只显示最后 {len(shown)} 条，共 {len(story)}）\n")
+    for m in shown:
+        who = "你" if m.get("role") == "user" else cname
+        print(f"{who}：{m.get('text', '')}\n")
+
+
+def cmd_learn(a):
+    # 把对用户的了解 / 演法调整，沉淀进技艺层 actor_self.md（跨剧组共享，
+    # actor.py 会把它注入每一场戏的 prompt——所以这是「越演越懂你」的载体，
+    # 区别于 Hermes 自带的 user-profile 记忆：那层喂不到控制台生成）。
+    res = _event({"type": "actor_grow", "change": a.change, "reason": a.reason or ""})
+    print("✅ 已记进技艺层:", res.get("appended", "(已写)"))
+
+
+def cmd_reflect(a):
+    # 复盘一场戏 → 服务端模型蒸馏「对用户的 RP 偏好」→ 写进技艺层（不靠你临场总结）。
+    prods = _get_productions()
+    q = a.production
+    matches = [p for p in prods if p.get("id") == q or q in (p.get("name") or "")]
+    if not matches:
+        _die(f"没找到剧组「{q}」——先 `list` 看有哪些。")
+    p = matches[0]
+    res = _event({"type": "reflect", "production_id": p["id"]})
+    if res.get("learned"):
+        print(f"✅ 从「{p['name']}」复盘学到，已写进技艺层：\n{res['learned']}")
+    else:
+        print(f"（这场没学到：{res.get('reason', '')}）")
+
+
+def _get_productions():
+    raw = _http(CONSOLE + "/api/productions", timeout=15)
+    d = json.loads(raw)
+    return d if isinstance(d, list) else d.get("productions", [])
+
+
 def cmd_list(a):
     raw = _http(CONSOLE + "/api/productions", timeout=15)
     prods = json.loads(raw)
@@ -173,6 +223,20 @@ def main():
 
     s = sub.add_parser("list", help="列出剧组")
     s.set_defaults(fn=cmd_list)
+
+    s = sub.add_parser("recall", help="读某剧组在控制台里演了什么（墨读酒馆对话的唯一入口）")
+    s.add_argument("production", help="剧组 id 或名字片段")
+    s.add_argument("--last", type=int, default=40, help="只看最后 N 条（默认 40）")
+    s.set_defaults(fn=cmd_recall)
+
+    s = sub.add_parser("learn", help="把对用户的了解/演法调整记进技艺层（actor_self，跨剧组共享）")
+    s.add_argument("change", help="学到/调整了什么，如「用户爱慢热的戏、回复别太长」")
+    s.add_argument("--reason", help="人话理由")
+    s.set_defaults(fn=cmd_learn)
+
+    s = sub.add_parser("reflect", help="复盘某剧组的戏 → 模型蒸馏对用户的偏好 → 自动写进技艺层")
+    s.add_argument("production", help="剧组 id 或名字片段")
+    s.set_defaults(fn=cmd_reflect)
 
     a = ap.parse_args()
     a.fn(a)

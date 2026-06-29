@@ -231,6 +231,26 @@ def ev_actor_grow(ev):
     return {"ok": True, "appended": line.strip()}
 
 
+def ev_reflect(ev):
+    """复盘一场戏 → 模型蒸馏「对用户的 RP 偏好」→ 追加进技艺层 actor_self。
+    「越演越懂你」的结构化触发：不靠 agent 临场总结，服务端模型抽，落跨剧组共享层。"""
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    story = p.get("story", [])
+    if sum(1 for m in story if m.get("role") == "user") < 2:
+        return {"learned": None, "reason": "戏太短，没什么可学的"}
+    card = load_card(p["card_id"]) or {}
+    learned = actor.reflect_on_play(card, story, actor_self_text())
+    if not learned:
+        return {"learned": None, "reason": "这场没看出明显偏好"}
+    rt = os.path.join(STATE, "actor_self.md")
+    stamp = time.strftime("%Y-%m-%d", time.localtime())
+    with open(rt, "a", encoding="utf-8") as f:
+        f.write(f"\n- {stamp}（复盘「{p.get('name', '')}」）→ {learned}")
+    return {"learned": learned, "production": p.get("name")}
+
+
 def ev_set_persona(ev):
     persona = {"name": ev.get("name", "我"), "description": ev.get("description", "")}
     _write(os.path.join(STATE, "persona.json"), persona)
@@ -243,7 +263,7 @@ EVENTS = {
     "create_production": ev_create_production, "switch_loadout": ev_switch_loadout,
     "send_message": ev_send_message, "regenerate": ev_regenerate,
     "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
-    "set_persona": ev_set_persona,
+    "reflect": ev_reflect, "set_persona": ev_set_persona,
 }
 
 

@@ -30,6 +30,9 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 | `add-original <卡JSON文件\|->` | **原创/自造**卡 JSON → 导入 → 建剧组（仅在用户明确要原创时用） |
 | `add-worldbook <世界书JSON文件\|-> [--production <剧组id>]` | 世界书 JSON → 导入（可挂到现有剧组） |
 | `list` | 列出当前剧组 / 卡 / 世界书 |
+| `recall <剧组名\|id> [--last N]` | **读某剧组在控制台实际演了什么**——墨读酒馆对戏的唯一入口（控制台对戏存 `production.story`，不经 gateway，否则你看不到） |
+| `learn "<学到啥>" [--reason "<为什么>"]` | 手动把对用户的了解/演法调整记进**技艺层** `actor_self.md`（跨剧组共享，注入每场戏生成；区别于 Hermes 通用记忆——那层喂不到控制台） |
+| `reflect <剧组名\|id>` | **复盘整场戏 → 服务端模型自动蒸馏「对用户的偏好」→ 写进技艺层**（一场戏结束/用户问起时用，不靠你临场总结） |
 
 ## 卡 / 世界书去哪找
 
@@ -40,6 +43,13 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 3. `add <fullPath>` 一步到位：下载真卡 → 导入 → 建剧组。很多卡**内嵌世界书**（character_book），`add` 会自动一起带进来挂好。
 
 用户也可以直接贴一个 Chub 链接给你——从 URL 里取 `fullPath`（`chub.ai/characters/<fullPath>` 里 `<fullPath>` 那段）再 `add`。
+
+## 读酒馆对戏 + 越演越懂用户（持久搭子）
+
+控制台（酒馆）里的对戏存每个剧组的 `story`，**走的是同源 server，不经 gateway**——所以你在 ClawChat 里默认看不到。别再说「我看不到酒馆里聊了什么」：
+
+- 用户提到某场戏（「上次跟 X 那场」「Y 演得咋样」「接着昨天那条线」）→ 先 `recall "<剧组>"` 读了再接话。
+- 演出里 / 用户反馈里学到关于用户的东西（节奏、口味、雷区、爱演的题材、想要的演法）→ `learn "<…>" --reason "<…>"` 记进技艺层 `actor_self.md`。它跨剧组共享、被注入每一场戏的生成——**学一次，往后每个角色都照着来**。这是「越演越懂用户」的护城河，也是区别于一次性角色卡的根本。
 
 ## 铁律：优先真源，原创要显式 + 标注
 
@@ -69,5 +79,6 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 ## 别做的事
 
 - ❌ 手搓 PNG / base64 / 跑 JS 注入控制台 —— 用 CLI。
+- ❌ **原创卡用别的「角色卡生成」技能产 PNG** —— 那是绕远路（PNG→解析），原创直接 `add-original` 吃 JSON、中文天然正确。
 - ❌ 把世界书当角色卡导（`import_card` 注世界书语义就错了）—— 世界书走 `add-worldbook`。
 - ❌ 已存在的角色凭记忆造卡 —— `search` 拉真的。

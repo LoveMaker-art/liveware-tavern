@@ -135,5 +135,42 @@ def perform(card: dict, actor_self: str, worldbooks: list, persona: dict, story:
     return chat(msgs)
 
 
+def reflect_on_play(card: dict, story: list, actor_self: str) -> str:
+    """复盘一场戏，蒸馏出「关于用户（对手戏的人类玩家）的 RP 偏好」，供写进技艺层。
+
+    只学**用户的口味/节奏/雷区/被什么打动**——不复述剧情（剧情归故事线、per 剧组隔离），
+    不总结角色。这是「越演越懂你」的结构化触发：不靠 agent 临场总结，服务端用模型抽。
+    返回 1-3 条一句话偏好；看不出明显偏好则返回 ""。
+    """
+    cname = card.get("name", "角色")
+    lines = []
+    for m in story:
+        who = "用户" if m.get("role") == "user" else cname
+        lines.append(f"{who}：{(m.get('text') or '')[:400]}")
+    convo = "\n".join(lines[-30:])  # 最近 30 轮够判断口味
+    # 「别重复」只喂「对用户的了解 + 成长记」那段——别灌整个墨自画像（底色/签名/演法），
+    # 否则模型会把"我已知这么多"误判成"没新东西"→ 返回 NONE（实测）。
+    idx = actor_self.find("我对你的了解")
+    known = actor_self[idx:] if idx != -1 else ""
+    sys = (
+        "你是一个角色扮演搭子的『自我复盘』模块。读下面这场戏，"
+        "**只总结关于「用户」（对手戏的人类玩家）的演法偏好**：他喜欢的节奏（慢热/快进）、"
+        "对白浓淡、被什么样的桥段或情绪打动、明显的雷区或不感冒的东西、爱演的题材角度。"
+        "规则：不复述剧情（剧情不归你管）、不总结角色、不写关于角色卡的话。"
+        "**不要加标题或前言，直接给 1-3 条**，每条以「- 」开头、一句话、具体可执行"
+        "（指导『我』下次怎么演给这个用户）。"
+        "只有当这场戏确实短到看不出任何偏好时，才回一个词 NONE——有内容就尽量提炼，别轻易 NONE。\n\n"
+        f"# 关于这个用户我已记下的（别重复，可补充）\n{known or '（还没记过什么）'}"
+    )
+    out = chat(
+        [{"role": "system", "content": sys},
+         {"role": "user", "content": f"# 这场戏（角色 = {cname}）\n{convo}"}],
+        temperature=0.3,
+    ).strip()
+    if out.upper().startswith("NONE") or len(out) < 4:
+        return ""
+    return out
+
+
 def model_info() -> dict:
     return {"model": MODEL_NAME, "base": MODEL_BASE, "key_set": bool(MODEL_KEY)}

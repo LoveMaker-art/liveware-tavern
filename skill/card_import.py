@@ -62,11 +62,18 @@ def _decode_card_payload(text_chunks: dict) -> dict:
     for key in ("ccv3", "chara"):  # V3 优先
         if key in text_chunks:
             blob = text_chunks[key].strip()
+            # tEXt 按 latin-1 读进来（字节安全的 1:1 映射）、iTXt 已是 utf-8 unicode。
+            # 先还原成原始字节，再判断 base64 还是明文 JSON——否则明文 UTF-8 卡会被
+            # 当 latin-1 直接 json.loads，中文全乱码（「鹿念念」bug，2026-06-29）。
             try:
-                raw_json = base64.b64decode(blob).decode("utf-8")
+                raw = blob.encode("latin-1")   # tEXt 路径：还原原始字节
+            except UnicodeEncodeError:
+                raw = blob.encode("utf-8")     # iTXt 路径：已是 unicode
+            try:
+                raw = base64.b64decode(raw, validate=True)  # 绝大多数卡 base64(json)
             except Exception:
-                raw_json = blob  # 个别卡直接塞明文 JSON
-            return json.loads(raw_json)
+                pass  # 个别卡直接塞明文 JSON（raw 已是原始 UTF-8 字节）
+            return json.loads(raw.decode("utf-8"))
     raise ValueError("PNG 里没有 chara/ccv3 角色卡数据")
 
 
