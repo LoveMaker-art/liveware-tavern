@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>酒馆</title>
+  <link rel="stylesheet" href="console.css" />
+</head>
+<body>
+  <header id="topbar">
+    <button id="railToggle" class="iconbtn" aria-label="剧组">☰</button>
+    <span class="mark">✦</span>
+    <span id="prodName" class="prodName">酒馆</span>
+    <button id="panelToggle" class="iconbtn" aria-label="角色与世界书">ⓘ</button>
+  </header>
+
+  <div id="layout">
+    <aside id="rail" class="pane">
+      <div class="panehd">剧组</div>
+      <ul id="prodList" class="prodList"></ul>
+      <div class="railacts">
+        <label class="btn">
+          <span>导入角色卡</span>
+          <input id="cardFile" type="file" accept="image/png" hidden />
+        </label>
+        <button id="newProdBtn" class="btn ghost">从已有卡新建</button>
+      </div>
+      <div id="cardPicker" class="cardPicker hidden"></div>
+    </aside>
+
+    <main id="stage">
+      <div id="convo" class="convo">
+        <div id="empty" class="empty">
+          <div class="emptyMark">✦</div>
+          <p>导入一张角色卡，开一场戏。</p>
+          <p class="hint">墨会入戏陪你演。</p>
+        </div>
+      </div>
+      <form id="composer" class="composer">
+        <textarea id="input" rows="1" placeholder="续写这一场…"></textarea>
+        <button id="sendBtn" type="submit" class="sendbtn" aria-label="发送">↵</button>
+      </form>
+    </main>
+
+    <aside id="panel" class="pane">
+      <div class="panehd">角色</div>
+      <div id="charInfo" class="charInfo"></div>
+      <div class="panehd">世界书</div>
+      <div id="loreInfo" class="loreInfo"></div>
+    </aside>
+  </div>
+
+  <div id="scrim" class="scrim hidden"></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="bridge.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

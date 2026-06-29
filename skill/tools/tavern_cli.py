@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""tavern_cli — 墨（酒馆 agent）的「找卡 + 导卡」工具。
+
+给 agent 一条干净路径，替代「在浏览器手搓 PNG + 跑 JS 怼 /api/event」那套硬凑
+（会撞作用域错、btoa(UTF-8) 把中文搞乱码、世界书 Promise 不 resolve）。
+
+卡来源 = Chub.ai（角色卡事实标准库，6 万+ 卡，公开 API、免鉴权）。
+导入直打本地控制台同源事件 API（默认 http://127.0.0.1:8799，env TAVERN_CONSOLE 覆盖）。
+
+命令：
+  search <query> [--n N] [--nsfw]          搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）
+  add <fullPath> [--name NAME]             下载 Chub 真卡 → 导入 → 建剧组（**优先用这条**）
+  add-original <jsonfile|->                 原创/自造卡 JSON → 导入 → 建剧组（仅在明确「原创」时用）
+  add-worldbook <jsonfile|-> [--production PID]   世界书 JSON → 导入（可挂到现有剧组）
+  list                                     列出当前剧组 / 卡 / 世界书
+
+纯 stdlib（urllib），不依赖控制台代码——它只发 HTTP。
+"""
+import argparse
+import base64
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+CONSOLE = os.environ.get("TAVERN_CONSOLE", "http://127.0.0.1:8799").rstrip("/")
+CHUB_SEARCH = "https://api.chub.ai/search"
+CHUB_CARD = "https://avatars.charhub.io/avatars/{full_path}/chara_card_v2.png"
+UA = "tavern-cli/1.0"
+
+
+def _die(msg):
+    print("错误：" + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def _http(url, data=None, headers=None, timeout=30):
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": UA, **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:300]
+        _die(f"HTTP {e.code} {url}\n{body}")
+    except Exception as e:  # noqa: BLE001
+        _die(f"请求失败 {url}: {e}")
+
+
+def _event(ev):
+    """POST 一个控制台事件，返回解析后的 dict。"""
+    body = json.dumps(ev, ensure_ascii=False).encode("utf-8")
+    raw = _http(CONSOLE + "/api/event", data=body,
+                headers={"Content-Type": "application/json"}, timeout=120)
+    res = json.loads(raw)
+    if isinstance(res, dict) and res.get("error"):
+        _die("控制台报错：" + str(res["error"]))
+    return res
+
+
+def _read_json_arg(arg):
+    """从文件或 stdin('-') 读 JSON。"""
+    text = sys.stdin.read() if arg == "-" else open(arg, encoding="utf-8").read()
+    try:
+        return json.loads(text)
+    except Exception as e:  # noqa: BLE001
+        _die(f"JSON 解析失败：{e}")
+
+
+# ---------- commands ----------
+def cmd_search(a):
+    q = urllib.parse.urlencode({
+        "search": a.query, "first": a.n,
+        "nsfw": "true" if a.nsfw else "false",
+        "sort": "star_count", "asc": "false",
+    })
+    raw = _http(f"{CHUB_SEARCH}?{q}", timeout=30)
+    nodes = (json.loads(raw).get("data") or {}).get("nodes") or []
+    if not nodes:
+        print("（没搜到，换个关键词试试——英文名通常命中率更高）")
+        return
+    print(f"Chub 命中 {len(nodes)} 张（按星数）：\n")
+    for i, n in enumerate(nodes, 1):
+        topics = ", ".join((n.get("topics") or [])[:6])
+        desc = (n.get("description") or "").replace("\n", " ")[:90]
+        print(f"[{i}] {n.get('name','?')}  ·  ⭐{n.get('starCount',0)}")
+        print(f"    fullPath: {n.get('fullPath','?')}")
+        if topics:
+            print(f"    标签: {topics}")
+        if desc:
+            print(f"    简介: {desc}")
+        print()
+    print("→ 选定后：tavern_cli.py add <fullPath>")
+
+
+def _create_production(card, name=None):
+    p = _event({"type": "create_production", "card_id": card["id"],
+                "name": name or card.get("name")})["production"]
+    wb = " + 世界书" if card.get("character_book") else ""
+    print(f"✅ 已建剧组「{p['name']}」（{p['id']}）{wb}")
+    print(f"   角色卡：{card.get('name')}（{card['id']}）")
+    if card.get("first_mes"):
+        print(f"   开场白：{card['first_mes'][:120]}")
+    print(f"   控制台：{CONSOLE}/  （剧组列表里点它即可开演）")
+    return p
+
+
+def cmd_add(a):
+    url = CHUB_CARD.format(full_path=urllib.parse.quote(a.full_path))
+    print(f"↓ 从 Chub 下载真卡：{a.full_path}")
+    png = _http(url, timeout=60)
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        _die("下载的不是 PNG（fullPath 可能写错；用 search 拿准确 fullPath）")
+    card = _event({"type": "import_card",
+                   "png_base64": base64.b64encode(png).decode("ascii")})["card"]
+    _create_production(card, a.name)
+
+
+def cmd_add_original(a):
+    card_obj = _read_json_arg(a.json)
+    card = _event({"type": "import_card_json", "card": card_obj})["card"]
+    print("（原创卡，已导入）")
+    _create_production(card, a.name)
+
+
+def cmd_add_worldbook(a):
+    wb_obj = _read_json_arg(a.json)
+    wb = _event({"type": "import_worldbook", "worldbook": wb_obj})["worldbook"]
+    print(f"✅ 已导入世界书「{wb.get('name','?')}」（{wb['id']}，{len(wb.get('entries',[]))} 条）")
+    if a.production:
+        _event({"type": "attach_worldbook", "production_id": a.production,
+                "worldbook_id": wb["id"]})
+        print(f"   已挂到剧组 {a.production}")
+
+
+def cmd_list(a):
+    raw = _http(CONSOLE + "/api/productions", timeout=15)
+    prods = json.loads(raw)
+    prods = prods if isinstance(prods, list) else prods.get("productions", [])
+    if not prods:
+        print("还没有剧组。用 `add <fullPath>` 从 Chub 拉一张卡建剧组。")
+        return
+    print(f"当前 {len(prods)} 个剧组：")
+    for p in prods:
+        wb = f"，{len(p.get('worldbook_ids',[]))} 本世界书" if p.get("worldbook_ids") else ""
+        print(f"  · {p.get('name','?')}（{p.get('id')}，{len(p.get('story',[]))} 条对话{wb}）")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="tavern_cli", description="墨的找卡+导卡工具")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("search", help="搜 Chub 角色卡")
+    s.add_argument("query")
+    s.add_argument("--n", type=int, default=8)
+    s.add_argument("--nsfw", action="store_true")
+    s.set_defaults(fn=cmd_search)
+
+    s = sub.add_parser("add", help="下载 Chub 真卡 → 导入 → 建剧组")
+    s.add_argument("full_path", help="Chub fullPath，如 Anon/some-character")
+    s.add_argument("--name", help="剧组名（默认用卡名）")
+    s.set_defaults(fn=cmd_add)
+
+    s = sub.add_parser("add-original", help="原创卡 JSON → 导入 → 建剧组")
+    s.add_argument("json", help="卡 JSON 文件路径，或 '-' 读 stdin")
+    s.add_argument("--name")
+    s.set_defaults(fn=cmd_add_original)
+
+    s = sub.add_parser("add-worldbook", help="世界书 JSON → 导入（可挂剧组）")
+    s.add_argument("json", help="世界书 JSON 文件路径，或 '-' 读 stdin")
+    s.add_argument("--production", help="挂到该剧组 id")
+    s.set_defaults(fn=cmd_add_worldbook)
+
+    s = sub.add_parser("list", help="列出剧组")
+    s.set_defaults(fn=cmd_list)
+
+    a = ap.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

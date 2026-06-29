@@ -1,0 +1,351 @@
+"""server — 酒馆演员运行时的同源 server（stdlib http.server，仿 digest）。
+
+serve 控制台静态页(reader/) + /api/*（同源，浏览器同源策略天然满足，模型 creds 留 server 端）。
+状态全落 state/ 下 JSON 文件，永不写能力服务器/member-backend。
+
+跑：TAVERN_MODEL_KEY=... python3 server.py [--port 8799]
+"""
+import json
+import os
+import secrets
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import actor  # noqa: E402
+import card_import  # noqa: E402
+
+STATE = os.path.join(HERE, "state")
+READER = os.path.join(HERE, "reader")
+SEED_ACTOR = os.path.join(HERE, "actor_self.md")
+for sub in ("cards", "worldbooks", "productions"):
+    os.makedirs(os.path.join(STATE, sub), exist_ok=True)
+
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
+                 ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
+                 ".png": "image/png", ".svg": "image/svg+xml"}
+
+
+# ---------- state helpers ----------
+def _read(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+
+
+def _write(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _state_path():
+    return os.path.join(STATE, "state.json")
+
+
+def _get_state():
+    return _read(_state_path(), {"active_production_id": None})
+
+
+def _set_active(pid):
+    s = _get_state()
+    s["active_production_id"] = pid
+    _write(_state_path(), s)
+
+
+def actor_self_text():
+    rt = os.path.join(STATE, "actor_self.md")
+    if not os.path.exists(rt):  # 首次：种子 → 运行时副本(成长改这份，不动种子)
+        with open(SEED_ACTOR, encoding="utf-8") as f:
+            seed = f.read()
+        with open(rt, "w", encoding="utf-8") as f:
+            f.write(seed)
+    with open(rt, encoding="utf-8") as f:
+        return f.read()
+
+
+def load_card(cid):
+    return _read(os.path.join(STATE, "cards", cid + ".json"))
+
+
+def load_worldbook(wid):
+    return _read(os.path.join(STATE, "worldbooks", wid + ".json"))
+
+
+def load_production(pid):
+    return _read(os.path.join(STATE, "productions", pid + ".json"))
+
+
+def save_production(p):
+    _write(os.path.join(STATE, "productions", p["id"] + ".json"), p)
+
+
+def _list(sub):
+    d = os.path.join(STATE, sub)
+    out = []
+    for fn in sorted(os.listdir(d)):
+        if fn.endswith(".json"):
+            out.append(_read(os.path.join(d, fn)))
+    return out
+
+
+def _msg(role, text):
+    return {"id": secrets.token_hex(4), "role": role, "text": text,
+            "ts": int(time.time()), "alts": [text], "active_alt": 0}
+
+
+# ---------- event handlers ----------
+def _store_card(card):
+    _write(os.path.join(STATE, "cards", card["id"] + ".json"), card)
+    # 卡内嵌世界书 → 落成独立 worldbook
+    if card.get("character_book"):
+        wb = {"id": "wb_" + card["id"], "name": card["character_book"].get("name") or card["name"],
+              "entries": card["character_book"].get("entries", [])}
+        _write(os.path.join(STATE, "worldbooks", wb["id"] + ".json"), wb)
+    return {"card": card}
+
+
+def ev_import_card(ev):
+    # PNG 路径：吃一张 V2/V3 角色卡 PNG（base64）。真实卡走这条，编码天然正确。
+    return _store_card(card_import.import_card_b64(ev["png_base64"]))
+
+
+def ev_import_card_json(ev):
+    # JSON 路径：吃一份卡 JSON（V1/V2/V3 形态，带 data 包或裸 obj 都行）。
+    # 给 agent「原创/自造」角色卡用——不手搓 PNG，绕开 btoa(UTF-8) 把中文搞乱码的坑。
+    return _store_card(card_import.normalize_card(ev["card"]))
+
+
+def ev_import_worldbook(ev):
+    wb = ev["worldbook"]
+    wb.setdefault("id", "wb_" + secrets.token_hex(4))
+    _write(os.path.join(STATE, "worldbooks", wb["id"] + ".json"), wb)
+    return {"worldbook": wb}
+
+
+def ev_attach_worldbook(ev):
+    # 把一本独立世界书挂到现有剧组（卡内嵌的世界书在 create_production 时已自动挂）。
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    wid = ev["worldbook_id"]
+    if not load_worldbook(wid):
+        raise ValueError("worldbook not found: " + wid)
+    if wid not in p["worldbook_ids"]:
+        p["worldbook_ids"].append(wid)
+        save_production(p)
+    return {"production": p}
+
+
+def ev_create_production(ev):
+    card = load_card(ev["card_id"])
+    if not card:
+        raise ValueError("card not found: " + ev["card_id"])
+    pid = "prod_" + secrets.token_hex(4)
+    wbs = ev.get("worldbook_ids")
+    if wbs is None and card.get("character_book"):
+        wbs = ["wb_" + card["id"]]
+    greeting = ev.get("first_mes") or card.get("first_mes") or ""
+    p = {"id": pid, "name": ev.get("name") or card.get("name"),
+         "card_id": card["id"], "worldbook_ids": wbs or [],
+         "persona_id": ev.get("persona_id"), "created_at": int(time.time()),
+         "status": "active", "story": [_msg("char", greeting)] if greeting else []}
+    save_production(p)
+    _set_active(pid)
+    return {"production": p}
+
+
+def ev_switch_loadout(ev):
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    _set_active(p["id"])
+    return {"production": p}
+
+
+def _perform_into(p):
+    card = load_card(p["card_id"])
+    wbs = [load_worldbook(w) for w in p.get("worldbook_ids", [])]
+    wbs = [w for w in wbs if w]
+    persona = _read(os.path.join(STATE, "persona.json"), {})
+    return actor.perform(card, actor_self_text(), wbs, persona, p["story"])
+
+
+def ev_send_message(ev):
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    p["story"].append(_msg("user", ev["text"]))
+    reply = _perform_into(p)
+    m = _msg("char", reply)
+    p["story"].append(m)
+    save_production(p)
+    return {"reply": reply, "message": m, "production_id": p["id"]}
+
+
+def ev_regenerate(ev):
+    p = load_production(ev["production_id"])
+    if not p or not p["story"]:
+        raise ValueError("nothing to regenerate")
+    # 砍掉最后一条 char，重演（保留为 alt）
+    last = p["story"][-1]
+    if last["role"] != "char":
+        raise ValueError("last message is not the actor's")
+    trimmed = p["story"][:-1]
+    saved_story = p["story"]
+    p["story"] = trimmed
+    reply = _perform_into(p)
+    last["alts"].append(reply)
+    last["active_alt"] = len(last["alts"]) - 1
+    last["text"] = reply
+    p["story"] = saved_story
+    save_production(p)
+    return {"message": last, "production_id": p["id"]}
+
+
+def ev_edit_message(ev):
+    p = load_production(ev["production_id"])
+    for m in p["story"]:
+        if m["id"] == ev["message_id"]:
+            m["text"] = ev["text"]
+            m["alts"][m.get("active_alt", 0)] = ev["text"]
+            save_production(p)
+            return {"message": m}
+    raise ValueError("message not found")
+
+
+def ev_actor_grow(ev):
+    """复杂功能→对话+成长：把演法/对你的了解的变化追加进 actor_self.md（带人话理由）。"""
+    rt = os.path.join(STATE, "actor_self.md")
+    actor_self_text()  # ensure exists
+    stamp = time.strftime("%Y-%m-%d", time.localtime(ev.get("ts") or time.time()))
+    line = f"\n- {stamp} {ev.get('reason','(无理由)')} → {ev.get('change','')}"
+    with open(rt, "a", encoding="utf-8") as f:
+        f.write(line)
+    return {"ok": True, "appended": line.strip()}
+
+
+def ev_set_persona(ev):
+    persona = {"name": ev.get("name", "我"), "description": ev.get("description", "")}
+    _write(os.path.join(STATE, "persona.json"), persona)
+    return {"persona": persona}
+
+
+EVENTS = {
+    "import_card": ev_import_card, "import_card_json": ev_import_card_json,
+    "import_worldbook": ev_import_worldbook, "attach_worldbook": ev_attach_worldbook,
+    "create_production": ev_create_production, "switch_loadout": ev_switch_loadout,
+    "send_message": ev_send_message, "regenerate": ev_regenerate,
+    "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
+    "set_persona": ev_set_persona,
+}
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _json(self, code, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", CONTENT_TYPES[".json"])
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _file(self, path):
+        if not os.path.isfile(path):
+            return self._json(404, {"error": "not found"})
+        ext = os.path.splitext(path)[1]
+        with open(path, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPES.get(ext, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path == "/api/health":
+            return self._json(200, {"ok": True, "dry_run": False, **actor.model_info()})
+        if path == "/api/cards":
+            return self._json(200, {"cards": _list("cards")})
+        if path == "/api/worldbooks":
+            return self._json(200, {"worldbooks": _list("worldbooks")})
+        if path == "/api/productions":
+            return self._json(200, {"productions": _list("productions"),
+                                    "active": _get_state().get("active_production_id")})
+        if path == "/api/actor":
+            return self._json(200, {"actor_self": actor_self_text()})
+        # static reader
+        rel = path.lstrip("/") or "index.html"
+        return self._file(os.path.join(READER, rel))
+
+    def _read_body(self):
+        # Content-Length path (direct calls + most proxies).
+        cl = self.headers.get("Content-Length")
+        if cl is not None:
+            try:
+                return self.rfile.read(int(cl))
+            except Exception:
+                return b""
+        # The liveware gRPC relay re-chunks POST bodies and drops Content-Length,
+        # so a Content-Length-only read returns 0 bytes (type=None). Read the
+        # chunked stream when that header is present.
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te:
+            chunks = []
+            while True:
+                size_line = self.rfile.readline().strip()
+                if not size_line:
+                    break
+                try:
+                    size = int(size_line.split(b";")[0], 16)
+                except ValueError:
+                    break
+                if size == 0:
+                    self.rfile.readline()  # consume trailing CRLF
+                    break
+                chunks.append(self.rfile.read(size))
+                self.rfile.readline()  # CRLF after each chunk
+            return b"".join(chunks)
+        return b""
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path != "/api/event":
+            return self._json(404, {"error": "unknown endpoint"})
+        try:
+            ev = json.loads(self._read_body() or b"{}")
+        except Exception:
+            return self._json(400, {"error": "bad json"})
+        fn = EVENTS.get(ev.get("type"))
+        if not fn:
+            return self._json(400, {"error": "unknown event type: %s" % ev.get("type")})
+        try:
+            return self._json(200, {"ok": True, **fn(ev)})
+        except Exception as e:
+            return self._json(500, {"ok": False, "error": str(e)})
+
+
+def main():
+    port = 8799
+    if "--port" in sys.argv:
+        port = int(sys.argv[sys.argv.index("--port") + 1])
+    elif os.environ.get("TAVERN_PORT"):
+        port = int(os.environ["TAVERN_PORT"])
+    host = os.environ.get("TAVERN_HOST", "127.0.0.1")
+    print("酒馆演员运行时 → http://%s:%d  (model=%s, key=%s)" % (
+        host, port, actor.MODEL_NAME, "set" if actor.MODEL_KEY else "MISSING"))
+    ThreadingHTTPServer((host, port), H).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

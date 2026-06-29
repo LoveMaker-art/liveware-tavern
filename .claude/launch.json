@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tavern",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["skill/server.py", "--port", "8799"],
+      "port": 8799
+    }
+  ]
+}
