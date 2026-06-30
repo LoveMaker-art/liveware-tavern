@@ -14,7 +14,7 @@
 
 | 规则 | 实现 |
 |---|---|
-| **Enter 发送，仅在「不在输入法合成中」时** | `keydown` 守卫 `e.isComposing \|\| e.keyCode === 229` 时直接 `return`——拼音/CJK 选词上屏的那个 Enter 绝不触发发送，也绝不 `preventDefault`（会吞掉候选确认）。默认受众是中文（`lang="zh-CN"`），这是硬规则不是优化。 |
+| **Enter 发送，仅在「不在输入法合成中」时**（含 macOS WKWebView/WebKit 修正） | 三重守卫:① `e.isComposing \|\| e.keyCode === 229`(Chromium 合成中) ② `imeComposing` 标志(compositionstart/end 自己跟踪,挡「合成期间」的 keydown) ③ `imeEndedAt` 时间窗(刚 compositionend 120ms 内的 Enter 也挡)。**为什么要 ②③**:WebKit(macOS 容器 + Safari)把 `compositionend` 排在「确认候选词」那个 Enter 的 `keydown` **之前** → 那 keydown 的 `isComposing` 已 false、`keyCode=13`,光靠 ① 在 macOS 漏发(实测 2026-06-30)。三条任一命中即不发、绝不 `preventDefault`(吞候选确认)。默认受众中文(`lang="zh-CN"`),硬规则。 |
 | **Shift+Enter = 换行** | 不发送。 |
 | 自增高 | `autoGrow`，上限 140px。 |
 | 移动端输入提示 | textarea 带 `enterkeyhint="send"`；多行场景不强制 `inputmode`。 |
@@ -28,12 +28,17 @@
 | 布局高度跟随可视视口 | `interactive-widget=resizes-content`（viewport meta）+ 用 `100dvh` 而非 `100%/vh`。 |
 | 老 WebView 兜底 | `visualViewport` 监听 `resize`/`scroll`，把根容器高度/位移贴到可视视口（给不认 `interactive-widget` 的旧 iOS WKWebView）。 |
 | **触屏能点出控制条** | 控制条原来 `:hover` 才显——触屏无 hover 通道 = 死的。`@media (hover:none)` 下常驻低透明（`.55`），保证拇指可达。桌面维持 hover 渐进披露。 |
+| **发送后不抢键盘**（移动） | 发送即 `input.blur()` 收键盘（别盖住正在生成的回复），回复完成也**不回焦**，留给用户阅读；桌面（`hover:hover`）维持续焦点方便接着打。`isTouch()` = `matchMedia("(hover:none)")`（反馈 2026-06-30）。 |
 
 > 注：真 IME / 软键盘行为只能真机验（Android 我自动、桌面走 winrig、macOS 协作）；preview 只验布局与 JS 无错。
 
-## 3. 回合控制（重生成 / swipe / 编辑）
+## 3. 回合控制（重生成 / swipe / 编辑 / 阅读定位）
 
 落「渐进披露」：控制条默认 ghost 态，hover（桌面）/ 常驻低透明（触屏）显。
+
+### 3.0 回复后定位到「消息头」（双端，反馈 2026-06-30）
+
+AI 回复就位后（send 完成 / regenerate / swipe）把该消息的**头**滚到接近视口顶部（`top-16px`），而非旧的 `scrollDown()`（贴尾）——长回复用户能从头完整读。流式期间也是头钉顶、内容往下生长（不跟尾）。**关键**：末条消息下方无内容、本来滚不到顶 → 给 `.thread` 动态垫 `padding-bottom = max(0, 视口高 - 末条高 - 24)`，短回复也能把头顶到位（`scrollTurnToTop` 只对 `lastElementChild` 垫，中间消息不垫；`renderStage` 重建 thread 会清掉旧值）。
 
 ### 3.1 swipe = 非破坏性备选回复（核心手感）
 

@@ -339,6 +339,36 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", CONTENT_TYPES.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(body)))
+        # reader 是活件页面、随 agent 迭代频繁更新——禁缓存,否则 WKWebView/WebView2 可能
+        # serve 旧 app.js,改动不生效(反馈 2026-06-30「还是不行」的头号嫌疑)。
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_index(self):
+        # 注入版本化资源引用破 relay 缓存:clawling relay/CDN 把 .js/.css 强制缓存成
+        # `public, max-age=2592000, immutable`(30天,覆盖源站 no-store)→ 改动不生效。
+        # index.html 自身是 no-store(relay 透传)永远新,所以给资源 URL 挂 ?v=<token>,
+        # token 取资源 mtime → 每次部署自动变 → 新 URL = relay 缓存未命中 = 取到新文件。
+        try:
+            with open(os.path.join(READER, "index.html"), encoding="utf-8") as f:
+                html = f.read()
+        except OSError:
+            return self._json(404, {"error": "not found"})
+        token = 0
+        for fn in ("app.js", "bridge.js", "console.css", "index.html"):
+            try:
+                token ^= int(os.path.getmtime(os.path.join(READER, fn)))
+            except OSError:
+                pass
+        v = format(token & 0xFFFFFF, "x")
+        for a in ("console.css", "bridge.js", "app.js"):
+            html = html.replace(a + '"', a + "?v=" + v + '"')
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPES[".html"])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
@@ -355,8 +385,10 @@ class H(BaseHTTPRequestHandler):
                                     "active": _get_state().get("active_production_id")})
         if path == "/api/actor":
             return self._json(200, {"actor_self": actor_self_text()})
-        # static reader
+        # static reader（index.html 走版本化注入,破 relay 的 immutable 缓存）
         rel = path.lstrip("/") or "index.html"
+        if rel == "index.html":
+            return self._serve_index()
         return self._file(os.path.join(READER, rel))
 
     def _read_body(self):

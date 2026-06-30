@@ -112,16 +112,17 @@ async function send() {
   const ac = new AbortController(); state.abort = ac;
   state.busy = true; setComposerSending(true);
   input.value = ""; autoGrow(input);
+  if (isTouch()) input.blur(); // 移动端:发送即收键盘,别盖住正在生成的回复(反馈 2026-06-30)
   state.active.story.push({ role: "user", text });
   renderStage();
   $(".thread").insertAdjacentHTML("beforeend", `<div class="turn char" id="think"><div class="body thinking">墨正在入戏…</div></div>`);
-  scrollDown();
+  scrollTurnToTop($("#think")); // 回复的「头」钉到顶部,内容往下生长,用户从头读
   const ev = { type: "send_message", production_id: state.active.id, text };
   let acc = "";
   const onDelta = (d) => {
     acc += d;
     const b = document.querySelector("#think .body");
-    if (b) { b.classList.remove("thinking"); b.innerHTML = fmt(acc); scrollDown(); }
+    if (b) { b.classList.remove("thinking"); b.innerHTML = fmt(acc); } // 不跟尾:头钉住,从头读
   };
   try {
     let msg;
@@ -144,11 +145,15 @@ async function send() {
     $("#think")?.remove();
     state.active.story.push(msg);
     renderStage();
+    scrollLastCharToTop(); // 回复就位后定位到消息头(双端,覆盖 renderStage 的 scrollDown)
   } catch (e) {
     $("#think")?.remove(); toast("生成失败：" + e.message);
     state.active.story.pop(); renderStage();
     input.value = text; autoGrow(input); // 失败不丢已输入文字,可直接重发(§4)
-  } finally { state.busy = false; state.abort = null; setComposerSending(false); input.focus(); }
+  } finally {
+    state.busy = false; state.abort = null; setComposerSending(false);
+    if (!isTouch()) input.focus(); // 桌面续焦点方便接着打;移动不抢焦,留给阅读
+  }
 }
 
 async function regenerate() {
@@ -159,6 +164,7 @@ async function regenerate() {
     // 非破坏性:整条替换(服务端已把新生成 append 进 alts、active_alt 指向它),保留旧版供 swipe
     state.active.story[state.active.story.length - 1] = r.message;
     renderStage();
+    scrollLastCharToTop(); // 重生成的回复也定位到消息头,从头读
   } catch (e) { toast("重生成失败：" + e.message); }
   finally { state.busy = false; }
 }
@@ -170,6 +176,7 @@ async function swipe(id, dir) {
   const next = cur + dir;
   if (next < 0 || next >= m.alts.length) return;
   m.active_alt = next; m.text = m.alts[next]; renderStage(); // 乐观切换
+  scrollTurnToTop(document.querySelector(`.turn.char[data-id="${id}"]`)); // 切到的备选也从头读
   try {
     await bridge.event({ type: "swipe", production_id: state.active.id, message_id: id, dir });
   } catch (e) {
@@ -296,6 +303,27 @@ function showCardPicker() {
 
 function autoGrow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 140) + "px"; }
 function scrollDown() { const c = $("#convo"); c.scrollTop = c.scrollHeight; }
+// AI 回复后定位到消息「头」而非尾——长回复用户能从头完整读(反馈 2026-06-30,双端)。
+function scrollTurnToTop(el) {
+  const c = $("#convo");
+  if (!c || !el) return;
+  const thread = c.querySelector(".thread");
+  if (thread) {
+    // 末条消息下方无内容、本来滚不到顶 → 垫够 padding-bottom,让它的头也能到顶部(短回复也一致)。
+    // 仅对末条垫(否则中间消息下方本有内容,加 padding 会留怪空隙)。renderStage 重建 thread 会清掉旧值。
+    const isLast = el === thread.lastElementChild;
+    thread.style.paddingBottom = (isLast
+      ? Math.max(0, c.clientHeight - el.getBoundingClientRect().height - 24) : 0) + "px";
+  }
+  const top = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop;
+  c.scrollTop = Math.max(0, top - 16); // 16px 余量,让消息头上方留口气
+}
+function scrollLastCharToTop() {
+  const turns = document.querySelectorAll(".turn.char");
+  scrollTurnToTop(turns[turns.length - 1]);
+}
+// 触屏(移动)= 无 hover。用于「发送后不自动弹键盘」等只在移动端做的事(反馈 2026-06-30)。
+const isTouch = () => window.matchMedia("(hover: none)").matches;
 function openDrawer(id) { $(id).classList.add("open"); $("#scrim").classList.remove("hidden"); }
 function closeDrawers() { $("#rail").classList.remove("open"); $("#panel").classList.remove("open"); $("#scrim").classList.add("hidden"); }
 
@@ -312,11 +340,22 @@ function keyboardInset() {
 
 function wire() {
   $("#composer").onsubmit = (e) => { e.preventDefault(); submitOrStop(); };
-  $("#input").oninput = (e) => autoGrow(e.target);
-  // IME 守卫:拼音/CJK 合成中(选词上屏)的 Enter 绝不发送,也不 preventDefault(会吞候选确认)。
-  $("#input").onkeydown = (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitOrStop(); }
+  const input = $("#input");
+  input.oninput = (e) => autoGrow(e.target);
+  // IME 守卫(含 macOS WKWebView/WebKit 修正):
+  // - Chromium:合成中的 Enter 带 isComposing=true / keyCode=229,直接挡。
+  // - WebKit(macOS 容器 + Safari):compositionend 排在「确认候选词」的 Enter keydown **之前**,
+  //   那个 keydown 的 isComposing 已是 false、keyCode=13 → 光靠 isComposing/229 挡不住(实测仍误发)。
+  //   故再记一个「刚合成完」时间窗(CodeMirror/ProseMirror 同款),把紧跟其后的回车也判为确认、不发送。
+  let imeComposing = false, imeEndedAt = 0;
+  input.addEventListener("compositionstart", () => { imeComposing = true; });
+  input.addEventListener("compositionend", () => { imeComposing = false; imeEndedAt = Date.now(); });
+  input.onkeydown = (e) => {
+    if (e.isComposing || e.keyCode === 229 || imeComposing) return;
+    if (e.key === "Enter" && !e.shiftKey) {
+      if (Date.now() - imeEndedAt < 120) return; // 刚确认候选词的那个回车(WebKit 排序),别当发送
+      e.preventDefault(); submitOrStop();
+    }
   };
   $("#cardFile").onchange = (e) => importCard(e.target.files[0]);
   $("#pasteCardBtn").onclick = () => togglePastePanel();
