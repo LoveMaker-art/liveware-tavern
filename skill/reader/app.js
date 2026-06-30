@@ -1,7 +1,7 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
 const state = { cards: [], cardMap: {}, worldbooks: {}, productions: [], activeId: null, active: null,
-  actor: "", version: "", busy: false, abort: null };
+  actor: "", version: "", busy: false, abort: null, stick: true, _anchor: null };
 
 function esc(s) { return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function fmt(t) { return esc(t).replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>'); }
@@ -229,13 +229,13 @@ async function send() {
   state.active.story.push({ role: "user", text });
   renderStage();
   $(".thread").insertAdjacentHTML("beforeend", `<div class="turn char" id="think"><div class="body thinking">墨正在入戏…</div></div>`);
-  scrollTurnToTop($("#think")); // 回复的「头」钉到顶部,内容往下生长,用户从头读
+  anchorTurn(lastUserTurn(), true); // 锚到「我刚输入的那条」(新回合,重置 stick)
   const ev = { type: "send_message", production_id: state.active.id, text };
   let acc = "";
   const onDelta = (d) => {
     acc += d;
     const b = document.querySelector("#think .body");
-    if (b) { b.classList.remove("thinking"); b.innerHTML = fmt(acc); } // 不跟尾:头钉住,从头读
+    if (b) { b.classList.remove("thinking"); b.innerHTML = fmt(acc); anchorTurn(lastUserTurn()); } // 跟内容长:短→跟到底,长→钉住我的话
   };
   try {
     let msg;
@@ -258,7 +258,7 @@ async function send() {
     $("#think")?.remove();
     state.active.story.push(msg);
     renderStage();
-    scrollLastCharToTop(); // 回复就位后定位到消息头(双端,覆盖 renderStage 的 scrollDown)
+    anchorTurn(lastUserTurn()); // 回复就位:沿用锚定(尊重用户生成中途的上滚)
   } catch (e) {
     $("#think")?.remove(); toast("生成失败：" + e.message);
     state.active.story.pop(); renderStage();
@@ -277,7 +277,7 @@ async function regenerate() {
     // 非破坏性:整条替换(服务端已把新生成 append 进 alts、active_alt 指向它),保留旧版供 swipe
     state.active.story[state.active.story.length - 1] = r.message;
     renderStage();
-    scrollLastCharToTop(); // 重生成的回复也定位到消息头,从头读
+    anchorTurn(lastUserTurn(), true); // 重生成:重新锚到我的话,新回复在下方
   } catch (e) { toast("重生成失败：" + e.message); }
   finally { state.busy = false; }
 }
@@ -289,7 +289,7 @@ async function swipe(id, dir) {
   const next = cur + dir;
   if (next < 0 || next >= m.alts.length) return;
   m.active_alt = next; m.text = m.alts[next]; renderStage(); // 乐观切换
-  scrollTurnToTop(document.querySelector(`.turn.char[data-id="${id}"]`)); // 切到的备选也从头读
+  anchorTurn(lastUserTurn(), true); // 切备选:锚到我的话,新版本在下方
   try {
     await bridge.event({ type: "swipe", production_id: state.active.id, message_id: id, dir });
   } catch (e) {
@@ -416,24 +416,19 @@ function showCardPicker() {
 
 function autoGrow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 140) + "px"; }
 function scrollDown() { const c = $("#convo"); c.scrollTop = c.scrollHeight; }
-// AI 回复后定位到消息「头」而非尾——长回复用户能从头完整读(反馈 2026-06-30,双端)。
-function scrollTurnToTop(el) {
+// 这一回合「我说的那条」(末条用户消息)——滚动锚定的基准。
+function lastUserTurn() { const us = document.querySelectorAll(".turn.user"); return us[us.length - 1] || null; }
+// 发送后的滚动定位(双端,反馈 2026-06-30 修正):把「我刚输入的那条」摆到接近视口顶(留 20px),
+// 再夹进自然滚动范围。→ 回复短:夹到自然底(IM 式,我的话+回复都在视口、几乎不滚);
+//   回复长:我的话钉在顶、回复在下方铺开(从我说的话往下读)。两种情况都始终看得到自己输入的那条。
+// force=true:新回合,重置 stick 并锚定;否则尊重用户生成中途的上滚(不跟用户抢)。
+function anchorTurn(el, force) {
   const c = $("#convo");
   if (!c || !el) return;
-  const thread = c.querySelector(".thread");
-  if (thread) {
-    // 末条消息下方无内容、本来滚不到顶 → 垫够 padding-bottom,让它的头也能到顶部(短回复也一致)。
-    // 仅对末条垫(否则中间消息下方本有内容,加 padding 会留怪空隙)。renderStage 重建 thread 会清掉旧值。
-    const isLast = el === thread.lastElementChild;
-    thread.style.paddingBottom = (isLast
-      ? Math.max(0, c.clientHeight - el.getBoundingClientRect().height - 24) : 0) + "px";
-  }
-  const top = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop;
-  c.scrollTop = Math.max(0, top - 16); // 16px 余量,让消息头上方留口气
-}
-function scrollLastCharToTop() {
-  const turns = document.querySelectorAll(".turn.char");
-  scrollTurnToTop(turns[turns.length - 1]);
+  if (force) state.stick = true;
+  if (!state.stick) return;
+  const top = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - 20;
+  c.scrollTop = state._anchor = Math.max(0, Math.min(top, c.scrollHeight - c.clientHeight));
 }
 // 触屏(移动)= 无 hover。用于「发送后不自动弹键盘」等只在移动端做的事(反馈 2026-06-30)。
 const isTouch = () => window.matchMedia("(hover: none)").matches;
@@ -554,6 +549,10 @@ function wire() {
   $("#railToggle").onclick = () => openDrawer("#rail");
   $("#panelToggle").onclick = () => openDrawer("#panel");
   $("#scrim").onclick = closeDrawers;
+  // 生成中用户主动上滚(回看历史)→ 停止自动锚定,别跟用户抢;下一回合 force 重置。
+  $("#convo").addEventListener("scroll", () => {
+    if (state.busy && state._anchor != null && state._anchor - $("#convo").scrollTop > 24) state.stick = false;
+  }, { passive: true });
   setComposerSending(false);   // 初始 SVG 发送图标 + 空态
 }
 
