@@ -9,8 +9,10 @@
 <body>
   <header id="topbar">
     <button id="railToggle" class="iconbtn" aria-label="剧组">☰</button>
-    <span class="mark">✦</span>
-    <span id="prodName" class="prodName">酒馆</span>
+    <div class="topTitle">
+      <div class="tline"><span class="mark">✦</span><span id="prodName" class="prodName">酒馆</span></div>
+      <div id="prodSub" class="prodSub"></div>
+    </div>
     <button id="panelToggle" class="iconbtn" aria-label="角色与世界书">ⓘ</button>
   </header>
 
@@ -46,19 +48,17 @@
       </div>
       <form id="composer" class="composer">
         <textarea id="input" rows="1" placeholder="续写这一场…"></textarea>
-        <button id="sendBtn" type="submit" class="sendbtn" aria-label="发送">↵</button>
+        <button id="sendBtn" type="submit" class="sendbtn" aria-label="发送"></button>
       </form>
     </main>
 
     <aside id="panel" class="pane">
-      <div class="panehd">角色</div>
-      <div id="charInfo" class="charInfo"></div>
-      <div class="panehd">世界书</div>
-      <div id="loreInfo" class="loreInfo"></div>
+      <div id="panelBody" class="panelBody"></div>
     </aside>
   </div>
 
   <div id="scrim" class="scrim hidden"></div>
+  <div id="modal" class="modal hidden"></div>
   <div id="toast" class="toast hidden"></div>
 
   <script src="bridge.js"></script>

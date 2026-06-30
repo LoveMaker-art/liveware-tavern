@@ -42,7 +42,7 @@ state/
   worldbooks/<wb_id>.json                # 世界书 entries[]
   productions/<prod_id>.json             # 剧组 = loadout + 故事线 + 故事记忆（隔离）
   actor_self.md                          # ★演员的「活·自画像」prompt（我们独有，跨剧组共享，会成长）
-  actor_self.meta.json                   # 版本 / 更新时间 / 可回滚快照（成长纪律）
+  actor_self.meta.json                   # 演员成长版本 / 可回滚快照（成长纪律）—— ★v1.1+，尚未建
   persona.json                           # 用户人设
   state.json                             # { active_production_id, ... }
 ```
@@ -54,9 +54,12 @@ state/
   "first_mes":"…","mes_example":"…","alternate_greetings":["…"],
   "system_prompt":"…","post_history_instructions":"…",
   "tags":["…"],"creator":"…","character_version":"…",
+  "source":"chub|agent",
   "avatar":"cards/<id>.png",
   "extensions":{ "__原样保留未知键__":true } }
 ```
+
+**出处 `source`**（导入渠道，信息面板「来源」行的数据，2026-06-30）：`import_card`（PNG/Chub）落 `chub`、`import_card_json`（原创/粘贴）落 `agent`，由 server 的事件入口按渠道打（`_store_card(card, source)`；`normalize_card` 路径无关、分不清渠道，故不在那里打）。信息面板显示**优先 `creator`**（卡作者，Chub 或原作者）→「来源 · 作者」；无 `creator` 才回落 `source`（`agent` →「Agent 创作」、`chub` →「来源 · Chub」）。注：与 worldbook 条目的 `entry.source` 是不同对象的同名字段，互不相干。
 
 **worldbook json**（机制字段存着，默认 agent 解释触发、不暴露 UI）：
 ```json
@@ -92,7 +95,9 @@ state/
 # 成长记（append-only，每条带人话理由）
 - 2026-06-28 你说"别那么贫" → 收敛贫嘴密度
 ```
-配套 `actor_self.meta.json`：`{version, updated_at, snapshots[]}`（可回滚）。**底色是共享基底（物种），「对你的了解 + 成长记」是你这份实例的个体进化**（liveware §两级进化）。
+配套 `actor_self.meta.json`：`{version, updated_at, snapshots[]}`（可回滚）—— **v1.1+，尚未建**；v1 的成长版本暂以 `actor_self.md` 末尾「成长记」append-only 条目体现（reader 显「成长记 N 条」）。**底色是共享基底（物种），「对你的了解 + 成长记」是你这份实例的个体进化**（liveware §两级进化）。
+
+> **两个「版本」别混（2026-06-30）**：① **活件版本** = 酒馆这个 **app** 自己的发版号（agent 改了功能/皮肤再部署 = 一次发版），取 `SKILL.md` `version`，reader 右栏底显「活件 · 酒馆 v1.0.0」。② **演员成长版本** = 演员墨技艺层（`actor_self.md`）随演出/复盘**积累**的程度，是另一个维度（上面的 `actor_self.meta.json`，v1.1+）。reader 把这两件事**分开呈现**：演员墨技艺层（「我对你的了解」+「成长记 N 条」+「查看演员手记」展开富提示词）是一块；活件版本是应用层的安静 footer。
 
 ## 4. 同源事件协议（扩 digest 的 `bridge.js` + `server.py` 路由）
 
@@ -101,6 +106,7 @@ state/
 | event | 语义 | server 返回 |
 |---|---|---|
 | `switch_loadout {production_id}` | 设 `state.active_production_id` | `production`（含 story）供渲染 |
+| `delete_production {production_id}` | 删剧组（连同 story）。删的若是 active，`active` 切到剩下第一个、没有则清空。**触发**：看得见可点的 trash 控件（桌面 hover 浮出 / 触屏常驻），**非原生长按**（reader 是网页，见 surfaces-and-features「web reader ≠ 原生 app」）。**不可逆 → 二次确认**（`confirmDialog`，红「删除」/「取消」，对齐 ClawChat interaction-patterns §7.3）**【已实现 2026-06-30】** | `{deleted, active}` |
 | `send_message {production_id, text}` | 追加 user 行 → 演员运行时拼 prompt + 生成 → 追加 char 行 | `{reply, message}`（**同步**，控制台直接渲染） |
 | `append_turn {production_id, user_text, char_text}` | 早停专用：把「用户这句 + 已流式生成的半截」一起落盘（流式断开 server 不落盘，前端拿已收增量补存） | `{message}` |
 | `regenerate {production_id, message_id}` | 重生成该条，push 进 `alts`（**非破坏性**：旧版留在 `alts`，见 `conversation-surface.md §3.1`） | 更新后的 message |
@@ -117,7 +123,7 @@ state/
 | `set_note {production_id, note}` | 设/清剧组**导演提示**（作者注释）：临场语气/格式杠杆，注入贴近生成点（"回复短点"→注入，不靠模型记着）。**无 UI 旋钮**，由对话/agent 设（CLI `note`）；空串清除 | `{author_note}` |
 | `actor_say {production_id, text}`（**v1.1**） | enqueue 进 IM 队列（仿 digest `DISCUSS_QUEUE` handle_discuss:271-279）→ 搭子 agent drain 后代发进 IM | `{queued:true}` |
 
-读路由（GET，仿 digest read 路由）：`/api/cards`、`/api/worldbooks`、`/api/productions`、`/api/actor`。
+读路由（GET，仿 digest read 路由）：`/api/cards`、`/api/worldbooks`、`/api/productions`、`/api/actor`（返回 `{actor_self, version}`——`actor_self` = 演员技艺层全文，`version` = **活件版本** = 酒馆 app 自己的发版号，取 `SKILL.md` frontmatter `version`，见 §3 注）。
 
 ### agent 侧「找卡 + 导卡」（`SKILL.md` + `tools/tavern_cli.py`，2026-06-29 加）
 

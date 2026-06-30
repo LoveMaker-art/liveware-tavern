@@ -1,13 +1,18 @@
 :root{
   --bg:#f6f3ec; --surface:#fffdf8; --ink:#221f1a; --ink2:#5d574c; --muted:#928b7d;
   --line:#e6e0d4; --line2:#d8d1c2; --brand:#ff812a; --brandink:#a8521a;
+  --brandtint:rgba(255,129,42,.10); --brandtint2:rgba(255,129,42,.14);
+  --danger:#c0392b; --dangerink:#a5281b;
   --userbg:#efeae0; --radius:14px;
+  --shadow:0 14px 44px rgba(40,30,15,.16);
   --serif:"Songti SC","Noto Serif SC",Georgia,"Times New Roman",serif;
   --sans:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
 }
 @media (prefers-color-scheme: dark){
   :root{ --bg:#15140f; --surface:#1d1b15; --ink:#ece7da; --ink2:#b3ab9a; --muted:#7d7565;
-    --line:#2b281f; --line2:#39342a; --userbg:#23211a; --brandink:#ffa45c; }
+    --line:#2b281f; --line2:#39342a; --userbg:#23211a; --brandink:#ffa45c;
+    --brandtint:rgba(255,129,42,.13); --brandtint2:rgba(255,129,42,.18);
+    --danger:#e06a5a; --dangerink:#f0907f; --shadow:0 16px 50px rgba(0,0,0,.5); }
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -16,31 +21,51 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);
   display:flex;flex-direction:column;overflow:hidden;
   height:100dvh}  /* 100% fallback (上一规则) + 100dvh 跟随软键盘；iOS 由 visualViewport 兜底 */
 
-#topbar{display:flex;align-items:center;gap:10px;height:48px;padding:0 12px;
+/* 顶栏:无厚边框、留白大、✦+剧组名居中、下挂极小副标题(活件/演员归属、沉静感) */
+#topbar{display:flex;align-items:center;gap:10px;min-height:54px;padding:7px 12px;
   border-bottom:1px solid var(--line);background:var(--surface);flex:0 0 auto}
-.mark{color:var(--brand);font-size:16px}
-.prodName{flex:1;text-align:center;font-weight:600;font-size:15px;
+.topTitle{flex:1;min-width:0;text-align:center;line-height:1.25}
+.tline{display:flex;align-items:center;justify-content:center;gap:6px}
+.mark{color:var(--brand);font-size:15px}
+.prodName{font-weight:600;font-size:15px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72vw}
+.prodSub{font-size:11px;color:var(--muted);margin-top:1px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prodSub:empty{display:none}
 .iconbtn{border:0;background:none;color:var(--ink2);font-size:18px;cursor:pointer;
-  width:34px;height:34px;border-radius:9px}
+  width:34px;height:34px;border-radius:9px;flex:0 0 auto}
 .iconbtn:hover{background:var(--bg)}
 
 #layout{flex:1;display:flex;min-height:0}
 
 .pane{background:var(--surface);overflow-y:auto;flex:0 0 auto}
 #rail{width:208px;border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column}
-#panel{width:216px;border-left:1px solid var(--line);padding:14px 12px}
-.panehd{font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;
-  margin:4px 4px 8px}
-#panel .panehd:nth-of-type(2){margin-top:20px}
+#panel{width:224px;border-left:1px solid var(--line);padding:0}
+.panelBody{display:flex;flex-direction:column;height:100%;padding:14px 13px}
+.pSection{padding:0 0 14px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.pSection:last-of-type{border-bottom:0}
+.pHead{font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:0 0 8px}
 
-.prodList{list-style:none;margin:0;padding:0;flex:1}
-.prodItem{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:10px;
-  cursor:pointer;color:var(--ink2);font-size:14px}
+/* 剧目卡:名 + 一行数值(角色·N 轮·最近活跃,Task 3);当前在演 = 左侧 accent 竖条 + 淡橙底 */
+.prodList{list-style:none;margin:0;padding:0;flex:1;display:flex;flex-direction:column;gap:3px}
+.prodItem{position:relative;padding:9px 30px 9px 12px;border-radius:10px;cursor:pointer}
 .prodItem:hover{background:var(--bg)}
-.prodItem.active{background:rgba(255,129,42,.12);color:var(--ink);font-weight:600}
-.prodDot{width:7px;height:7px;border-radius:50%;background:var(--line2);flex:0 0 auto}
-.prodItem.active .prodDot{background:var(--brand)}
+.prodItem.active{background:var(--brandtint)}
+.prodItem.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--brand)}
+.prodName2{font-size:13px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prodItem.active .prodName2{color:var(--ink);font-weight:600}
+.prodMeta{font-size:11px;color:var(--muted);margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 删除 affordance:看得见、可点的网页控件(不是原生长按手势)。
+   桌面 hover 浮出 trash(hover=桌面网页原生);触屏无 hover → 常驻低透明、直接可点。 */
+.prodDel{position:absolute;right:5px;top:50%;transform:translateY(-50%);
+  display:flex;align-items:center;justify-content:center;
+  border:0;background:none;color:var(--muted);cursor:pointer;
+  width:24px;height:24px;border-radius:7px;opacity:0;transition:opacity .12s, color .12s}
+.prodItem:hover .prodDel{opacity:.5}
+.prodDel:hover{opacity:1;background:var(--surface);color:var(--danger)}
+@media (hover:none){ .prodDel{opacity:.42;width:30px;height:30px} .prodDel:active{color:var(--danger)} }
 
 .railacts{display:flex;flex-direction:column;gap:7px;margin-top:10px;
   padding-top:12px;border-top:1px solid var(--line)}
@@ -68,8 +93,9 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);
 #stage.dragging::after{content:"松手导入角色卡（PNG / JSON）";position:absolute;inset:10px;z-index:4;
   display:flex;align-items:center;justify-content:center;border:2px dashed var(--brand);
   border-radius:14px;background:rgba(255,129,42,.06);color:var(--brandink);font-size:14px;pointer-events:none}
-.convo{flex:1;overflow-y:auto;padding:30px 20px 8px}
-.thread{max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+/* 书页质感:窄栏居中(阅读宽度)、段落留白大,叙事压过「聊天 app」感(沉静/空气感) */
+.convo{flex:1;overflow-y:auto;padding:34px 22px 10px}
+.thread{max-width:486px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
 
 .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
   color:var(--muted);text-align:center;gap:6px}
@@ -79,7 +105,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);
 .turn{display:flex;flex-direction:column}
 .turn.user{align-items:flex-end}
 .uname{font-size:11px;color:var(--muted);margin:0 2px 4px}
-.char .body{font-size:15.5px;line-height:1.78;color:var(--ink);white-space:pre-wrap}
+.char .body{font-size:15.5px;line-height:1.85;color:var(--ink);white-space:pre-wrap}
 .char .nar{font-family:var(--serif);font-style:italic;color:var(--muted)}
 .user .body{background:var(--userbg);color:var(--ink2);border-radius:13px;
   padding:8px 13px;max-width:80%;font-size:14px;line-height:1.6;white-space:pre-wrap}
@@ -111,23 +137,85 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);
   padding:9px 14px;font-family:var(--sans);font-size:14px;line-height:1.5;background:var(--bg);
   color:var(--ink);max-height:140px;outline:none}
 .composer textarea:focus{border-color:var(--brand)}
+/* 发送键:内联 SVG 图标(上箭头发送 / 圆角方块停止),按压回弹,空输入静默灰态 */
 .sendbtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:0;cursor:pointer;
-  background:var(--brand);color:#fff;font-size:17px}
+  background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;
+  transition:background .15s, transform .12s, color .15s}
+.sendbtn svg{display:block}
+.sendbtn:active{transform:scale(.9)}
 .sendbtn:disabled{opacity:.4;cursor:default}
-.sendbtn.stop{background:var(--ink2);font-size:13px}  /* 发送中=停止键(早停) */
+.sendbtn.empty{background:var(--line2);color:var(--muted);cursor:default}  /* 没东西可发:静默 */
+.sendbtn.empty:active{transform:none}
+.sendbtn.stop{background:var(--ink2);color:#fff}  /* 发送中=停止键(早停) */
 
-.charInfo .cname{font-weight:600;font-size:15px;margin:0 0 6px}
-.charInfo .cdesc{font-size:13px;color:var(--ink2);line-height:1.55}
-.charInfo .ctags{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.cname{font-weight:600;font-size:15px;margin:0 0 4px}
+/* 来源/出处(Task 2):有 creator 显作者、agent 原创显「Agent 创作」 */
+.prov{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);margin:0 0 7px}
+.prov svg{flex:0 0 auto;opacity:.85}
+.cdesc{font-size:13px;color:var(--ink2);line-height:1.55}
+.ctags{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
 .tag{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg);
   border:1px solid var(--line2);color:var(--muted)}
-.loreInfo .lore{font-size:12.5px;color:var(--ink2);padding:8px 0;border-bottom:1px solid var(--line);line-height:1.5}
-.loreInfo .lore .lk{color:var(--brandink);font-size:11px}
+.lore{font-size:12.5px;color:var(--ink2);padding:7px 0;line-height:1.5}
+.lore+.lore{border-top:1px solid var(--line)}
+.lore .lk{color:var(--brandink);font-size:11px}
+.pmuted{font-size:12px;color:var(--muted)}
+
+/* 演员墨 · 技艺层(Task 5):随演出/复盘积累的富提示词,把「越演越懂你」做成可见特征 */
+.actorHd{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.actorHd .pHead{margin:0}
+.lvBadge{font-size:9.5px;padding:1px 6px;border-radius:999px;
+  background:var(--brandtint2);color:var(--brandink);white-space:nowrap}
+.knowHd{font-size:10px;color:var(--muted);margin-bottom:4px}
+.knowList{font-size:11.5px;color:var(--ink2);line-height:1.62;margin:0;padding:0;list-style:none}
+.knowList li{position:relative;padding-left:11px;margin-bottom:3px}
+.knowList li::before{content:"·";position:absolute;left:2px;color:var(--muted)}
+.growRow{font-size:10.5px;color:var(--muted);margin-top:9px;display:flex;align-items:center;gap:5px}
+.actorMore{margin-top:10px;font-size:11.5px;color:var(--brandink);background:none;border:0;
+  padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.actorMore:hover{text-decoration:underline}
+/* 活件版本 = 应用层标记(与演员是两回事),钉在面板最底 */
+.lwFoot{margin-top:auto;padding-top:13px;border-top:1px solid var(--line);
+  font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
+.lwFoot .mark{font-size:11px}
 
 .thinking{color:var(--muted);font-style:italic;font-family:var(--serif)}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:5}
 .toast{position:fixed;left:50%;bottom:74px;transform:translateX(-50%);z-index:10;
   background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;font-size:13px}
+
+/* 弹层(二次确认 / 演员手记):自带半透明背板,点背板关闭 */
+.modal{position:fixed;inset:0;z-index:7;display:flex;align-items:center;justify-content:center;
+  padding:24px;background:rgba(0,0,0,.42)}
+.modalCard{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+  box-shadow:var(--shadow);max-width:340px;width:100%;padding:19px 19px 15px}
+.modalTitle{font-weight:600;font-size:15px;margin:0 0 8px}
+.modalBody{font-size:13px;color:var(--ink2);line-height:1.6;margin:0 0 17px}
+.modalActs{display:flex;gap:9px}
+.modalActs button{flex:1;padding:10px;border-radius:11px;font-size:13.5px;cursor:pointer;
+  border:1px solid var(--line2);font-family:inherit}
+.mBtnCancel{background:none;color:var(--ink2)}
+.mBtnCancel:hover{background:var(--bg)}
+.mBtnDanger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
+.mBtnDanger:hover{filter:brightness(1.05)}
+/* 演员手记:大卡 + 滚动 */
+.sheetCard{max-width:444px;max-height:78vh;display:flex;flex-direction:column;padding:0}
+.sheetHd{display:flex;align-items:center;justify-content:space-between;
+  padding:15px 18px 12px;border-bottom:1px solid var(--line)}
+.sheetHd .t{font-weight:600;font-size:14.5px;display:flex;align-items:center;gap:7px}
+.sheetHd .lvBadge{margin-left:2px}
+.sheetClose{border:0;background:none;color:var(--muted);font-size:17px;cursor:pointer;
+  width:30px;height:30px;border-radius:8px}
+.sheetClose:hover{background:var(--bg)}
+.sheetBody{overflow-y:auto;padding:14px 18px 20px}
+.md .mh{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--brandink);margin:17px 0 7px}
+.md .mh:first-child{margin-top:0}
+.md .mp{font-size:13px;color:var(--ink2);line-height:1.62;margin:0 0 6px;white-space:pre-wrap}
+.md .mli{font-size:13px;color:var(--ink2);line-height:1.62;margin:0 0 5px;
+  padding-left:13px;position:relative}
+.md .mli::before{content:"·";position:absolute;left:3px;color:var(--muted)}
+
 .hidden{display:none!important}
 
 @media (max-width:760px){

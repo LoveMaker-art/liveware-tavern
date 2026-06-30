@@ -1,19 +1,50 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
-const state = { cards: [], cardMap: {}, worldbooks: {}, productions: [], activeId: null, active: null, busy: false, abort: null };
+const state = { cards: [], cardMap: {}, worldbooks: {}, productions: [], activeId: null, active: null,
+  actor: "", version: "", busy: false, abort: null };
 
 function esc(s) { return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function fmt(t) { return esc(t).replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>'); }
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), 2600); }
+function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+
+// 内联图标(reader 不挂图标字体)——细描边,克制。
+const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
+const SEED_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V11M12 11C12 7 9 5 4 5c0 5 3 6 8 6M12 13c0-3 3-5 8-5 0 4-3 5-8 5"/></svg>';
+const BOOK_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4a2 2 0 0 1 2-2h12v15H7a2 2 0 0 0-2 2zM19 17H7M5 4v16"/></svg>';
+const WORLD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>';
+const SEND_SVG = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V5M6 11l6-6 6 6"/></svg>';
+const STOP_SVG = '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" y="6.5" width="11" height="11" rx="2.6" fill="currentColor"/></svg>';
+
+// 对话轮数 = 用户出手数(first_mes 是 char 开场,不算)。最近活跃 = story 末条时间。
+function countTurns(story) { return (story || []).filter((m) => m.role === "user").length; }
+function lastActivity(story, createdAt) {
+  let t = createdAt || 0;
+  (story || []).forEach((m) => { if (m.ts && m.ts > t) t = m.ts; });
+  return t ? relTime(t) : "";
+}
+function relTime(ts) {
+  const d = Math.max(0, Date.now() / 1000 - ts);
+  if (d < 60) return "刚刚";
+  if (d < 3600) return Math.floor(d / 60) + " 分钟前";
+  if (d < 86400) return Math.floor(d / 3600) + " 小时前";
+  if (d < 172800) return "昨天";
+  if (d < 86400 * 8) return Math.floor(d / 86400) + " 天前";
+  const dt = new Date(ts * 1000);
+  return (dt.getMonth() + 1) + " 月 " + dt.getDate() + " 日";
+}
 
 async function loadAll() {
-  const [pr, cr, wr] = await Promise.all([
+  const [pr, cr, wr, ar] = await Promise.all([
     bridge.get("/api/productions"), bridge.get("/api/cards"), bridge.get("/api/worldbooks"),
+    bridge.get("/api/actor"),
   ]);
   state.productions = pr.productions || [];
   state.cards = cr.cards || [];
   state.cardMap = {}; state.cards.forEach((c) => (state.cardMap[c.id] = c));
   state.worldbooks = {}; (wr.worldbooks || []).forEach((w) => (state.worldbooks[w.id] = w));
+  state.actor = ar.actor_self || "";        // 演员墨技艺层(富提示词,会积累)
+  state.version = ar.version || "";          // 活件版本(酒馆 app 自己的发版号)
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
   state.active = state.productions.find((p) => p.id === state.activeId) || null;
   renderRail(); renderStage(); renderPanel();
@@ -21,16 +52,29 @@ async function loadAll() {
 
 function renderRail() {
   const ul = $("#prodList");
-  ul.innerHTML = state.productions.map((p) =>
-    `<li class="prodItem ${p.id === state.activeId ? "active" : ""}" data-id="${p.id}">
-       <span class="prodDot"></span><span>${esc(p.name)}</span></li>`).join("");
+  ul.innerHTML = state.productions.map((p) => {
+    const card = state.cardMap[p.card_id] || {};
+    const turns = countTurns(p.story);
+    const meta = [card.name, turns > 0 ? turns + " 轮" : "新戏", lastActivity(p.story, p.created_at)]
+      .filter(Boolean).join(" · ");
+    return `<li class="prodItem ${p.id === state.activeId ? "active" : ""}" data-id="${p.id}">
+      <div class="prodName2">${esc(p.name)}</div>
+      <div class="prodMeta">${esc(meta)}</div>
+      <button class="prodDel" data-del="${p.id}" aria-label="删除剧组" title="删除剧组">${TRASH_SVG}</button>
+    </li>`;
+  }).join("");
   ul.querySelectorAll(".prodItem").forEach((li) =>
     li.onclick = () => switchProd(li.dataset.id));
+  // 删除 = 看得见可点的 trash(桌面 hover 浮出 / 触屏常驻),tap → 二次确认。无原生长按手势。
+  ul.querySelectorAll(".prodDel").forEach((b) =>
+    b.onclick = (e) => { e.stopPropagation(); askDeleteProduction(b.dataset.del); });
 }
 
 function renderStage() {
   const p = state.active;
   $("#prodName").textContent = p ? p.name : "酒馆";
+  const card = p ? (state.cardMap[p.card_id] || {}) : {};
+  $("#prodSub").textContent = card.name ? "墨 · " + card.name : "";   // 活件/演员归属(副标题)
   const c = $("#convo");
   if (!p) { c.innerHTML = `<div class="empty"><div class="emptyMark">✦</div><p>导入一张角色卡，开一场戏。</p><p class="hint">墨会入戏陪你演。</p></div>`; return; }
   const turns = p.story.map((m, i) => turnHtml(m, i === p.story.length - 1)).join("");
@@ -70,19 +114,81 @@ function bindCtls() {
     b.onclick = (e) => swipe(e.target.closest(".turn").dataset.id, 1));
 }
 
+// 角色卡来源/出处(Task 2):有 creator(卡作者)显作者;Agent 原创(import_card_json)显「Agent 创作」。
+function provenanceHtml(card) {
+  const creator = (card.creator || "").trim();
+  const src = card.source || "";
+  if (creator) return `<div class="prov">${WORLD_SVG}${esc("来源 · " + creator)}</div>`;
+  if (src === "agent") return `<div class="prov"><span style="color:var(--brand)">✦</span>Agent 创作</div>`;
+  if (src === "chub") return `<div class="prov">${WORLD_SVG}来源 · Chub</div>`;
+  return "";
+}
+
+// 演员墨技艺层(Task 5):随演出/复盘积累的富提示词,把「越演越懂你」做成可见特征。
+function parseActorSelf(md) {
+  const out = { knows: [], growth: 0 };
+  if (!md) return out;
+  const sections = {}; let cur = null;
+  md.split("\n").forEach((line) => {
+    const h = line.match(/^#\s+(.+)/);
+    if (h) { cur = h[1]; sections[cur] = []; return; }
+    if (cur) sections[cur].push(line);
+  });
+  const find = (kw) => Object.keys(sections).find((k) => k.includes(kw));
+  const isPlaceholder = (s) => /^（.*）$/.test(s.trim()) || s.includes("还不了解") || s.includes("空。");
+  const ks = find("我对你的了解");
+  if (ks) sections[ks].forEach((l) => { const m = l.match(/^[-*]\s+(.+)/); if (m && !isPlaceholder(m[1])) out.knows.push(m[1].trim()); });
+  const gs = find("成长记");
+  if (gs) sections[gs].forEach((l) => { const m = l.match(/^[-*]\s+(.+)/); if (m && !isPlaceholder(m[1])) out.growth++; });
+  return out;
+}
+
+function actorSectionHtml() {
+  const a = parseActorSelf(state.actor);
+  const knows = a.knows.length
+    ? `<ul class="knowList">${a.knows.slice(0, 4).map((k) => `<li>${esc(k)}</li>`).join("")}</ul>`
+    : `<p class="pmuted">还在熟悉你。等演几场，墨会把你的口味记到这。</p>`;
+  const grow = a.growth > 0 ? `<div class="growRow">${SEED_SVG}成长记 ${a.growth} 条</div>` : "";
+  return `<div class="pSection actorSec">
+    <div class="actorHd"><span class="pHead">演员 · 墨</span></div>
+    <div class="knowHd">越演越懂你</div>
+    ${knows}${grow}
+    <button class="actorMore" id="actorMore">${BOOK_SVG}查看演员手记</button>
+  </div>`;
+}
+
 function renderPanel() {
+  const body = $("#panelBody");
   const p = state.active;
-  const ci = $("#charInfo"), li = $("#loreInfo");
-  if (!p) { ci.innerHTML = '<p class="cdesc">还没开戏。</p>'; li.innerHTML = ""; return; }
-  const card = state.cardMap[p.card_id] || {};
-  ci.innerHTML = `<p class="cname">${esc(card.name || "")}</p>
-    <p class="cdesc">${esc(card.description || "")}</p>
-    <div class="ctags">${(card.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>`;
-  const lore = [];
-  (p.worldbook_ids || []).forEach((wid) => (state.worldbooks[wid]?.entries || []).forEach((e) => lore.push(e)));
-  li.innerHTML = lore.length ? lore.map((e) =>
-    `<div class="lore"><span class="lk">${(e.keys || []).join(" · ") || "常驻"}</span><br>${esc(e.content)}</div>`).join("")
-    : '<p class="cdesc" style="color:var(--muted)">无</p>';
+  const actorSec = actorSectionHtml();   // 演员墨跨剧组,始终显
+  const lwFoot = state.version
+    ? `<div class="lwFoot" title="酒馆是一个活件：墨可以改它的功能与样子，再发一版"><span class="mark">✦</span>活件 · 酒馆 v${esc(state.version)}</div>`
+    : "";
+  let sections;
+  if (!p) {
+    sections = `<div class="pSection"><div class="pHead">角色</div><p class="pmuted">还没开戏。</p></div>`;
+  } else {
+    const card = state.cardMap[p.card_id] || {};
+    const tags = (card.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("");
+    const charSec = `<div class="pSection">
+      <div class="pHead">角色</div>
+      <p class="cname">${esc(card.name || "")}</p>
+      ${provenanceHtml(card)}
+      <p class="cdesc">${esc(card.description || "")}</p>
+      ${tags ? `<div class="ctags">${tags}</div>` : ""}
+    </div>`;
+    const lore = [];
+    (p.worldbook_ids || []).forEach((wid) => (state.worldbooks[wid]?.entries || []).forEach((e) => lore.push(e)));
+    const loreSec = `<div class="pSection">
+      <div class="pHead">世界书</div>
+      ${lore.length ? lore.map((e) => `<div class="lore"><span class="lk">${esc((e.keys || []).join(" · ") || "常驻")}</span><br>${esc(e.content)}</div>`).join("")
+        : '<p class="pmuted">无</p>'}
+    </div>`;
+    sections = charSec + loreSec;
+  }
+  body.innerHTML = sections + actorSec + lwFoot;
+  const more = $("#actorMore");
+  if (more) more.onclick = openActorSheet;
 }
 
 async function switchProd(id) {
@@ -102,8 +208,15 @@ function submitOrStop() {
 function setComposerSending(sending) {
   const b = $("#sendBtn");
   b.classList.toggle("stop", sending);
-  b.textContent = sending ? "■" : "↵";
+  b.innerHTML = sending ? STOP_SVG : SEND_SVG;
   b.setAttribute("aria-label", sending ? "停止" : "发送");
+  if (sending) b.classList.remove("empty");
+  else updateSendEmpty();
+}
+// 没东西可发时发送键走静默灰态(发送中=停止键,恒亮)。
+function updateSendEmpty() {
+  if (state.busy) return;
+  $("#sendBtn").classList.toggle("empty", !$("#input").value.trim());
 }
 
 async function send() {
@@ -327,6 +440,81 @@ const isTouch = () => window.matchMedia("(hover: none)").matches;
 function openDrawer(id) { $(id).classList.add("open"); $("#scrim").classList.remove("hidden"); }
 function closeDrawers() { $("#rail").classList.remove("open"); $("#panel").classList.remove("open"); $("#scrim").classList.add("hidden"); }
 
+// ---- 弹层(二次确认 / 演员手记):点背板或 Esc 关闭 ----
+let _modalClose = null;
+function openModal(node, onClose) {
+  const m = $("#modal");
+  m.innerHTML = ""; m.appendChild(node);
+  m.classList.remove("hidden");
+  _modalClose = onClose || null;
+  m.onclick = (e) => { if (e.target === m) closeModal(); };
+  document.addEventListener("keydown", modalEsc);
+}
+function closeModal() {
+  const m = $("#modal");
+  if (m.classList.contains("hidden")) return;
+  m.classList.add("hidden"); m.innerHTML = "";
+  document.removeEventListener("keydown", modalEsc);
+  const cb = _modalClose; _modalClose = null; if (cb) cb();
+}
+
+function modalEsc(e) { if (e.key === "Escape") closeModal(); }
+
+// 二次确认(不可逆动作):返回 Promise<bool>。背板/Esc/取消 → false。
+function confirmDialog({ title, body, confirmLabel = "删除" }) {
+  return new Promise((resolve) => {
+    let decided = false;
+    const card = el("div", "modalCard");
+    card.innerHTML = `<p class="modalTitle">${esc(title)}</p>
+      <p class="modalBody">${esc(body)}</p>
+      <div class="modalActs"><button class="mBtnCancel">取消</button>
+      <button class="mBtnDanger">${esc(confirmLabel)}</button></div>`;
+    openModal(card, () => { if (!decided) resolve(false); });
+    const done = (v) => { decided = true; closeModal(); resolve(v); };
+    card.querySelector(".mBtnCancel").onclick = () => done(false);
+    card.querySelector(".mBtnDanger").onclick = () => done(true);
+  });
+}
+
+async function askDeleteProduction(id) {
+  const p = state.productions.find((x) => x.id === id);
+  if (!p) return;
+  const ok = await confirmDialog({
+    title: `删除「${p.name}」？`,
+    body: "这场戏的全部对话记录会一起删除，且无法恢复。",
+    confirmLabel: "删除",
+  });
+  if (!ok) return;
+  try {
+    await bridge.event({ type: "delete_production", production_id: id });
+    await loadAll();   // server 已切好 active,loadAll 重渲染
+    toast("已删除剧组");
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+
+// 演员手记:把 actor_self.md(随演出积累的那份富提示词)整份渲染出来——「越演越懂你」看得见。
+const mfmt = (s) => esc(s).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*([^*]+)\*/g, "<em>$1</em>");
+function mdToHtml(md) {
+  let html = "";
+  (md || "").split("\n").forEach((raw) => {
+    const line = raw.replace(/\r$/, "");
+    const h = line.match(/^#+\s+(.+)/), li = line.match(/^[-*]\s+(.+)/);
+    if (h) html += `<div class="mh">${mfmt(h[1])}</div>`;
+    else if (li) html += `<div class="mli">${mfmt(li[1])}</div>`;
+    else if (line.trim()) html += `<div class="mp">${mfmt(line)}</div>`;
+  });
+  return `<div class="md">${html}</div>`;
+}
+function openActorSheet() {
+  const intro = '<div class="mp" style="color:var(--muted);margin-bottom:13px">墨随每场戏与复盘积累的演艺手记——越演越懂你。这是注入每一场戏的那份提示词。</div>';
+  const card = el("div", "modalCard sheetCard");
+  card.innerHTML = `<div class="sheetHd"><span class="t">演员手记 · 墨</span>
+      <button class="sheetClose" aria-label="关闭">✕</button></div>
+    <div class="sheetBody">${intro}${mdToHtml(state.actor)}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+}
+
 // 软键盘弹起把可视视口压小:iOS WKWebView 不认 interactive-widget/dvh 的键盘收缩,
 // 用 visualViewport 把 body 高度贴到可视视口(Android 由 meta interactive-widget+dvh 覆盖)。
 function keyboardInset() {
@@ -341,7 +529,7 @@ function keyboardInset() {
 function wire() {
   $("#composer").onsubmit = (e) => { e.preventDefault(); submitOrStop(); };
   const input = $("#input");
-  input.oninput = (e) => autoGrow(e.target);
+  input.oninput = (e) => { autoGrow(e.target); updateSendEmpty(); };
   // IME 守卫(含 macOS WKWebView/WebKit 修正):
   // - Chromium:合成中的 Enter 带 isComposing=true / keyCode=229,直接挡。
   // - WebKit(macOS 容器 + Safari):compositionend 排在「确认候选词」的 Enter keydown **之前**,
@@ -366,6 +554,7 @@ function wire() {
   $("#railToggle").onclick = () => openDrawer("#rail");
   $("#panelToggle").onclick = () => openDrawer("#panel");
   $("#scrim").onclick = closeDrawers;
+  setComposerSending(false);   // 初始 SVG 发送图标 + 空态
 }
 
 keyboardInset();

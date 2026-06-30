@@ -70,6 +70,19 @@ def actor_self_text():
         return f.read()
 
 
+def liveware_version():
+    # 活件版本 = 酒馆这个 app 自己的发版号(agent 改了功能/皮肤再部署 = 一次发版)。
+    # 取 SKILL.md frontmatter 的 version,代表「应用」,与演员技艺层(actor_self.md)是两回事。
+    try:
+        with open(os.path.join(HERE, "SKILL.md"), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("version:"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def load_card(cid):
     return _read(os.path.join(STATE, "cards", cid + ".json"))
 
@@ -101,7 +114,11 @@ def _msg(role, text):
 
 
 # ---------- event handlers ----------
-def _store_card(card):
+def _store_card(card, source=""):
+    # source = 导入渠道(出处):chub=导入真卡 / agent=原创。creator(卡作者)仍透传,
+    # 信息面板优先显 creator,无 creator 才回落 source(Task 2 角色卡出处)。
+    if source:
+        card["source"] = source
     _write(os.path.join(STATE, "cards", card["id"] + ".json"), card)
     # 卡内嵌世界书 → 落成独立 worldbook
     if card.get("character_book"):
@@ -112,14 +129,14 @@ def _store_card(card):
 
 
 def ev_import_card(ev):
-    # PNG 路径：吃一张 V2/V3 角色卡 PNG（base64）。真实卡走这条，编码天然正确。
-    return _store_card(card_import.import_card_b64(ev["png_base64"]))
+    # PNG 路径：吃一张 V2/V3 角色卡 PNG（base64）。真实卡走这条，编码天然正确。出处=chub。
+    return _store_card(card_import.import_card_b64(ev["png_base64"]), "chub")
 
 
 def ev_import_card_json(ev):
     # JSON 路径：吃一份卡 JSON（V1/V2/V3 形态，带 data 包或裸 obj 都行）。
-    # 给 agent「原创/自造」角色卡用——不手搓 PNG，绕开 btoa(UTF-8) 把中文搞乱码的坑。
-    return _store_card(card_import.normalize_card(ev["card"]))
+    # 给 agent「原创/自造」角色卡用——不手搓 PNG，绕开 btoa(UTF-8) 把中文搞乱码的坑。出处=agent。
+    return _store_card(card_import.normalize_card(ev["card"]), "agent")
 
 
 def ev_import_worldbook(ev):
@@ -167,6 +184,25 @@ def ev_switch_loadout(ev):
         raise ValueError("production not found")
     _set_active(p["id"])
     return {"production": p}
+
+
+def ev_delete_production(ev):
+    # 删一个剧组(连同它的故事线 story)——不可逆,前端走二次确认(Task 4)。
+    # 删的若是当前活跃剧组,active 切到剩下的第一个、没有则清空。
+    pid = ev["production_id"]
+    if not load_production(pid):
+        raise ValueError("production not found")
+    path = os.path.join(STATE, "productions", pid + ".json")
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    new_active = _get_state().get("active_production_id")
+    if new_active == pid:
+        remaining = [x for x in _list("productions") if x]
+        new_active = remaining[0]["id"] if remaining else None
+        _set_active(new_active)
+    return {"deleted": pid, "active": new_active}
 
 
 def _loadout(p):
@@ -311,6 +347,7 @@ EVENTS = {
     "import_card": ev_import_card, "import_card_json": ev_import_card_json,
     "import_worldbook": ev_import_worldbook, "attach_worldbook": ev_attach_worldbook,
     "create_production": ev_create_production, "switch_loadout": ev_switch_loadout,
+    "delete_production": ev_delete_production,
     "send_message": ev_send_message, "append_turn": ev_append_turn,
     "regenerate": ev_regenerate,
     "swipe": ev_swipe, "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
@@ -384,7 +421,8 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, {"productions": _list("productions"),
                                     "active": _get_state().get("active_production_id")})
         if path == "/api/actor":
-            return self._json(200, {"actor_self": actor_self_text()})
+            # 演员技艺层(actor_self.md,会随演出/复盘积累的富提示词) + 活件版本(应用发版号)。
+            return self._json(200, {"actor_self": actor_self_text(), "version": liveware_version()})
         # static reader（index.html 走版本化注入,破 relay 的 immutable 缓存）
         rel = path.lstrip("/") or "index.html"
         if rel == "index.html":

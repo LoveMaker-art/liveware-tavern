@@ -92,6 +92,10 @@ def normalize_card(card_obj: dict) -> dict:
         out[f] = data.get(f, "") or ""
     out["alternate_greetings"] = data.get("alternate_greetings") or []
     out["tags"] = data.get("tags") or []
+    # 出处标记:import_card(PNG/Chub)→「chub」、import_card_json(原创/粘贴)→「agent」,
+    # 由 server 的事件入口按导入渠道打(normalize_card 路径无关、分不清渠道)。卡 JSON 自带
+    # 的 source 先保留(不丢未知键),server 再按渠道覆盖。显示优先 creator,无 creator 才看 source。
+    out["source"] = data.get("source") or ""
     # 世界书可能内嵌在卡里(character_book)——带走，建剧组时可转成独立 worldbook
     if isinstance(data.get("character_book"), dict):
         out["character_book"] = data["character_book"]
