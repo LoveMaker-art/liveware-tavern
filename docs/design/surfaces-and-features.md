@@ -1,6 +1,7 @@
 # 两个面：功能与特性（v1 设计起点）
 
 > 承接 `../research/agent-liveware-opportunities.md`「RP 主舞台 = 混合」。这里把 chat 面与 liveware 面各自的功能/特性定下来。
+> 这里定**有哪些功能**；**对话怎么进行**（输入/键盘/回合控制/流式/失败兜底 = 体验达标规格）见 `conversation-surface.md`。
 > 状态：讨论中（2026-06-28 起）。每个「待定」是真问题。
 
 ## 0. 核心设计原则（canon，2026-06-28 用户定）
@@ -91,11 +92,11 @@
 
 | 酒馆功能 | 落点 | 怎么实现 / v1 |
 |---|---|---|
-| 角色卡基本（名/简介/性格/场景/开场白 first_mes） | liveware | 导入 + 查看 + 轻量改。**v1** |
-| 备选开场白 alternate greetings | liveware | swipe 换开场。**v1** |
-| 用户人设 persona | liveware | 简单卡：你在戏里是谁。**v1** |
-| 世界书 查看 + 加条目 | liveware | 列表 + 加一条（关键词 + 内容）。**v1** |
-| 重生成 / swipe 备选 / 编辑消息 | liveware | 渐进披露控制条。**v1** |
+| 角色卡基本（名/简介/性格/场景/开场白 first_mes） | liveware | 导入 + **查看 v1**；**行内改 v1.1**（v1 改卡走对话 + `import_card_json` 重导） |
+| 备选开场白 alternate greetings | liveware | swipe 换开场。**v1.1**（v1 用 first_mes 开场） |
+| 用户人设 persona | liveware | 简单卡：你在戏里是谁。**v1.1**（服务端 set_persona 已就绪，UI 后补） |
+| 世界书 查看 + 加条目 | liveware | **查看 v1**；**加条目 v1.1**（v1 走墨对话/CLI，见 v1-build-spec add_lore） |
+| 重生成 / swipe 备选 / 编辑消息 | liveware | 渐进披露控制条。**v1**（swipe 非破坏性 + 行内编辑，见 `conversation-surface.md`） |
 | 角色卡高级（system_prompt / post_history / 对话示例） | 对话 | "更高冷点 / 别用现代词" → agent 内化进演法 |
 | 世界书高级（递归/扫描深度/常开蓝灯/二级关键词/位置/order/token 预算） | 对话 | "凛一提到水就紧张" → agent 自己拿捏触发，不暴露机制 |
 | 采样参数（温度/重复惩罚/top-p… 21 项） | 对话 | "回复短点 / 别重复 / 更有文采" → 说一次进技艺层长期记住 |

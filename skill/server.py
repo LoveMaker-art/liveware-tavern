@@ -169,12 +169,19 @@ def ev_switch_loadout(ev):
     return {"production": p}
 
 
-def _perform_into(p):
+def _loadout(p):
+    """一回合演出要喂的料:卡 + 世界书 + 人设 + 作者注释(本剧组的临场导演提示)。"""
     card = load_card(p["card_id"])
     wbs = [load_worldbook(w) for w in p.get("worldbook_ids", [])]
     wbs = [w for w in wbs if w]
     persona = _read(os.path.join(STATE, "persona.json"), {})
-    return actor.perform(card, actor_self_text(), wbs, persona, p["story"])
+    note = p.get("author_note", "")
+    return card, wbs, persona, note
+
+
+def _perform_into(p):
+    card, wbs, persona, note = _loadout(p)
+    return actor.perform(card, actor_self_text(), wbs, persona, p["story"], note)
 
 
 def ev_send_message(ev):
@@ -187,6 +194,20 @@ def ev_send_message(ev):
     p["story"].append(m)
     save_production(p)
     return {"reply": reply, "message": m, "production_id": p["id"]}
+
+
+def ev_append_turn(ev):
+    # 早停专用:把「用户这一句 + 已流式生成的半截回复」一起落盘。
+    # 流式中途客户端断开时 server 不落盘(见 _stream_send),所以早停由前端拿着已收的
+    # 增量调这条补存,既保住半截、又不和正常流式路径重复落盘。
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    p["story"].append(_msg("user", ev.get("user_text", "")))
+    m = _msg("char", (ev.get("char_text") or "").strip())
+    p["story"].append(m)
+    save_production(p)
+    return {"message": m, "production_id": p["id"]}
 
 
 def ev_regenerate(ev):
@@ -207,6 +228,23 @@ def ev_regenerate(ev):
     p["story"] = saved_story
     save_production(p)
     return {"message": last, "production_id": p["id"]}
+
+
+def ev_swipe(ev):
+    # 在已有备选回复(alts)间切换 active_alt(非破坏性,dir ∈ -1/+1,边界夹住)。
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    for m in p["story"]:
+        if m["id"] == ev["message_id"]:
+            alts = m.get("alts") or [m.get("text", "")]
+            cur = m.get("active_alt", 0)
+            nxt = max(0, min(len(alts) - 1, cur + int(ev.get("dir", 0))))
+            m["active_alt"] = nxt
+            m["text"] = alts[nxt]
+            save_production(p)
+            return {"message": m}
+    raise ValueError("message not found")
 
 
 def ev_edit_message(ev):
@@ -257,13 +295,26 @@ def ev_set_persona(ev):
     return {"persona": persona}
 
 
+def ev_set_note(ev):
+    """设/清本剧组的作者注释(导演提示)——临场语气/格式杠杆,注入贴近生成点。
+    结构化的「跟搭子说一句就长期生效」:agent 识别『回复短点/别用现代词』→ set_note。
+    设计 canon:不暴露 UI 旋钮,由对话/agent 设。空串=清除。"""
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    p["author_note"] = (ev.get("note") or "").strip()
+    save_production(p)
+    return {"production_id": p["id"], "author_note": p["author_note"]}
+
+
 EVENTS = {
     "import_card": ev_import_card, "import_card_json": ev_import_card_json,
     "import_worldbook": ev_import_worldbook, "attach_worldbook": ev_attach_worldbook,
     "create_production": ev_create_production, "switch_loadout": ev_switch_loadout,
-    "send_message": ev_send_message, "regenerate": ev_regenerate,
-    "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
-    "reflect": ev_reflect, "set_persona": ev_set_persona,
+    "send_message": ev_send_message, "append_turn": ev_append_turn,
+    "regenerate": ev_regenerate,
+    "swipe": ev_swipe, "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
+    "reflect": ev_reflect, "set_persona": ev_set_persona, "set_note": ev_set_note,
 }
 
 
@@ -338,8 +389,53 @@ class H(BaseHTTPRequestHandler):
             return b"".join(chunks)
         return b""
 
+    def _sse(self, obj):
+        """写一条 SSE 事件并 flush。客户端断开(早停/关页)返回 False → 停止生成。"""
+        line = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+        try:
+            self.wfile.write(line.encode("utf-8"))
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            return False
+
+    def _stream_send(self):
+        """流式 send_message:逐 token 推 SSE,末尾推 {done, message}。
+        只在成功生成后落盘——客户端中途断开则不残留(reader 回退阻塞式时不会重复)。"""
+        try:
+            ev = json.loads(self._read_body() or b"{}")
+        except Exception:
+            return self._json(400, {"error": "bad json"})
+        if ev.get("type") != "send_message":
+            return self._json(400, {"error": "stream only supports send_message"})
+        p = load_production(ev.get("production_id"))
+        if not p:
+            return self._json(404, {"error": "production not found"})
+        p["story"].append(_msg("user", ev.get("text", "")))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")  # 防中间层缓冲(尽力而为)
+        self.end_headers()
+        card, wbs, persona, note = _loadout(p)
+        chunks = []
+        try:
+            for delta in actor.perform_stream(card, actor_self_text(), wbs, persona, p["story"], note):
+                chunks.append(delta)
+                if not self._sse({"delta": delta}):
+                    return  # 客户端断开 → 不落盘
+        except Exception as e:
+            self._sse({"error": str(e)})
+            return
+        m = _msg("char", "".join(chunks).strip())
+        p["story"].append(m)
+        save_production(p)
+        self._sse({"done": True, "message": m, "production_id": p["id"]})
+
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/stream":
+            return self._stream_send()
         if path != "/api/event":
             return self._json(404, {"error": "unknown endpoint"})
         try:

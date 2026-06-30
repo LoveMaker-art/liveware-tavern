@@ -96,23 +96,25 @@ state/
 
 ## 4. 同源事件协议（扩 digest 的 `bridge.js` + `server.py` 路由）
 
-`bridge.send(event)` → POST `/api/event`，返回 `{ok, dryRun, data}`，离线优雅降级（bridge.js:78、57-74 原样复用）。`/api/health` → `{ok, dry_run}`（bridge.js:41 probe）。
+`bridge.send(event)` → POST `/api/event`，返回 `{ok, dryRun, data}`，离线优雅降级（bridge.js:78、57-74 原样复用）。`/api/health` → `{ok, dry_run}`（bridge.js:41 probe）。**流式 send**：`bridge.eventStream(event, onDelta)` → `POST /api/stream`（SSE：逐 `data:{delta}`，末尾 `data:{done,message}`），传输层不支持则 throw、调用方回退 `/api/event`（见 `conversation-surface.md §5`）。
 
 | event | 语义 | server 返回 |
 |---|---|---|
 | `switch_loadout {production_id}` | 设 `state.active_production_id` | `production`（含 story）供渲染 |
 | `send_message {production_id, text}` | 追加 user 行 → 演员运行时拼 prompt + 生成 → 追加 char 行 | `{reply, message}`（**同步**，控制台直接渲染） |
-| `regenerate {production_id, message_id}` | 重生成该条，push 进 `alts` | 更新后的 message |
-| `swipe {production_id, message_id, dir}` | 切 `active_alt` | message |
+| `append_turn {production_id, user_text, char_text}` | 早停专用：把「用户这句 + 已流式生成的半截」一起落盘（流式断开 server 不落盘，前端拿已收增量补存） | `{message}` |
+| `regenerate {production_id, message_id}` | 重生成该条，push 进 `alts`（**非破坏性**：旧版留在 `alts`，见 `conversation-surface.md §3.1`） | 更新后的 message |
+| `swipe {production_id, message_id, dir}` | 切 `active_alt`（`dir` ∈ -1/+1，边界夹住）**【已实现】** | message |
 | `edit_message {production_id, message_id, text}` | 改文本 | message |
 | `import_card {png_base64}` | 解析 V2/V3 PNG → 落 `cards/`（真实卡走这条，编码天然正确） | card |
 | `import_card_json {card}` | 吃卡 JSON（V1/V2/V3 形态，**原创/结构化**导入，绕开手搓 PNG + `btoa(UTF-8)` 中文乱码坑） | card |
 | `create_production {card_id, worldbook_ids?, persona_id?, name?}` | 新建 + first_mes | production |
 | `import_worldbook {worldbook}` | 导入独立世界书 → 落 `worldbooks/` | worldbook |
 | `attach_worldbook {production_id, worldbook_id}` | 把独立世界书挂到现有剧组（卡内嵌的在 create_production 自动挂） | production |
-| `add_lore {worldbook_id?, entry}` | 加世界书单条目（**v1 计划，未实现**） | worldbook |
+| `add_lore {worldbook_id?, entry}` | 加世界书单条目（**降到 v1.1**：v1 世界书只读查看，加条目走墨对话/CLI） | worldbook |
 | `actor_grow {change, reason}` | 改写 `actor_self.md` 相应段 + 记一笔成长（带人话理由）+ 进 meta 快照 | actor_self |
 | `reflect {production_id}` | 复盘整场戏 → 模型蒸馏「对用户的 RP 偏好」→ 追加进技艺层 `actor_self`（「越演越懂你」的**结构化触发**，不靠 agent 临场总结） | learned |
+| `set_note {production_id, note}` | 设/清剧组**导演提示**（作者注释）：临场语气/格式杠杆，注入贴近生成点（"回复短点"→注入，不靠模型记着）。**无 UI 旋钮**，由对话/agent 设（CLI `note`）；空串清除 | `{author_note}` |
 | `actor_say {production_id, text}`（**v1.1**） | enqueue 进 IM 队列（仿 digest `DISCUSS_QUEUE` handle_discuss:271-279）→ 搭子 agent drain 后代发进 IM | `{queued:true}` |
 
 读路由（GET，仿 digest read 路由）：`/api/cards`、`/api/worldbooks`、`/api/productions`、`/api/actor`。
@@ -129,8 +131,9 @@ state/
 
 ## 5. 演员生成契约（actor.py —— ST 的 prompt builder，但藏起来）
 
-拼 prompt = 角色卡（name/desc/personality/scenario/[system_prompt]，= 剧本）+ 用户人设 + 本剧组相关世界书条目（**agent 选，不靠死关键词扫描**）+ **本剧组故事线（隔离，只这条）** + **`actor_self.md`（演员自画像 prompt，= 演员，跨剧组共享技艺层）** → 调演员模型生成。即「**角色 = 演员 × 剧本**」落到拼装层。
+拼 prompt = 角色卡（name/desc/personality/scenario/[system_prompt]，= 剧本）+ **示例对白 `mes_example`（few-shot 风格锚，注在定义后、故事前）** + 用户人设 + 本剧组相关世界书条目（**agent 选，不靠死关键词扫描**）+ **本剧组故事线（隔离，只这条）** + **角色卡 `post_history_instructions`（贴尾指令，注在故事之后、最靠近生成点——格式/不脱戏提醒）** + **`actor_self.md`（演员自画像 prompt，= 演员，跨剧组共享技艺层）** → 调演员模型生成。即「**角色 = 演员 × 剧本**」落到拼装层。`mes_example`/`post_history_instructions` 由 `card_import` 解析、`build_messages` 注入（2026-06-30 补：此前解析了却没注入）。
 
+- **拼装机制（2026-06-30 补齐对标 ST 手感，详见 `conversation-surface.md §5`）**：上下文预算裁剪（长局只喂开场 + 预算内最新尾巴，`_fit_history`，不撞模型上限）；世界书分两档放置（`before_char` 进系统顶当背景、其余注在故事后贴近生成点才 steer 当前回合）+ `selective` 二级关键词收窄触发；作者注释 `author_note` 注入贴近生成点（结构化临场语气/格式杠杆，`set_note`，无 UI）；服务端 `frequency_penalty`/`presence_penalty` 反复读兜底（无 UI，采样参数按 canon 收自动档）；流式生成走 `perform_stream`。
 - **故事记忆隔离**：只喂 `production.story`（绝不串别的剧组）。
 - **技艺共享**：`actor_self.md` 注入每一个剧组——"搭子越演越懂你"的载体。**ST 无等价物（没有持久演员，只有一次性角色实例）= 我们的护城河。**
 - **复杂功能→对话 + 成长**：`send_message` 文本若是元指令（"回复短点"/"凛怕水"），演员运行时识别 → `actor_grow`（改写 `actor_self.md`，进技艺层）或 `add_lore`，而非当剧情。**成长纪律**沿用 liveware 活·软件：间断平衡、大改先提案、可回滚、每次变更用人话记一笔。**v1.0 先用显式 `actor_grow`/`add_lore` 兜底；自然语言识别 = v1.1。**

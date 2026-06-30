@@ -12,6 +12,7 @@
   add <fullPath> [--name NAME]             下载 Chub 真卡 → 导入 → 建剧组（**优先用这条**）
   add-original <jsonfile|->                 原创/自造卡 JSON → 导入 → 建剧组（仅在明确「原创」时用）
   add-worldbook <jsonfile|-> [--production PID]   世界书 JSON → 导入（可挂到现有剧组）
+  note <production> "<提示>"                设/清剧组导演提示（临场语气/格式杠杆，空串清除）
   list                                     列出当前剧组 / 卡 / 世界书
 
 纯 stdlib（urllib），不依赖控制台代码——它只发 HTTP。
@@ -177,6 +178,23 @@ def cmd_reflect(a):
         print(f"（这场没学到：{res.get('reason', '')}）")
 
 
+def cmd_note(a):
+    # 设/清本剧组的「导演提示」(作者注释):临场语气/格式杠杆,注入贴近生成点。
+    # 用户说「回复短点 / 别用现代词 / 多点环境描写」→ 你 set 一句,长期生效(不靠模型记着)。
+    # 空 note 清除。这是结构化的「跟搭子说一句就长期生效」,不暴露 UI 旋钮。
+    prods = _get_productions()
+    q = a.production
+    matches = [p for p in prods if p.get("id") == q or q in (p.get("name") or "")]
+    if not matches:
+        _die(f"没找到剧组「{q}」——先 `list` 看有哪些。")
+    p = matches[0]
+    res = _event({"type": "set_note", "production_id": p["id"], "note": a.note})
+    if res.get("author_note"):
+        print(f"✅ 「{p['name']}」导演提示已设：{res['author_note']}")
+    else:
+        print(f"（「{p['name']}」导演提示已清空）")
+
+
 def _get_productions():
     raw = _http(CONSOLE + "/api/productions", timeout=15)
     d = json.loads(raw)
@@ -237,6 +255,11 @@ def main():
     s = sub.add_parser("reflect", help="复盘某剧组的戏 → 模型蒸馏对用户的偏好 → 自动写进技艺层")
     s.add_argument("production", help="剧组 id 或名字片段")
     s.set_defaults(fn=cmd_reflect)
+
+    s = sub.add_parser("note", help="设/清剧组的导演提示(作者注释:临场语气/格式杠杆,贴近生成点注入)")
+    s.add_argument("production", help="剧组 id 或名字片段")
+    s.add_argument("note", help="导演提示,如「回复短点」「多点环境描写」；空串清除")
+    s.set_defaults(fn=cmd_note)
 
     a = ap.parse_args()
     a.fn(a)

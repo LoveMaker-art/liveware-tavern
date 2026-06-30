@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>酒馆</title>
   <link rel="stylesheet" href="console.css" />
 </head>
@@ -23,7 +23,15 @@
           <span>导入角色卡</span>
           <input id="cardFile" type="file" accept="image/png" hidden />
         </label>
+        <button id="pasteCardBtn" class="btn ghost">粘贴角色卡 JSON</button>
         <button id="newProdBtn" class="btn ghost">从已有卡新建</button>
+      </div>
+      <div id="pastePanel" class="pastePanel hidden">
+        <textarea id="pasteBox" placeholder="粘贴角色卡 JSON（V1/V2/V3，可含 character_book）…"></textarea>
+        <div class="pasteActs">
+          <button id="pasteImport" class="btn">导入</button>
+          <button id="pasteCancel" class="btn ghost">取消</button>
+        </div>
       </div>
       <div id="cardPicker" class="cardPicker hidden"></div>
     </aside>

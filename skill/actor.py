@@ -16,6 +16,13 @@ import urllib.request
 MODEL_BASE = os.environ.get("TAVERN_MODEL_BASE", "https://api.deepseek.com/v1")
 MODEL_NAME = os.environ.get("TAVERN_MODEL", "deepseek-chat")
 MODEL_TEMP = float(os.environ.get("TAVERN_MODEL_TEMP", "0.85"))
+# 反复读/slop 的服务端兜底(无 UI——采样参数按设计 canon 收进自动档,不暴露旋钮)。
+MODEL_FREQ_PENALTY = float(os.environ.get("TAVERN_FREQ_PENALTY", "0.3"))
+MODEL_PRES_PENALTY = float(os.environ.get("TAVERN_PRES_PENALTY", "0.0"))
+# 上下文预算(字符):长局只喂最新尾巴+开场,别每回合发整条 story 撞模型上限。
+CTX_BUDGET_CHARS = int(os.environ.get("TAVERN_CTX_CHARS", "24000"))
+# 世界书扫描深度(往回看几条命中关键词)。
+LORE_LOOKBACK = int(os.environ.get("TAVERN_LORE_LOOKBACK", "6"))
 
 
 def _load_key():
@@ -37,9 +44,11 @@ def _load_key():
 MODEL_KEY = _load_key()
 
 
-def select_lore(worldbooks: list, story: list, lookback: int = 6) -> list:
-    """选相关世界书条目：constant(蓝灯)恒入 + 关键词命中最近 N 条的入。
-    MVP 的「agent 选」近似——不暴露递归/扫描深度这些机制给用户。"""
+def select_lore(worldbooks: list, story: list, lookback: int = None) -> list:
+    """选相关世界书条目：constant(蓝灯)恒入 + 关键词命中最近 N 条的入；
+    selective(绿灯)还需命中一个二级关键词(secondary_keys)才入——避免过度触发。
+    MVP 的「agent 选」近似——不暴露递归/扫描深度这些机制给用户(扫描深度走 env)。"""
+    lookback = LORE_LOOKBACK if lookback is None else lookback
     recent = " ".join(
         (m.get("text") or "") for m in story[-lookback:]
     )
@@ -51,23 +60,55 @@ def select_lore(worldbooks: list, story: list, lookback: int = 6) -> list:
             key = (wb.get("id"), e.get("content", "")[:40])
             if key in seen:
                 continue
-            hit = e.get("constant") or any(
+            primary = e.get("constant") or any(
                 k and k in recent for k in (e.get("keys") or [])
             )
-            if hit:
-                picked.append(e)
-                seen.add(key)
+            if not primary:
+                continue
+            # selective(绿灯):一级命中后还要求一个二级关键词同现,收窄触发。
+            if e.get("selective") and e.get("secondary_keys"):
+                if not any(k and k in recent for k in e["secondary_keys"]):
+                    continue
+            picked.append(e)
+            seen.add(key)
     picked.sort(key=lambda e: e.get("insertion_order", 100))
     return picked
 
 
-def build_messages(card: dict, actor_self: str, lore: list, persona: dict, story: list) -> list:
-    """组成 chat-completion 消息序列。系统块 = 演员 + 剧本 + 世界 + 人设 + 演出纪律。"""
-    lore_txt = "\n".join("- " + (e.get("content") or "") for e in lore)
+def _fit_history(story: list, budget_chars: int) -> list:
+    """上下文预算:始终保留开场(story[0],first_mes 定调) + 预算内的最新尾巴。
+    长局别每回合发整条 story——会撞模型上下文上限(报错/被静默截断)+ 成本延迟爆炸。"""
+    if budget_chars <= 0 or len(story) <= 1:
+        return story
+    opening = story[:1]
+    total = len(opening[0].get("text") or "")
+    kept = []
+    for m in reversed(story[1:]):
+        t = len(m.get("text") or "")
+        if total + t > budget_chars and kept:
+            break
+        kept.append(m)
+        total += t
+    kept.reverse()
+    return opening + kept
+
+
+def build_messages(card: dict, actor_self: str, lore: list, persona: dict, story: list,
+                   note: str = "") -> list:
+    """组成 chat-completion 消息序列。系统块 = 演员 + 剧本 + 世界 + 人设 + 演出纪律；
+    世界书分两档放置(背景 vs 贴近生成点),作者注释/贴尾指令注在最靠近生成点处。"""
+    # 世界书分档:position=before_char 当背景进系统块顶;其余注在故事之后、贴近生成点,
+    # 才真正能 steer 当前这一回合(ST 的核心:lore 离生成点近才管用,不是堆在 system 顶)。
+    lore_top = [e for e in lore if (e.get("position") or "") == "before_char"]
+    lore_near = [e for e in lore if (e.get("position") or "") != "before_char"]
+    lore_top_txt = "\n".join("- " + (e.get("content") or "") for e in lore_top)
     persona_txt = ""
     if persona:
         persona_txt = f"\n\n## 对手戏（你的搭档「{persona.get('name','我')}」）\n{persona.get('description','')}"
     sysprompt_block = ("### 角色设定提示\n" + card["system_prompt"]) if card.get("system_prompt") else ""
+    # 示例对白(few-shot 风格锚):卡作者给的最强语气/节奏样本。此前 card_import 解析了却没注入。
+    example_block = ("\n\n## 示例对白（仿其语气、句式、节奏，别照抄内容）\n" + card["mes_example"]) \
+        if card.get("mes_example") else ""
     sys = f"""{actor_self}
 
 ——————————
@@ -82,10 +123,10 @@ def build_messages(card: dict, actor_self: str, lore: list, persona: dict, story
 
 ### 场景
 {card.get('scenario','')}
-{sysprompt_block}
+{sysprompt_block}{example_block}
 
-## 世界设定（只在自然时机体现，别报菜名）
-{lore_txt or '（无）'}{persona_txt}
+## 世界设定（背景，只在自然时机体现，别报菜名）
+{lore_top_txt or '（无）'}{persona_txt}
 
 ## 演出纪律
 - 用中文。动作/神态/环境用第三人称叙述，对白用「」。
@@ -94,27 +135,47 @@ def build_messages(card: dict, actor_self: str, lore: list, persona: dict, story
 - 推动剧情，别被动等喂；但尊重搭档的选择，不替对方做决定。
 """
     msgs = [{"role": "system", "content": sys}]
-    for m in story:
+    # 上下文预算:长局只喂开场 + 最新尾巴(系统块/贴近世界书/作者注释/贴尾指令始终保留)。
+    for m in _fit_history(story, CTX_BUDGET_CHARS):
         role = m.get("role")
         text = m.get("text") or ""
         if role == "user":
             msgs.append({"role": "user", "content": text})
         else:  # char / narration → 角色侧
             msgs.append({"role": "assistant", "content": text})
+    # 此刻相关的世界书:注在故事之后、贴近生成点(比堆在 system 顶更能 steer 当前回合)。
+    if lore_near:
+        near_txt = "\n".join("- " + (e.get("content") or "") for e in lore_near)
+        msgs.append({"role": "system",
+                     "content": "### 此刻相关的世界设定（自然融入，别罗列）\n" + near_txt})
+    # 作者注释(结构化的临场语气/格式杠杆,agent 用 set_note 设):贴近生成点,不靠模型"记着"。
+    # 这是「结构性 > 软性」的落点——不暴露 UI 旋钮(设计 canon),由对话/agent 设、注入这里。
+    if note:
+        msgs.append({"role": "system", "content": "〔导演提示，本回合照此调整〕" + note})
+    # 贴尾指令(post_history_instructions):最靠近生成点——格式/不脱戏的最高杠杆提醒。
+    # ST 的「post-history」机制;此前解析了却没注入。
+    post = card.get("post_history_instructions")
+    if post:
+        msgs.append({"role": "system",
+                     "content": "### 贴尾指令（最高优先，与上文冲突时以此为准）\n" + post})
     return msgs
 
 
-def chat(messages: list, temperature: float = None) -> str:
-    """调模型，返回回复文本。抄 probe_toolcall 的纯 stdlib urllib 形态。"""
-    if not MODEL_KEY:
-        raise RuntimeError("缺模型 key：设 TAVERN_MODEL_KEY 或 DEEPSEEK_API_KEY")
-    payload = {
+def _payload(messages: list, temperature: float, stream: bool) -> dict:
+    return {
         "model": MODEL_NAME,
         "messages": messages,
-        "stream": False,
+        "stream": stream,
         "temperature": MODEL_TEMP if temperature is None else temperature,
+        "frequency_penalty": MODEL_FREQ_PENALTY,  # 反复读兜底(无 UI,设计 canon)
+        "presence_penalty": MODEL_PRES_PENALTY,
     }
-    req = urllib.request.Request(
+
+
+def _request(payload: dict) -> urllib.request.Request:
+    if not MODEL_KEY:
+        raise RuntimeError("缺模型 key：设 TAVERN_MODEL_KEY 或 DEEPSEEK_API_KEY")
+    return urllib.request.Request(
         MODEL_BASE.rstrip("/") + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={
@@ -123,16 +184,48 @@ def chat(messages: list, temperature: float = None) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=90) as r:
+
+
+def chat(messages: list, temperature: float = None) -> str:
+    """调模型，返回回复文本（非流式）。抄 probe_toolcall 的纯 stdlib urllib 形态。"""
+    with urllib.request.urlopen(_request(_payload(messages, temperature, False)), timeout=90) as r:
         data = json.loads(r.read())
     return data["choices"][0]["message"]["content"].strip()
 
 
-def perform(card: dict, actor_self: str, worldbooks: list, persona: dict, story: list) -> str:
+def chat_stream(messages: list, temperature: float = None):
+    """调模型，逐 token yield 文本增量（SSE，OpenAI-compatible）。
+    用于控制台流式渲染——同模型下"逐字流"比干等占位条体感强一档。"""
+    with urllib.request.urlopen(_request(_payload(messages, temperature, True)), timeout=120) as r:
+        for raw in r:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                delta = json.loads(data)["choices"][0]["delta"].get("content")
+            except Exception:
+                continue
+            if delta:
+                yield delta
+
+
+def perform(card: dict, actor_self: str, worldbooks: list, persona: dict, story: list,
+            note: str = "") -> str:
     """一回合演出：选世界书 → 拼 prompt → 生成。"""
     lore = select_lore(worldbooks, story)
-    msgs = build_messages(card, actor_self, lore, persona, story)
+    msgs = build_messages(card, actor_self, lore, persona, story, note)
     return chat(msgs)
+
+
+def perform_stream(card: dict, actor_self: str, worldbooks: list, persona: dict, story: list,
+                   note: str = ""):
+    """一回合演出（流式）：选世界书 → 拼 prompt → 逐 token yield。"""
+    lore = select_lore(worldbooks, story)
+    msgs = build_messages(card, actor_self, lore, persona, story, note)
+    yield from chat_stream(msgs)
 
 
 def reflect_on_play(card: dict, story: list, actor_self: str) -> str:
