@@ -93,10 +93,18 @@ def _fit_history(story: list, budget_chars: int) -> list:
     return opening + kept
 
 
+def _prompt_self(actor_self: str) -> str:
+    """注入生成的技艺层 = 底色 + 我对你的了解 + 签名，**不含成长记**。
+    成长记是 append-only 的生涯流水账（演员卡「生涯年表」的资产），塞进每次 prompt 只会
+    稀释 + 吃预算（A/B 实测；Q_B 注入瘦身）——它的家在演员卡，不在生成上下文。"""
+    return actor_self.split("# 成长记", 1)[0].rstrip()
+
+
 def build_messages(card: dict, actor_self: str, lore: list, persona: dict, story: list,
                    note: str = "") -> list:
     """组成 chat-completion 消息序列。系统块 = 演员 + 剧本 + 世界 + 人设 + 演出纪律；
     世界书分两档放置(背景 vs 贴近生成点),作者注释/贴尾指令注在最靠近生成点处。"""
+    actor_self = _prompt_self(actor_self)  # 只注 底色+口味+签名,剥掉成长记(Q_B)
     # 世界书分档:position=before_char 当背景进系统块顶;其余注在故事之后、贴近生成点,
     # 才真正能 steer 当前这一回合(ST 的核心:lore 离生成点近才管用,不是堆在 system 顶)。
     lore_top = [e for e in lore if (e.get("position") or "") == "before_char"]
@@ -263,6 +271,36 @@ def reflect_on_play(card: dict, story: list, actor_self: str) -> str:
     if out.upper().startswith("NONE") or len(out) < 4:
         return ""
     return out
+
+
+def merge_knows(existing: list, addition: str) -> list:
+    """把新学到的（addition）并进「对用户的了解」现有清单，产出合并、去重、有界的新清单。
+
+    「越演越懂你」的 consolidation 引擎（Q_B）：不是尾部堆流水账，而是维护一份**活的、精炼**
+    的偏好档——新信息更具体就替换旧的笼统条、矛盾以新为准、控制在 ~12 条。这份档注入每场生成，
+    也展示在演员卡「我对你的了解」。返回 list[str]；addition 空则原样返回。
+    """
+    if not (addition or "").strip():
+        return list(existing)
+    cur = "\n".join("- " + e for e in existing) if existing else "（还没记过什么）"
+    sys = (
+        "你在维护一个角色扮演搭子『对用户的了解』档——一份简短、精炼、不重复的偏好清单，"
+        "指导它下次怎么演给这个用户。给你【现有清单】和【新学到的】，产出【合并后的清单】：\n"
+        "- 合并同类、去重；新信息更具体就替换旧的笼统条；矛盾以新的为准。\n"
+        "- **一条只讲一个维度**（节奏 / 浓淡 / 雷区 / 幽默 / 题材 / 演法…）；"
+        "两个不同维度**分成两条**，别为了省行数塞进一行。\n"
+        "- 每条一句话、具体可执行。\n"
+        "- 控制在 12 条以内，越精越好；别注水、别加标题或解释。\n"
+        "- 只输出清单，每条以「- 」开头。"
+    )
+    out = chat(
+        [{"role": "system", "content": sys},
+         {"role": "user", "content": f"【现有清单】\n{cur}\n\n【新学到的】\n{addition}"}],
+        temperature=0.3,
+    )
+    items = [ln.strip()[2:].strip() for ln in out.splitlines() if ln.strip().startswith("- ")]
+    items = [i for i in items if i]
+    return items[:12] if items else list(existing)
 
 
 def model_info() -> dict:

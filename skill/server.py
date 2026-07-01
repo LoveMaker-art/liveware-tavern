@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -81,6 +82,146 @@ def liveware_version():
     except OSError:
         pass
     return ""
+
+
+# ---------- 演员卡聚合（actor-card surface，见 docs/design/actor-card.md）----------
+# 纯聚合读现有 state，零新后端。词汇 canon（liveware-frontend §术语表）：
+# 戏路 = 演过的角色数（不是"搭档"）；搭档 = 你；亲密度由 轮数 + 权重×年表条数 驱动。
+INTIMACY_W = int(os.environ.get("ACTOR_INTIMACY_W", "8"))
+# 阶梯（名, 分阈值）。env 后续可覆盖；先常量。
+INTIMACY_LADDER = [("初见", 0), ("相识", 15), ("搭档", 40), ("默契", 100), ("知己", 250)]
+INTIMACY_BLURB = {"初见": "刚认识，还在摸你的脾气", "相识": "演过几场，记住了你几样",
+                  "搭档": "有默契雏形，接得住你的球", "默契": "一个眼神就懂，越演越顺",
+                  "知己": "最懂你怎么玩的那个演员"}
+
+
+def _sections(md):
+    """把 actor_self.md 按 '# ' 一级标题切成 {标题: [正文行]}。"""
+    secs, cur = {}, None
+    for line in md.splitlines():
+        if line.startswith("# "):
+            cur = line[2:].strip()
+            secs[cur] = []
+        elif cur is not None:
+            secs[cur].append(line)
+    return secs
+
+
+def _bullets(lines):
+    return [s[2:].strip() for s in (ln.strip() for ln in lines) if s.startswith("- ")]
+
+
+def parse_actor_self(md):
+    """从技艺层拆出：tagline（底色）、口味（我对你的了解，合并档）、年表（成长记，累计）。"""
+    secs = _sections(md)
+
+    def find(key):
+        for k, v in secs.items():
+            if key in k:
+                return v
+        return []
+
+    tagline = ""
+    for line in find("我是谁"):
+        if "演员" in line and "——" in line:
+            after = line.split("——", 1)[1]
+            if "而是" in after:
+                after = after.split("而是", 1)[1]
+            tagline = after.strip().strip("。").lstrip("那个").strip()
+            break
+    knows = [b for b in _bullets(find("我对你的了解")) if not b.startswith("（")]
+    timeline = []
+    for b in _bullets(find("成长记")):
+        if b.startswith("（"):
+            continue
+        has_date = len(b) >= 10 and b[4] == "-" and b[7] == "-"
+        date = b[:10] if has_date else ""
+        rest = (b[10:] if has_date else b).strip()
+        if "→" in rest:
+            reason, change = rest.split("→", 1)
+            timeline.append({"date": date, "reason": reason.strip(), "change": change.strip()})
+        else:
+            timeline.append({"date": date, "reason": "", "change": rest})
+    return tagline, knows, timeline
+
+
+def _intimacy(score):
+    cur, cur_thr = INTIMACY_LADDER[0]
+    nxt, nxt_thr = None, None
+    for i, (name, thr) in enumerate(INTIMACY_LADDER):
+        if score >= thr:
+            cur, cur_thr = name, thr
+            if i + 1 < len(INTIMACY_LADDER):
+                nxt, nxt_thr = INTIMACY_LADDER[i + 1]
+            else:
+                nxt, nxt_thr = None, None
+    if nxt_thr is None:  # 已到顶
+        return {"level": cur, "score": score, "next": None, "to_next": 0, "progress": 1.0,
+                "blurb": INTIMACY_BLURB.get(cur, "")}
+    span = nxt_thr - cur_thr
+    prog = 0.0 if span <= 0 else max(0.0, min(1.0, (score - cur_thr) / span))
+    return {"level": cur, "score": score, "next": nxt, "to_next": nxt_thr - score,
+            "progress": round(prog, 3), "blurb": INTIMACY_BLURB.get(cur, "")}
+
+
+def actor_card_data():
+    """演员卡聚合数据（/api/actor_card）。全部从现有 state 算，无写、无新事件。"""
+    prods = _list("productions")
+    total_turns, total_words, role_ids, debut = 0, 0, set(), None
+    roles_played = {}  # card_id -> 轮数（v1.1 角色名录）
+    for p in prods:
+        story = p.get("story", [])
+        ca = p.get("created_at")
+        if ca and (debut is None or ca < debut):
+            debut = ca
+        cid = p.get("card_id")
+        if cid:
+            role_ids.add(cid)
+        uturns = 0
+        for i, m in enumerate(story):
+            if m.get("role") == "user":
+                uturns += 1
+            elif i > 0:  # 排除 story[0] 开场白（first_mes 是卡作者写的，非墨生成）
+                total_words += len(m.get("text") or "")
+        total_turns += uturns
+        if cid:
+            roles_played[cid] = roles_played.get(cid, 0) + uturns
+    debut_days = 0 if debut is None else max(0, (int(time.time()) - int(debut)) // 86400)
+    tagline, knows, timeline = parse_actor_self(actor_self_text())
+    intim = _intimacy(total_turns + INTIMACY_W * len(timeline))
+    intim["turns"] = total_turns
+    intim["log"] = len(timeline)
+    cards = {c["id"]: c for c in _list("cards")}
+    roles = sorted(({"name": (cards.get(cid) or {}).get("name") or "角色", "turns": t}
+                    for cid, t in roles_played.items()), key=lambda r: -r["turns"])
+    specs = []
+    for cid in role_ids:  # 擅长题材 = 各卡 tags 聚合（v1.1）
+        for t in (cards.get(cid) or {}).get("tags", []) or []:
+            if t not in specs:
+                specs.append(t)
+    return {
+        "name": "墨",
+        "tagline": tagline or "能钻进任何角色里的人",
+        "career": {"debut_days": debut_days, "productions": len(prods),
+                   "turns": total_turns, "words": total_words, "roles": len(role_ids)},
+        "intimacy": intim,
+        "knows": knows,
+        "timeline": list(reversed(timeline)),  # 最近在前
+        "specialties": specs[:8],
+        "roles_played": roles,
+        "version": liveware_version(),
+        "actor_url": (f"https://{_actor_host()}/" if _actor_host() else ""),  # 演员卡活件公网地址
+    }
+
+
+def _actor_host():
+    """演员卡活件 app 的域名（第二个活件卡入口）。存 state/actor_host.txt，重启/bringup 不丢；
+    env TAVERN_ACTOR_HOST 兜底。为空 = 没注册第二个 app（`/` 一律控制台）。"""
+    try:
+        with open(os.path.join(STATE, "actor_host.txt"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return os.environ.get("TAVERN_ACTOR_HOST", "").strip()
 
 
 def load_card(cid):
@@ -178,11 +319,36 @@ def ev_create_production(ev):
     return {"production": p}
 
 
+# Q_C：切走剧组时后台自动复盘（达阈值才做），不阻塞切换、不靠墨自觉（结构性 > 软性）。
+AUTO_REFLECT_MIN = int(os.environ.get("ACTOR_AUTO_REFLECT_MIN", "4"))      # 至少这么多轮才值得复盘
+AUTO_REFLECT_EVERY = int(os.environ.get("ACTOR_AUTO_REFLECT_EVERY", "6"))  # 距上次复盘再攒这么多轮
+
+
+def _maybe_auto_reflect(pid):
+    p = load_production(pid)
+    if not p:
+        return
+    uturns = sum(1 for m in p.get("story", []) if m.get("role") == "user")
+    done = p.get("reflected_at_turns", 0)
+    if uturns < AUTO_REFLECT_MIN or uturns - done < AUTO_REFLECT_EVERY:
+        return
+    try:
+        _reflect_production(p)
+        p2 = load_production(pid) or p
+        p2["reflected_at_turns"] = uturns
+        save_production(p2)
+    except Exception:
+        pass  # 后台尽力而为，失败不影响任何前台操作
+
+
 def ev_switch_loadout(ev):
+    prev = _get_state().get("active_production_id")
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
     _set_active(p["id"])
+    if prev and prev != p["id"]:  # Q_C：离开一场戏 = 复盘它的自然时机（后台线程，不阻塞切换）
+        threading.Thread(target=_maybe_auto_reflect, args=(prev,), daemon=True).start()
     return {"production": p}
 
 
@@ -294,23 +460,71 @@ def ev_edit_message(ev):
     raise ValueError("message not found")
 
 
-def ev_actor_grow(ev):
-    """复杂功能→对话+成长：把演法/对你的了解的变化追加进 actor_self.md（带人话理由）。"""
+# ---------- Q_B：合并写入 + 生涯年表审计 ----------
+# 越演越懂你的引擎：learn/reflect 不再尾部堆流水账,而是①把新学到的**合并进「我对你的了解」**
+# (有界、去重、精化——actor.merge_knows)②在「成长记」记一行审计(生涯年表的资产)。
+# 「我对你的了解」注入每场生成 + 展示演员卡口味栏;「成长记」只上演员卡年表、不进 prompt(Q_B 瘦身)。
+KNOWS_PLACEHOLDER = "- （还不了解你。等我们演几场，我会把你的口味记到这里。）"
+
+
+def _write_actor_self(md):
     rt = os.path.join(STATE, "actor_self.md")
-    actor_self_text()  # ensure exists
-    stamp = time.strftime("%Y-%m-%d", time.localtime(ev.get("ts") or time.time()))
-    line = f"\n- {stamp} {ev.get('reason','(无理由)')} → {ev.get('change','')}"
-    with open(rt, "a", encoding="utf-8") as f:
-        f.write(line)
-    return {"ok": True, "appended": line.strip()}
+    tmp = rt + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(md if md.endswith("\n") else md + "\n")
+    os.replace(tmp, rt)
 
 
-def ev_reflect(ev):
-    """复盘一场戏 → 模型蒸馏「对用户的 RP 偏好」→ 追加进技艺层 actor_self。
-    「越演越懂你」的结构化触发：不靠 agent 临场总结，服务端模型抽，落跨剧组共享层。"""
-    p = load_production(ev["production_id"])
-    if not p:
-        raise ValueError("production not found")
+def _replace_section(md, key, body_lines):
+    """把 md 中标题含 key 的一级段落正文替换为 body_lines（保留标题 + 前后空行）。"""
+    lines, out, i, n, done = md.splitlines(), [], 0, len(md.splitlines()), False
+    while i < n:
+        line = lines[i]
+        if not done and line.startswith("# ") and key in line:
+            out += [line, ""] + list(body_lines)
+            i += 1
+            while i < n and not lines[i].startswith("# "):
+                i += 1
+            if i < n:
+                out.append("")
+            done = True
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
+def _merge_into_knows(addition):
+    """把新学到的并进「我对你的了解」段（合并、去重、有界），写回，返回合并后清单。"""
+    md = actor_self_text()
+    merged = actor.merge_knows(parse_actor_self(md)[1], addition)
+    body = ["- " + k for k in merged] if merged else [KNOWS_PLACEHOLDER]
+    _write_actor_self(_replace_section(md, "我对你的了解", body))
+    return merged
+
+
+def _append_growth(meta, change, ts=None):
+    """在「成长记」尾追加**一行**生涯年表审计（成长记是最后一段，追加到尾即落在它下面）。
+    change 可能是多行（reflect 蒸馏出多条）——折成一行（`；` 连、去 bullet），否则年表会裂成多条、掉日期。"""
+    stamp = time.strftime("%Y-%m-%d", time.localtime(ts or time.time()))
+    change = "；".join(s.strip().lstrip("-•").strip()
+                       for s in str(change).splitlines() if s.strip())
+    meta = " ".join(str(meta).split())
+    line = f"- {stamp} {meta} → {change}"
+    _write_actor_self(actor_self_text().rstrip() + "\n" + line + "\n")
+    return line
+
+
+def ev_actor_grow(ev):
+    """learn：把对用户的了解/演法调整**合并进「我对你的了解」** + 记一笔生涯年表（带人话理由）。Q_B。"""
+    change = ev.get("change", "")
+    merged = _merge_into_knows(change)
+    audit = _append_growth(ev.get("reason", "") or "(无理由)", change, ev.get("ts"))
+    return {"ok": True, "knows": merged, "appended": audit}
+
+
+def _reflect_production(p):
+    """复盘一场戏 → 蒸馏偏好 → **合并进「我对你的了解」** + 记生涯年表。explicit + auto 共用。"""
     story = p.get("story", [])
     if sum(1 for m in story if m.get("role") == "user") < 2:
         return {"learned": None, "reason": "戏太短，没什么可学的"}
@@ -318,11 +532,17 @@ def ev_reflect(ev):
     learned = actor.reflect_on_play(card, story, actor_self_text())
     if not learned:
         return {"learned": None, "reason": "这场没看出明显偏好"}
-    rt = os.path.join(STATE, "actor_self.md")
-    stamp = time.strftime("%Y-%m-%d", time.localtime())
-    with open(rt, "a", encoding="utf-8") as f:
-        f.write(f"\n- {stamp}（复盘「{p.get('name', '')}」）→ {learned}")
-    return {"learned": learned, "production": p.get("name")}
+    merged = _merge_into_knows(learned)
+    _append_growth(f"（复盘「{p.get('name', '')}」）", learned)
+    return {"learned": learned, "knows": merged, "production": p.get("name")}
+
+
+def ev_reflect(ev):
+    """复盘一场戏（显式触发）→ 蒸馏 + 合并进技艺层。「越演越懂你」的结构化触发（不靠 agent 临场）。"""
+    p = load_production(ev["production_id"])
+    if not p:
+        raise ValueError("production not found")
+    return _reflect_production(p)
 
 
 def ev_set_persona(ev):
@@ -382,24 +602,24 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_index(self):
+    def _serve_html(self, name, assets):
         # 注入版本化资源引用破 relay 缓存:clawling relay/CDN 把 .js/.css 强制缓存成
         # `public, max-age=2592000, immutable`(30天,覆盖源站 no-store)→ 改动不生效。
-        # index.html 自身是 no-store(relay 透传)永远新,所以给资源 URL 挂 ?v=<token>,
+        # html 自身是 no-store(relay 透传)永远新,所以给资源 URL 挂 ?v=<token>,
         # token 取资源 mtime → 每次部署自动变 → 新 URL = relay 缓存未命中 = 取到新文件。
         try:
-            with open(os.path.join(READER, "index.html"), encoding="utf-8") as f:
+            with open(os.path.join(READER, name), encoding="utf-8") as f:
                 html = f.read()
         except OSError:
             return self._json(404, {"error": "not found"})
         token = 0
-        for fn in ("app.js", "bridge.js", "console.css", "index.html"):
+        for fn in (name,) + tuple(assets):
             try:
                 token ^= int(os.path.getmtime(os.path.join(READER, fn)))
             except OSError:
                 pass
         v = format(token & 0xFFFFFF, "x")
-        for a in ("console.css", "bridge.js", "app.js"):
+        for a in assets:
             html = html.replace(a + '"', a + "?v=" + v + '"')
         body = html.encode("utf-8")
         self.send_response(200)
@@ -423,10 +643,21 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/actor":
             # 演员技艺层(actor_self.md,会随演出/复盘积累的富提示词) + 活件版本(应用发版号)。
             return self._json(200, {"actor_self": actor_self_text(), "version": liveware_version()})
-        # static reader（index.html 走版本化注入,破 relay 的 immutable 缓存）
+        if path == "/api/actor_card":
+            # 演员卡聚合(生涯数值/亲密度/口味/年表)——纯聚合读,见 docs/design/actor-card.md。
+            return self._json(200, actor_card_data())
+        # static reader（*.html 走版本化注入,破 relay 的 immutable 缓存）
         rel = path.lstrip("/") or "index.html"
         if rel == "index.html":
-            return self._serve_index()
+            # 一台 server 服务两个活件 app（同 :8799，靠 tunnel 透传的 X-Forwarded-Host 分流）：
+            # 控制台 app 的 / → index；演员卡 app（第二个活件卡入口）的 / → actor.html。
+            fwd = self.headers.get("X-Forwarded-Host", "") or self.headers.get("X-Original-Host", "")
+            ah = _actor_host()
+            if ah and ah in fwd:
+                return self._serve_html("actor.html", ("console.css", "actor.js"))
+            return self._serve_html("index.html", ("console.css", "bridge.js", "app.js"))
+        if path == "/actor" or rel == "actor.html":  # 直达路径也保留（任一 app 域名 + /actor 都能开）
+            return self._serve_html("actor.html", ("console.css", "actor.js"))
         return self._file(os.path.join(READER, rel))
 
     def _read_body(self):

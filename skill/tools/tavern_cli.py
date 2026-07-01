@@ -195,6 +195,33 @@ def cmd_note(a):
         print(f"（「{p['name']}」导演提示已清空）")
 
 
+def cmd_card(a):
+    # 读你自己的「演员卡」——生涯数值/亲密度/对用户的了解/成长。给你自我觉察：
+    # ① 聊天里自然引用成长（"我记得你爱慢热的，这次收着点"）= 越演越懂用户的体感；
+    # ② 里程碑（亲密度升档）时，可把演员卡活件丢给用户看。
+    d = json.loads(_http(CONSOLE + "/api/actor_card", timeout=15))
+    c, it = d.get("career", {}), d.get("intimacy", {})
+    print("=== 你的演员卡（墨）===")
+    print(f"生涯：出道 {c.get('debut_days',0)} 天 · {c.get('productions',0)} 剧组 · "
+          f"{c.get('turns',0)} 轮 · {c.get('words',0)} 字 · 戏路 {c.get('roles',0)}")
+    print(f"亲密度（与用户）：{it.get('level','初见')}（{it.get('blurb','')}）· "
+          f"一起 {it.get('turns',0)} 轮 · 记下 {it.get('log',0)} 笔"
+          + (f" · 距「{it['next']}」还差 {it.get('to_next',0)}" if it.get("next") else " · 已是知己"))
+    knows = d.get("knows", [])
+    if knows:
+        print("你对用户的了解（演戏/聊天里自然体现，别报菜名）：")
+        for k in knows:
+            print("  -", k)
+    tl = d.get("timeline", [])
+    if tl:
+        print("最近成长：")
+        for e in tl[:3]:
+            print(f"  · {e.get('date','')} {e.get('change','')}")
+    url = d.get("actor_url") or (CONSOLE + "/actor")
+    print(f"\n演员卡活件：{url}")
+    print("（这是「墨的演员卡」独立活件——里程碑=亲密度升档时，把这个链接丢给用户，会渲染成活件卡）")
+
+
 def _get_productions():
     raw = _http(CONSOLE + "/api/productions", timeout=15)
     d = json.loads(raw)
@@ -241,6 +268,9 @@ def main():
 
     s = sub.add_parser("list", help="列出剧组")
     s.set_defaults(fn=cmd_list)
+
+    s = sub.add_parser("card", help="读你自己的演员卡（生涯/亲密度/对用户的了解/成长）——自我觉察")
+    s.set_defaults(fn=cmd_card)
 
     s = sub.add_parser("recall", help="读某剧组在控制台里演了什么（墨读酒馆对话的唯一入口）")
     s.add_argument("production", help="剧组 id 或名字片段")
