@@ -15,7 +15,9 @@
 | `reader/` | 控制台 UI：`index.html` `console.css`(沉静感) `app.js` `bridge.js`(同源事件总线) |
 | `tools/make_test_card.py` | 生成 spec 正确的 V2 测试卡 + 世界书(纯 Python) |
 | `tools/tavern_cli.py` | **墨的找卡+导卡 CLI**(纯 stdlib)：`search`(Chub)/`add <fullPath>`(拉真卡→导入→建剧组)/`add-original`(原创卡 JSON)/`add-worldbook`/`list`。打本地控制台 `/api/event` |
-| `tools/bringup.sh` | **容器重启后恢复 Loop B**：起 server.py(setsid)+ liveware 重登 + tunnel bind + tunnel-agent。跑 `docker exec hermes-clean sh /opt/data/tavern/tools/bringup.sh`(持久化 v1.1 兜底；`/opt/data` 持久、`/root/.clawling` 易失) |
+| `tools/install.sh` | **「复制这套 tavern」一键入口(host 侧)**：`./install.sh <容器>` → 两处放置(运行时 `tavern/` 排除 state、技能 `skills/creative/tavern/SKILL.md`、SOUL) + 竞争产物卫生 + creds 自检 → 调 provision + bringup。首次复制用；重启恢复只用 bringup。完整流程见 `docs/design/install.md` |
+| `tools/provision.sh` | **首跑建/复用两个活件 app(容器内)**：login → 查 `app list` 复用、缺才 `app create`(幂等、不烧 ~3 配额) → 写 `state/apps.json` → register 进 launcher。由 install 调，也可单独重跑 |
+| `tools/bringup.sh` | **容器重启后恢复 Loop B**：读 `state/apps.json` 拿 app ID(不再写死) → 起 server.py(setsid)+ liveware 重登 + tunnel bind + tunnel-agent。**只管重启恢复,不建 app/不 register**(那是 provision)。跑 `docker exec <容器> sh /opt/data/tavern/tools/bringup.sh`(`/opt/data` 持久、`/root/.clawling` 易失) |
 | `tools/smoke.py` | Loop A 冒烟：导卡→世界书→建剧组→first_mes→入戏对话→重生成 |
 | `state/` | 运行时状态(JSON)：`cards/` `worldbooks/` `productions/`(=loadout+隔离故事线) `actor_self.md` `persona.json` `state.json` |
 
@@ -42,7 +44,7 @@ python3 skill/tools/smoke.py                  # 对运行中的 server 跑 Loop 
 - ✅ **墨人格已部署 hermes-clean**：`skill/SOUL.md`(1532B)→`~/.hermes-clean/SOUL.md` + `docker restart`(避 gateway-restart 180s drain)；`hermes chat` 试戏冒烟完美入戏(三人称叙述 / 「」对白 / 给角色身体)，clawchat WS 已重连(4× ESTABLISHED → app.clawling.com:443)。
 - ✅ **chat 试戏(ClawChat app)**：在 Windows rig 自驱实测通过——ClawChat 发消息 → 墨完美入戏(店长老周，三人称叙述 +「」)。注:已有会话里若有占位期旧消息会让模型在同会话内自报旧名(历史污染，非 bug)，fresh 会话自报「我叫墨」。account nickname 已正名为「墨」。
 - ✅ **Loop B 全链路打通(2026-06-29，首试即通)**：控制台 server.py 跑在 **hermes-clean 容器内**(agent 自托管，解了 host 形态)→ `liveware` CLI 注册(login→`app create --agent-type hermes`→`tunnel bind … http://127.0.0.1:8799`)→ 公网 `app-02dd46427910ed17.apps.clawling.io` 从 Mac 外部 `/api/health` + `/` 首试 200 → 发进 ClawChat 渲染**活件卡** → 点开 Windows **独立容器窗**(`ClawChatLivewareWindow` / WebView2)显示完整沉浸控制台。**memory 记的 503 / 鉴权 flapping 已不复现**;liveware + tunnel-agent 二进制现随 clawchat 插件 0.14.0-31 装在 `/opt/data/clawchat/liveware/`。
-  - 容器内部署:`docker cp skill hermes-clean:/opt/data/tavern` + `docker exec -d … python3 server.py --port 8799`(key 从容器 `/opt/data/.env` 的 `DEEPSEEK_API_KEY` 读;**必须 `-d` detached,前台 exec 一返回就杀掉后台子进程**)。重启容器后 server.py / tunnel-agent 不自起(v1.1 再做常驻)。
+  - 容器内部署:**2026-07-01 起用 `tools/install.sh <容器>` 一键复制**(两处放置 + 建/复用 app + 起 Loop B,见 `docs/design/install.md`);此前的手动路径 `docker cp skill hermes-clean:/opt/data/tavern` + `docker exec -d … python3 server.py --port 8799`(key 从容器 `/opt/data/.env` 的 `DEEPSEEK_API_KEY` 读;**必须 `-d` detached,前台 exec 一返回就杀掉后台子进程**)已被 install/bringup 收编。重启容器后 server.py / tunnel-agent 不自起(v1.1 再做常驻),用 bringup 恢复。
   - **读+写都过 tunnel 验过**:GET `/api/productions` + POST `/api/event`(send_message)外部首打,DeepSeek 入戏回包 200。⚠️ **relay 把 POST body 改 `chunked` 剥 `Content-Length`**,server.py 的 `_read_body()` 已兼容(否则只读 Content-Length 会拿到空 body → `type=None`,GET 好 POST 空的迷惑现象)。
 
 ## 护栏

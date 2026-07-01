@@ -82,7 +82,7 @@
 
 两个 surface 由**同一个 `server.py` 服务、共享 `console.css` 的 token 与组件**，但**各注册为一个独立 liveware app**（`liveware app create` ×2：`墨的酒馆` → console、`墨的演员卡` → actor-card），所以活件入口**看到两张卡**。
 
-**两 app 一 server 的分流机制**：两个 app 的 tunnel 都 `bind` 到同一个 `http://127.0.0.1:8799`，server 靠 relay 透传的 **`X-Forwarded-Host`**（原始 app 域名；`Host` 被 relay 改成 `127.0.0.1`）在 `/` 上分流——演员卡 app 域名的 `/` → `actor.html`，否则 → `index.html`。演员卡 app 域名存在 `state/actor_host.txt`（`_actor_host()` 每请求读，重启/bringup 不丢）。任一 app 域名 + `/actor` 直达路径也保留。墨拿演员卡链接：`tavern_cli.py card` 末尾的 `演员卡活件：https://…`（来自 `/api/actor_card` 的 `actor_url`）。
+**两 app 一 server 的分流机制**：两个 app 的 tunnel 都 `bind` 到同一个 `http://127.0.0.1:8799`，server 靠 relay 透传的 **`X-Forwarded-Host`**（原始 app 域名；`Host` 被 relay 改成 `127.0.0.1`）在 `/` 上分流——演员卡 app 域名的 `/` → `actor.html`，否则 → `index.html`。演员卡 app 域名存在 `state/actor_host.txt`（`_actor_host()` 每请求读，重启/bringup 不丢）；两个 app 的 ID/域名则由 `provision.sh` 首跑写入 `state/apps.json`（bringup 读它拿 app ID、不再写死；安装/复制流程见 `install.md`）。任一 app 域名 + `/actor` 直达路径也保留。墨拿演员卡链接：`tavern_cli.py card` 末尾的 `演员卡活件：https://…`（来自 `/api/actor_card` 的 `actor_url`）。
 
 ---
 

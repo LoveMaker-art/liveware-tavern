@@ -44,7 +44,7 @@
 ## 4. 运行 / 测试 / 部署 runbook（避坑）
 
 - **重启恢复**：容器重启后 server.py + tunnel-agent 不自起 → `docker exec hermes-clean sh /opt/data/tavern/tools/bringup.sh`（起 server.py + liveware 重登 + tunnel）。验公网 `curl https://app-02dd46427910ed17.apps.clawling.io/api/health`。
-- **部署**：改 `skill/*` 后 `docker cp` 到 `/opt/data/tavern/`。**SOUL 热生效**（cp 到 `~/.hermes-clean/SOUL.md`，下条消息即拿到）；**新/删技能 + SKILL 内容改动要 gateway/容器重启**才对墨生效（重启后记得 bringup）。
+- **部署**：改 `skill/*` 后 `docker cp` 到 `/opt/data/tavern/`（**2026-07-01 起：整套复制/重装用一键 `tools/install.sh <容器>`，见 `docs/design/install.md`**）。**SOUL 热生效**（cp 到 `~/.hermes-clean/SOUL.md`，下条消息即拿到）；**新/删技能 + SKILL 内容改动要 gateway/容器重启**才对墨生效（重启后记得 bringup）。
 - **daemon 用 `docker exec -d`**（前台 exec 一返回就杀后台子进程）；**heredoc 喂 stdin 用 `docker exec -i`**。
 - **测墨**：`docker exec hermes-clean hermes chat -q "…" -Q`（fresh CLI，即时加载技能，--resume 接多轮）；真 ClawChat 链路走 Windows rig：`ssh rog@192.168.2.248`，在 clawchat 仓 `python3 scripts/dev/win.py status|tap|clear|input|key|dump|shot`；独立容器窗截图 `scripts/dev/winrig/shot_window.py` 经 `run_in_session.ps1`（`powershell -NoProfile -ExecutionPolicy Bypass -File …`）。
 - `recall`/`reflect` 也可直接在容器 `python3 /opt/data/tavern/tools/tavern_cli.py …` 验。

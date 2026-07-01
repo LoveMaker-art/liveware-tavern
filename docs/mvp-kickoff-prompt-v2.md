@@ -44,7 +44,7 @@
 - **② device-id 是 red herring** —— `--network host` 下所有容器同 host 指纹(hostname=docker-desktop+同 MAC → 同 device id),但 agent 身份其实在 config(见①),不在 device。`CLAWCHAT_DEVICE_ID` 可钉唯一值但不解决身份继承问题。
 - **③ 容器日志是 UTC**(+8=北京);别被时间戳骗。
 - **④ docker `hermes gateway restart` 双重启会卡 drain(restart_drain_timeout 180)** → 用 `docker restart <容器>` 强制干净重启。
-- **⑤ skill 注册只扫 `$HERMES_HOME/skills/<分类>/<名>/`**,不扫 plugins/。
+- **⑤ skill 注册只扫 `$HERMES_HOME/skills/<分类>/<名>/`**,不扫 plugins/。(2026-07-01 起 `tools/install.sh` 已把技能注册 `skills/creative/tavern/SKILL.md` + 运行时 `tavern/` 的两处放置合一,见 `docs/design/install.md`。)
 - **⑥ 起容器配方**:`docker run -d --name X --network host -e HERMES_HOME=/opt/data --env-file <home>/.env -v <home>:/opt/data nousresearch/hermes-agent:latest gateway run`;装插件 `docker exec X hermes plugins install clawling/clawchat-plugin-hermes-agent && hermes plugins enable clawchat`(容器内无 hermes 的 `npx` 安装会 ENOENT,用 `hermes plugins install`);`hermes chat -q "..." --pass-session-id -Q` 做带记忆的单轮(首轮拿 session_id,后续 `--resume`)。
 
 ## 5. PC 测试机(Loop B 用)
