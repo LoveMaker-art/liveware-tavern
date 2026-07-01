@@ -25,8 +25,9 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 
 | 命令 | 作用 |
 |---|---|
-| `search "<关键词>" [--n 8] [--nsfw]` | 搜 Chub → 候选列表（名 · fullPath · ⭐星数 · 标签 · 简介） |
-| `add <fullPath> [--name 剧组名]` | 下载 Chub **真卡** → 导入 → 建剧组。**默认走这条** |
+| `search "<关键词>" [--n 8] [--nsfw]` | 搜 Chub → 候选列表（名 · fullPath · ⭐星数 · 标签 · 简介）。**Chub 连不上会自动列出内置 starter 卡兜底** |
+| `add <fullPath\|Chub链接> [--name 剧组名]` | 下载 Chub **真卡** → 导入 → 建剧组。**默认走这条**。用户直贴的 `chub.ai/characters/…` 链接也吃（自动抽 fullPath）；连不上会提示改用 `starter` |
+| `starter [<序号\|名字>] [--name 剧组名]` | 随仓打包的**内置 starter 真卡**（8 张，SFW/跨题材/离线可用）。不给参数=看列表，给序号/名字=导入建剧组。**Chub 不可达时的兜底**，也是你写原创卡的**结构参考样板** |
 | `add-original <卡JSON文件\|->` | **原创/自造**卡 JSON → 导入 → 建剧组（仅在用户明确要原创时用） |
 | `add-worldbook <世界书JSON文件\|-> [--production <剧组id>]` | 世界书 JSON → 导入（可挂到现有剧组） |
 | `list` | 列出当前剧组 / 卡 / 世界书 |
@@ -44,7 +45,16 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 2. 给用户报几个候选（名 + 星数 + 简介），让他挑，或你按相关度+星数自己定。
 3. `add <fullPath>` 一步到位：下载真卡 → 导入 → 建剧组。很多卡**内嵌世界书**（character_book），`add` 会自动一起带进来挂好。
 
-用户也可以直接贴一个 Chub 链接给你——从 URL 里取 `fullPath`（`chub.ai/characters/<fullPath>` 里 `<fullPath>` 那段）再 `add`。
+用户也可以**直接贴一个 Chub 链接**给你，直接 `add "<那条链接>"`——CLI 会自动从 `chub.ai/characters/<fullPath>` 里抽出 `fullPath`，不用你手动裁。
+
+### Chub 连不上时：内置 starter 卡（离线兜底，绝不手搓）
+
+Chub.ai / charhub.io 在部分网络（尤其**墙内无代理**）不可达。这时 `search`/`add` **不会失败摆烂、更不许你回退去手搓 PNG**——它们会自动列出**随仓打包的 8 张 starter 真卡**（SFW、跨题材：日常/科幻/奇幻/推理/知识/温馨…，都是从 Chub 拉的真卡、保留作者归属）。
+
+- 看有哪些：`starter`
+- 挑一张建剧组：`starter <序号或名字>`（如 `starter 3` / `starter reiko`）
+
+**这批 starter 卡还有第二个用途：它们是你写原创卡的结构参考样板**——`add-original` 造卡前，翻翻这些卡怎么写 `description`/`personality`/`first_mes`/`mes_example`/世界书，照着这个质量水准来，别拍脑袋。
 
 ## 读酒馆对戏 + 越演越懂用户（持久搭子）
 
@@ -84,3 +94,4 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 - ❌ **原创卡用别的「角色卡生成」技能产 PNG** —— 那是绕远路（PNG→解析），原创直接 `add-original` 吃 JSON、中文天然正确。
 - ❌ 把世界书当角色卡导（`import_card` 注世界书语义就错了）—— 世界书走 `add-worldbook`。
 - ❌ 已存在的角色凭记忆造卡 —— `search` 拉真的。
+- ❌ **Chub 连不上就手搓 / 就摆烂** —— 走 `starter` 内置真卡兜底，或让用户配代理再回 Chub。永远有真卡可用，没有理由手搓。

@@ -4,12 +4,14 @@
 给 agent 一条干净路径，替代「在浏览器手搓 PNG + 跑 JS 怼 /api/event」那套硬凑
 （会撞作用域错、btoa(UTF-8) 把中文搞乱码、世界书 Promise 不 resolve）。
 
-卡来源 = Chub.ai（角色卡事实标准库，6 万+ 卡，公开 API、免鉴权）。
-导入直打本地控制台同源事件 API（默认 http://127.0.0.1:8799，env TAVERN_CONSOLE 覆盖）。
+卡来源 = Chub.ai（角色卡事实标准库，6 万+ 卡，公开 API、免鉴权）。**Chub 不可达时
+（墙内无代理 / 网络受限）自动降级到随仓打包的 starter 真卡**——离线也能建剧组，绝不回退
+到手搓 PNG。导入直打本地控制台同源事件 API（默认 http://127.0.0.1:8799，env TAVERN_CONSOLE 覆盖）。
 
 命令：
-  search <query> [--n N] [--nsfw]          搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）
-  add <fullPath> [--name NAME]             下载 Chub 真卡 → 导入 → 建剧组（**优先用这条**）
+  search <query> [--n N] [--nsfw]          搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）；Chub 连不上→列 starter
+  add <fullPath|Chub链接> [--name NAME]     下载 Chub 真卡 → 导入 → 建剧组（**优先用这条**）；连不上→提示 starter
+  starter [<序号|名字>] [--name NAME]        列出/导入随仓内置 starter 真卡（离线兜底 + 写原创卡的样板）
   add-original <jsonfile|->                 原创/自造卡 JSON → 导入 → 建剧组（仅在明确「原创」时用）
   add-worldbook <jsonfile|-> [--production PID]   世界书 JSON → 导入（可挂到现有剧组）
   note <production> "<提示>"                设/清剧组导演提示（临场语气/格式杠杆，空串清除）
@@ -29,6 +31,12 @@ CONSOLE = os.environ.get("TAVERN_CONSOLE", "http://127.0.0.1:8799").rstrip("/")
 CHUB_SEARCH = "https://api.chub.ai/search"
 CHUB_CARD = "https://avatars.charhub.io/avatars/{full_path}/chara_card_v2.png"
 UA = "tavern-cli/1.0"
+# 随仓打包的 starter 真卡（tavern/fixtures/starter/）——Chub 不可达时的离线兜底。
+STARTER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "starter")
+
+
+class ChubUnreachable(Exception):
+    """Chub 网络不可达（DNS/超时/连接失败）——触发 starter 兜底。区别于 HTTP 4xx（可达但请求错）。"""
 
 
 def _die(msg):
@@ -68,6 +76,63 @@ def _read_json_arg(arg):
         _die(f"JSON 解析失败：{e}")
 
 
+def _chub_get(url, timeout=30):
+    """打 Chub。网络不可达 → ChubUnreachable（降级 starter）；HTTP 4xx/5xx → 原样抛给调用方按语义处理。"""
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError:
+        raise  # 可达但请求错（如 404 fullPath 写错）——不是「墙内连不上」，别降级
+    except Exception as e:  # DNS 失败 / 超时 / 连接被拒 = 不可达
+        raise ChubUnreachable(str(e))
+
+
+def _parse_full_path(arg):
+    """接受裸 fullPath，或用户直贴的 Chub / CharacterHub 链接，抽出 `<owner>/<slug>`。"""
+    s = arg.strip()
+    for marker in ("/characters/", "/character/"):
+        if marker in s:
+            s = s.split(marker, 1)[1]
+            break
+    else:
+        if "/avatars/" in s:  # 直贴下载 URL 也兜一下
+            s = s.split("/avatars/", 1)[1].rsplit("/chara_card", 1)[0]
+    return s.split("?", 1)[0].split("#", 1)[0].strip().strip("/")
+
+
+def _load_starter_index():
+    path = os.path.join(STARTER_DIR, "index.json")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("cards") or []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _print_starter_list(cards):
+    print(f"内置 starter 真卡 {len(cards)} 张（随仓打包、离线可用、SFW/跨题材）：\n")
+    for i, c in enumerate(cards, 1):
+        wb = " · 世界书" if c.get("worldbook") else ""
+        print(f"[{i}] {c.get('name', '?')}  ·  {c.get('genre', '')}{wb}")
+        if c.get("blurb"):
+            print(f"    {c['blurb']}")
+    print("\n→ 建剧组：tavern_cli.py starter <序号或名字>")
+
+
+def _degrade_to_starter(reason):
+    """Chub 不可达时的降级出口：报清楚原因 + 列 starter 卡。绝不回退到手搓 PNG。"""
+    print(f"⚠️  {reason}", file=sys.stderr)
+    cards = _load_starter_index()
+    if not cards:
+        print("（也没有内置 starter 卡；检查网络 / 代理后重试。）", file=sys.stderr)
+        return
+    print("——先用内置 starter 真卡玩（离线也能建剧组），或配好代理再回 Chub 拿全库：\n")
+    _print_starter_list(cards)
+
+
 # ---------- commands ----------
 def cmd_search(a):
     q = urllib.parse.urlencode({
@@ -75,7 +140,13 @@ def cmd_search(a):
         "nsfw": "true" if a.nsfw else "false",
         "sort": "star_count", "asc": "false",
     })
-    raw = _http(f"{CHUB_SEARCH}?{q}", timeout=30)
+    try:
+        raw = _chub_get(f"{CHUB_SEARCH}?{q}", timeout=30)
+    except ChubUnreachable as e:
+        _degrade_to_starter(f"Chub 搜索连不上（{e}）")
+        return
+    except urllib.error.HTTPError as e:
+        _die(f"Chub 搜索 HTTP {e.code}（接口可能变动）；可先用 `starter` 内置卡。")
     nodes = (json.loads(raw).get("data") or {}).get("nodes") or []
     if not nodes:
         print("（没搜到，换个关键词试试——英文名通常命中率更高）")
@@ -107,14 +178,55 @@ def _create_production(card, name=None):
 
 
 def cmd_add(a):
-    url = CHUB_CARD.format(full_path=urllib.parse.quote(a.full_path))
-    print(f"↓ 从 Chub 下载真卡：{a.full_path}")
-    png = _http(url, timeout=60)
+    fp = _parse_full_path(a.full_path)  # 裸 fullPath 或用户直贴的 Chub 链接都吃
+    url = CHUB_CARD.format(full_path=urllib.parse.quote(fp))
+    print(f"↓ 从 Chub 下载真卡：{fp}")
+    try:
+        png = _chub_get(url, timeout=60)
+    except ChubUnreachable as e:
+        _degrade_to_starter(f"Chub 下载连不上（{e}）")
+        return
+    except urllib.error.HTTPError as e:
+        _die(f"HTTP {e.code}：这张卡在 Chub 取不到（fullPath 可能写错，或该卡没有公开的 "
+             f"chara_card_v2.png）。\n先 `search` 确认 fullPath，或 `starter` 用内置卡。")
     if png[:8] != b"\x89PNG\r\n\x1a\n":
-        _die("下载的不是 PNG（fullPath 可能写错；用 search 拿准确 fullPath）")
+        _die("下载的不是 PNG（fullPath 可能写错）。用 `search` 拿准确 fullPath，或 `starter` 用内置卡。")
     card = _event({"type": "import_card",
                    "png_base64": base64.b64encode(png).decode("ascii")})["card"]
     _create_production(card, a.name)
+
+
+def cmd_starter(a):
+    cards = _load_starter_index()
+    if not cards:
+        _die("没有内置 starter 卡（fixtures/starter/index.json 缺失或损坏）。")
+    if not a.which:
+        _print_starter_list(cards)
+        return
+    entry = _resolve_starter(cards, a.which)
+    if not entry:
+        _die(f"没找到 starter 卡「{a.which}」——`starter` 不带参数看列表（可用序号或名字片段）。")
+    path = os.path.join(STARTER_DIR, entry["file"])
+    if not os.path.exists(path):
+        _die(f"starter 卡文件缺失：{path}")
+    with open(path, "rb") as f:
+        png = f.read()
+    print(f"↓ 导入内置 starter 卡：{entry['name']}（{entry.get('genre', '')}）")
+    card = _event({"type": "import_card",
+                   "png_base64": base64.b64encode(png).decode("ascii")})["card"]
+    _create_production(card, a.name)
+
+
+def _resolve_starter(cards, which):
+    w = which.strip()
+    if w.isdigit():
+        i = int(w) - 1
+        return cards[i] if 0 <= i < len(cards) else None
+    wl = w.lower()
+    for c in cards:
+        if wl in c.get("name", "").lower() or wl in c.get("file", "").lower():
+            return c
+    return None
 
 
 def cmd_add_original(a):
@@ -252,9 +364,14 @@ def main():
     s.set_defaults(fn=cmd_search)
 
     s = sub.add_parser("add", help="下载 Chub 真卡 → 导入 → 建剧组")
-    s.add_argument("full_path", help="Chub fullPath，如 Anon/some-character")
+    s.add_argument("full_path", help="Chub fullPath（如 Anon/some-character）或直贴的 chub.ai 链接")
     s.add_argument("--name", help="剧组名（默认用卡名）")
     s.set_defaults(fn=cmd_add)
+
+    s = sub.add_parser("starter", help="列出/导入内置 starter 真卡（离线兜底 + 写原创卡的样板）")
+    s.add_argument("which", nargs="?", help="序号或名字片段；不给=看列表")
+    s.add_argument("--name", help="剧组名（默认用卡名）")
+    s.set_defaults(fn=cmd_starter)
 
     s = sub.add_parser("add-original", help="原创卡 JSON → 导入 → 建剧组")
     s.add_argument("json", help="卡 JSON 文件路径，或 '-' 读 stdin")
