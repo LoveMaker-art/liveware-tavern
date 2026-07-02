@@ -58,9 +58,9 @@
 
 **中栏 · 舞台（stage）**：`.convo`>`.thread`（窄栏居中 486px 阅读宽；**回合节奏** = 同回合内「我的话→墨的回复」14px 收紧、回合间 30px 放松——段落 vs 场景的呼吸层次）· `.turn`（`.char` 干净文本块 / `.user` 后退气泡）· `.body`/`.nar`（叙述 = serif 斜体 muted）· `.ctl`（渐进披露控制条；触屏热区用 padding+负 margin 撑到 ~28px，视觉行高不变）· `.swipe`（`‹ i/n ›` 备选回复）· `.editbox`/`.editacts`（行内编辑）· `.composer`>`textarea`+`.sendbtn`（`.empty` 静默 / `.stop` 早停；**空态整体隐藏**——没开戏没处发，导入引导是唯一动作）· `.empty`/`.emptyMark`（空态）· `.thinking`（生成中）。
 
-**右栏 · 信息面板（panel，前缀 `p*`）**：`.pSection`/`.pHead`（分区 + 小标题）· 角色：`.cname`/`.prov`（来源出处）/`.cdesc`/`.ctags`>`.tag` · 世界书：`.lore`/`.lk` · **演员墨技艺层**：`.actorHd`/`.lvBadge`/`.knowHd`/`.knowList`/`.growRow`/`.actorMore`（"我对你的了解"+"成长记 N 条"+展开手记）· `.lwFoot`（活件版本 footer）。
+**右栏 · 信息面板（panel，前缀 `p*`）**：`.pSection`/`.pHead`（分区 + 小标题）· 角色：`.cname`/`.prov`（来源出处）/`.cdesc`/`.ctags`>`.tag` · 世界书：`.lore`/`.lk` · **演员墨**（反馈 2026-07-02 收敛为两个入口——摘要/手记撤，完整呈现归演员卡）：`.pLink`（panel 通用入口行）× 2 = **找墨复盘**（深链 `clawchat://u/{id}?chat=1` 跳与墨的会话；须是真 `<a>`——移动容器只放行带手势的链接点击；拿不到墨身份时隐）+ **墨的演员卡**（同源 `/actor?from=console` 页内直达）· `.actorMore`（小字操作钮，「切换 / 管理」在用）· **大模型**（`model-config.md`）：`.mdlCur`/`.mdlModel`（当前配置一览）+ 管理 sheet `.mcItem`/`.mcName`/`.mcMeta`/`.mcCheck`/`.mcDel`（tap=切换、trash=删，`prodDel` 同款渐进披露）/`.mcHint`（教育文案 = 添加入口，**没有表单**——添加只走「对墨说」）· `.lwFoot`（活件版本 footer）。
 
-**弹层**：`.modal`>`.modalCard`（二次确认：`.modalActs`/`.mBtnCancel`/`.mBtnDanger`；浮现带缓动 `modalIn`）· `.sheetCard`（大卡如演员手记；**打开前先收抽屉**——别叠三层灰）· `.md`（渲染 markdown：`.mh`/`.mp`/`.mli`）· `.hidden` 通用隐藏。
+**弹层**：`.modal`>`.modalCard`（二次确认：`.modalActs`/`.mBtnCancel`/`.mBtnDanger`；浮现带缓动 `modalIn`）· `.sheetCard`（大卡如大模型管理；**打开前先收抽屉**——别叠三层灰）· `.hidden` 通用隐藏。
 
 **演员卡 · 数值格（`actor.html`，前缀 `ac*`，spec 待建先记这）**：`.acStatV`+`.acStatU`（值 + **单位小字**：「3 天 / 出道」连读成词，标签单看也成立——数值不许无单位裸奔，养成进度同理「还差 N 轮戏」）· 亲密度**只住自己那张卡**（`.acIntimacy`），不进数值格重复连显 · 版本 footer 文案 = `活件 · 酒馆 v<版本>`（**v 前缀两 surface 一致**，console `.lwFoot` 同款）。
 
@@ -70,8 +70,8 @@
 
 ## 4. 命名约定（加新东西照这个来）
 
-- **按 surface 前缀**：剧组 = `prod*`、演员卡 = `ac*`、面板基元 = `p*`、手记 markdown = `m*`。新 surface 起一个短前缀，别和现有撞。
-- **BEM-lite 小驼峰**：块 + 元素扁平命名（`.actorHd`/`.knowList`），不堆多级。
+- **按 surface 前缀**：剧组 = `prod*`、演员卡 = `ac*`、面板基元 = `p*`、大模型配置 = `mc*`/`mdl*`。新 surface 起一个短前缀，别和现有撞。
+- **BEM-lite 小驼峰**：块 + 元素扁平命名（`.mcItem`/`.acKnow`），不堆多级。
 - **状态类固定词**：`.active`（选中）/`.open`（抽屉开）/`.hidden`（隐）/`.empty`（无内容静默）/`.stop`（发送中）/`.ghost`（次级）/`.dragging`（拖入高亮）。复用这套，别新造同义词。
 - **id 给唯一节点，class 给样式/复用**：JS 抓取用 `#id`，视觉用 `.class`。
 
@@ -82,7 +82,7 @@
 | surface | 路由 | 是什么 | 命名前缀 | 权威 spec |
 |---|---|---|---|---|
 | **console** | `/` | 剧组管理台（导卡/切换/沉浸对话/角色·世界书·演员面板） | `prod*` `p*` | `surfaces-and-features.md` + `conversation-surface.md` |
-| **actor-card** | `/actor` | 墨的**演员卡**（养成感 surface：生涯数值/亲密度/我对你的了解/生涯年表） | `ac*` | `actor-card.md`（待建） |
+| **actor-card** | `/actor` | 墨的**演员卡**（养成感 surface：生涯数值/亲密度/我对你的了解/生涯年表；`?from=console` 时带返回钮） | `ac*` | `actor-card.md` |
 
 两个 surface 由**同一个 `server.py` 服务、共享 `console.css` 的 token 与组件**，但**各注册为一个独立 liveware app**（`liveware app create` ×2：`墨的酒馆` → console、`墨的演员卡` → actor-card），所以活件入口**看到两张卡**。
 

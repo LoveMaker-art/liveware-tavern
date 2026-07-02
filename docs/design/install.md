@@ -46,7 +46,7 @@
    docker exec <容器> hermes clawchat activate <连接码>
    ```
    打印的 `usr_…` 就是这个新 agent 的身份（干净容器 + 全新码 = 全新 agent）。
-4. **模型 creds**：往容器 `/opt/data/.env` 填 `DEEPSEEK_API_KEY=…`（**用你自己的 key，别带走作者的**），或用 `TAVERN_MODEL_BASE/MODEL/KEY` 指向本地 ollama。
+4. **模型 creds**：往容器 `/opt/data/.env` 填 `DEEPSEEK_API_KEY=…`（**用你自己的 key，别带走作者的**），或用 `TAVERN_MODEL_BASE/MODEL/KEY` 指向本地 ollama。这只是「墨自带」默认项——装好后用户随时可以**对墨说一句**换成自己的 API（`model-config.md`），不用回来改 env。
 
 完整起容器 / config 污染背景见 `mvp-kickoff-prompt-v2.md` §6 + `project_liveware_registration_runbook`。
 

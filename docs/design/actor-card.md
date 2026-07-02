@@ -10,7 +10,7 @@
 
 **养成感 surface**。把"演员养成"做成一张**可端详的卡**——镜像角色卡的形，但翻到**演员**这一面。**ST 有会用完的角色卡，我们有会长的演员卡** = 差异化的具象。
 
-- **独立活件卡入口**：活件入口看到两张卡（`console` 剧组管理台 + `actor-card` 演员卡）。**各注册为一个独立 liveware app**（`墨的酒馆` + `墨的演员卡`），但由**同一个 `server.py` 服务、共享 `console.css`**——server 靠 relay 透传的 `X-Forwarded-Host` 在 `/` 上分流到 `actor.html` vs `index.html`（演员卡 app 域名存 `state/actor_host.txt`；机制详见 `liveware-frontend.md §5`）。墨拿链接走 `tavern_cli.py card`（`/api/actor_card` 的 `actor_url`）。
+- **独立活件卡入口**：活件入口看到两张卡（`console` 剧组管理台 + `actor-card` 演员卡）。**各注册为一个独立 liveware app**（`墨的酒馆` + `墨的演员卡`），但由**同一个 `server.py` 服务、共享 `console.css`**——server 靠 relay 透传的 `X-Forwarded-Host` 在 `/` 上分流到 `actor.html` vs `index.html`（演员卡 app 域名存 `state/actor_host.txt`；机制详见 `liveware-frontend.md §5`）。墨拿链接走 `tavern_cli.py card`（`/api/actor_card` 的 `actor_url`）；**用户侧第三个入口 = 控制台右栏「墨的演员卡」**（`/actor?from=console` 页内直达，2026-07-02）。
 - **零新后端**（铁律 B 不触发）：全是对**现有 state 的聚合读**，不加后端字段、不碰 member-backend。
 - **进阶线 MVP 的体验半**：养成的"管道半"（自动累积 + 合并）落在 `actor_self.md`（§7），这张卡把它**变得看得见、被感到**。
 
@@ -122,7 +122,7 @@
 | `.acStats` / `.acStat` | 生涯数值格：大数 + 小标 | `--ink`(数) `--muted`(标) |
 | `.acIntimacy` | 亲密度块：级名 + 一句 + 进度 | `--brand` |
 | `.acProg` / `.acProgBar` | 进度槽 / 进度填充 | `--line2` / `--brand` |
-| `.acKnows` / `.acKnow` | 我对你的了解列表 | `.knowList` 同款圆点 |
+| `.acKnows` / `.acKnow` | 我对你的了解列表 | 前缀圆点（·）列表 |
 | `.acTimeline` / `.acEntry` | 生涯年表：日期 + 理由→变化 | `--muted`(日期) `--ink2`(正文) |
 | `.acSpecs` / `.acSpec` | 擅长标签（v1.1） | `.tag` |
 | `.acRoles` / `.acRole` | 角色名录 / 出演表（v1.1） | `--ink2` `--muted` |
@@ -133,7 +133,7 @@
 
 ## 6. 布局（单栏阅读，响应式）
 
-**不是** master-detail（那是 console）——演员卡是**一张卡**：居中窄栏（复用 `.thread` 的 ~486px 阅读宽）、warm paper、留白大。数值用 `--sans`，tagline/年表理由可 `--serif` 添书页感。**无渐进披露**（这是展示 surface，控件少）。移动 = 同一单栏、收窄 padding，不需抽屉。顶栏复用 `#topbar` 形（`✦ 墨 · 演员` 居中）。
+**不是** master-detail（那是 console）——演员卡是**一张卡**：居中窄栏（复用 `.thread` 的 ~486px 阅读宽）、warm paper、留白大。数值用 `--sans`，tagline/年表理由可 `--serif` 添书页感。**无渐进披露**（这是展示 surface，控件少）。移动 = 同一单栏、收窄 padding，不需抽屉。顶栏复用 `#topbar` 形（`✦ 墨 · 演员` 居中）；**从酒馆页内跳来（`?from=console`）时左上显返回钮 `#acBack`**（`history.back()`）——独立打开演员卡活件时无处可返、不显（桌面容器窗口没有系统返回，这个钮是页内跳转的唯一回路）。
 
 **边界态与实现注记**：
 - **0 剧组**：出道 0 天、各值 0、亲密度「初见」；「我对你的了解」空态 `还在读你的口味——演几场我就懂了`；年表空态 `还没有生涯记录`。别显负数/NaN。

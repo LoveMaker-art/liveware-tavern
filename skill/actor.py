@@ -11,8 +11,12 @@ POST {base}/chat/completions。模型 creds 只在 server 进程的 env，页面
 """
 import json
 import os
+import time
 import urllib.request
 
+# 「墨自带」路径:agent 容器环境里的那份 key(用户不配任何东西时的默认)。
+# 用户自配的大模型走 override(state/model_configs.json,server 每回合解析),
+# 见 docs/design/model-config.md——本文件不读配置文件,保持纯库。
 MODEL_BASE = os.environ.get("TAVERN_MODEL_BASE", "https://api.deepseek.com/v1")
 MODEL_NAME = os.environ.get("TAVERN_MODEL", "deepseek-chat")
 MODEL_TEMP = float(os.environ.get("TAVERN_MODEL_TEMP", "0.85"))
@@ -169,42 +173,54 @@ def build_messages(card: dict, actor_self: str, lore: list, persona: dict, story
     return msgs
 
 
-def _payload(messages: list, temperature: float, stream: bool) -> dict:
-    return {
-        "model": MODEL_NAME,
+def _payload(messages: list, temperature: float, stream: bool,
+             model_name: str = None, max_tokens: int = None) -> dict:
+    p = {
+        "model": model_name or MODEL_NAME,
         "messages": messages,
         "stream": stream,
         "temperature": MODEL_TEMP if temperature is None else temperature,
         "frequency_penalty": MODEL_FREQ_PENALTY,  # 反复读兜底(无 UI,设计 canon)
         "presence_penalty": MODEL_PRES_PENALTY,
     }
+    if max_tokens:
+        p["max_tokens"] = max_tokens
+    return p
 
 
-def _request(payload: dict) -> urllib.request.Request:
-    if not MODEL_KEY:
+def _request(payload: dict, base: str = None, key: str = None) -> urllib.request.Request:
+    key = MODEL_KEY if key is None else key
+    if not key:
         raise RuntimeError("缺模型 key：设 TAVERN_MODEL_KEY 或 DEEPSEEK_API_KEY")
     return urllib.request.Request(
-        MODEL_BASE.rstrip("/") + "/chat/completions",
+        (base or MODEL_BASE).rstrip("/") + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "Authorization": "Bearer " + MODEL_KEY,
+            "Authorization": "Bearer " + key,
         },
         method="POST",
     )
 
 
-def chat(messages: list, temperature: float = None) -> str:
-    """调模型，返回回复文本（非流式）。抄 probe_toolcall 的纯 stdlib urllib 形态。"""
-    with urllib.request.urlopen(_request(_payload(messages, temperature, False)), timeout=90) as r:
+def chat(messages: list, temperature: float = None, model: dict = None) -> str:
+    """调模型，返回回复文本（非流式）。抄 probe_toolcall 的纯 stdlib urllib 形态。
+    model = 用户自配 override {base, key, model}；None = 墨自带（env 路径）。"""
+    ov = model or {}
+    req = _request(_payload(messages, temperature, False, ov.get("model")),
+                   ov.get("base"), ov.get("key"))
+    with urllib.request.urlopen(req, timeout=90) as r:
         data = json.loads(r.read())
     return data["choices"][0]["message"]["content"].strip()
 
 
-def chat_stream(messages: list, temperature: float = None):
+def chat_stream(messages: list, temperature: float = None, model: dict = None):
     """调模型，逐 token yield 文本增量（SSE，OpenAI-compatible）。
     用于控制台流式渲染——同模型下"逐字流"比干等占位条体感强一档。"""
-    with urllib.request.urlopen(_request(_payload(messages, temperature, True)), timeout=120) as r:
+    ov = model or {}
+    req = _request(_payload(messages, temperature, True, ov.get("model")),
+                   ov.get("base"), ov.get("key"))
+    with urllib.request.urlopen(req, timeout=120) as r:
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
             if not line or not line.startswith("data:"):
@@ -221,22 +237,33 @@ def chat_stream(messages: list, temperature: float = None):
 
 
 def perform(card: dict, actor_self: str, worldbooks: list, persona: dict, story: list,
-            note: str = "") -> str:
-    """一回合演出：选世界书 → 拼 prompt → 生成。"""
+            note: str = "", model: dict = None) -> str:
+    """一回合演出：选世界书 → 拼 prompt → 生成。model = 用户自配 override（None=墨自带）。"""
     lore = select_lore(worldbooks, story)
     msgs = build_messages(card, actor_self, lore, persona, story, note)
-    return chat(msgs)
+    return chat(msgs, model=model)
 
 
 def perform_stream(card: dict, actor_self: str, worldbooks: list, persona: dict, story: list,
-                   note: str = ""):
+                   note: str = "", model: dict = None):
     """一回合演出（流式）：选世界书 → 拼 prompt → 逐 token yield。"""
     lore = select_lore(worldbooks, story)
     msgs = build_messages(card, actor_self, lore, persona, story, note)
-    yield from chat_stream(msgs)
+    yield from chat_stream(msgs, model=model)
 
 
-def reflect_on_play(card: dict, story: list, actor_self: str) -> str:
+def ping(model: dict = None) -> int:
+    """极小请求实测一份配置通不通（add 落盘前的验证）。返回耗时 ms，失败抛异常。"""
+    t0 = time.time()
+    ov = model or {}
+    payload = _payload([{"role": "user", "content": "hi"}], 0.0, False,
+                       ov.get("model"), max_tokens=8)
+    with urllib.request.urlopen(_request(payload, ov.get("base"), ov.get("key")), timeout=20) as r:
+        json.loads(r.read())
+    return int((time.time() - t0) * 1000)
+
+
+def reflect_on_play(card: dict, story: list, actor_self: str, model: dict = None) -> str:
     """复盘一场戏，蒸馏出「关于用户（对手戏的人类玩家）的 RP 偏好」，供写进技艺层。
 
     只学**用户的口味/节奏/雷区/被什么打动**——不复述剧情（剧情归故事线、per 剧组隔离），
@@ -266,7 +293,7 @@ def reflect_on_play(card: dict, story: list, actor_self: str) -> str:
     out = chat(
         [{"role": "system", "content": sys},
          {"role": "user", "content": f"# 这场戏（角色 = {cname}）\n{convo}"}],
-        temperature=0.3,
+        temperature=0.3, model=model,
     ).strip()
     if out.upper().startswith("NONE") or len(out) < 4:
         return ""
@@ -303,5 +330,7 @@ def merge_knows(existing: list, addition: str) -> list:
     return items[:12] if items else list(existing)
 
 
-def model_info() -> dict:
+def model_info(model: dict = None) -> dict:
+    if model:
+        return {"model": model.get("model"), "base": model.get("base"), "key_set": bool(model.get("key"))}
     return {"model": MODEL_NAME, "base": MODEL_BASE, "key_set": bool(MODEL_KEY)}

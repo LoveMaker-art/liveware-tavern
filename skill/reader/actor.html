@@ -9,6 +9,11 @@
 </head>
 <body>
   <header id="topbar">
+    <!-- 返回:仅从酒馆页内跳来(?from=console)时由 actor.js 显示——独立打开演员卡活件时无处可返。
+         桌面容器窗口没有系统返回,这个钮是页内跳转的唯一回路。 -->
+    <button id="acBack" class="iconbtn hidden" aria-label="返回酒馆">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+    </button>
     <div class="topTitle">
       <div class="tline"><span class="mark">✦</span><span class="prodName">墨 · 演员</span></div>
     </div>

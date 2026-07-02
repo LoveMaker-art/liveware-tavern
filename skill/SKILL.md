@@ -1,7 +1,7 @@
 ---
 name: tavern
-description: "酒馆角色扮演：从 Chub 找角色卡/世界书，干净导入到沉浸控制台建剧组。"
-version: 1.0.0
+description: "酒馆角色扮演：从 Chub 找角色卡/世界书，干净导入到沉浸控制台建剧组；可帮用户配自定义大模型 API。"
+version: 1.2.0
 author: ClawChat Tavern
 license: MIT
 platforms: [linux, macos, windows]
@@ -36,6 +36,30 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 | `learn "<学到啥>" [--reason "<为什么>"]` | 把对用户的了解/演法调整**合并进「我对你的了解」**（有界、去重、精化，非尾部堆）+ 记一笔生涯年表。跨剧组共享、注入每场戏生成；区别于 Hermes 通用记忆——那层喂不到控制台 |
 | `reflect <剧组名\|id>` | **复盘整场戏 → 服务端模型蒸馏偏好 → 合并进「我对你的了解」+ 记生涯年表**（一场戏结束/用户问起时用，不靠你临场总结；**切走剧组时服务端也会自动复盘一次**） |
 | `note <剧组名\|id> "<提示>"` | 设/清剧组的**导演提示**（作者注释）：用户说「回复短点 / 别用现代词 / 多点环境描写」→ 设一句，注入贴近生成点、**长期生效不靠模型记着**（空串清除）。区别于 `learn`：note 是 per-剧组的临场语气/格式杠杆，learn 是跨剧组的对用户的了解 |
+| `model list` / `model add <名> --base <url> --model <id> --key <key>` / `model use <名>` / `model rm <名>` / `model test [<名>]` | **帮用户配酒馆用的大模型**（见下「帮用户配大模型」）。`add` 会**先实测、通了才落盘并自动切换**；默认「墨自带」= 你环境里那份 key，删不得 |
+
+## 帮用户配大模型（自定义 API）
+
+酒馆生成默认走**墨自带**（你 agent 环境里的 key）。用户想用**自己的 key / 换个模型**（「帮我接上 Kimi」「用我的 DeepSeek key」「配个本地 Ollama」）→ 你来配，用户只需给你 key：
+
+1. **认服务商**：从用户的话/key 形态认出是哪家，查下表拿 `base` 和主力 `model`（用户点名了模型就用他的）。
+2. **`model add <名> --base <url> --model <id> --key <用户的key>`**——会先发一次极小请求实测，**通了才落盘并自动切换**，下一回合就生效。
+3. **报结果**：成功报「配好了，已切到 X（实测 N ms）」；失败把错误人话读给用户（401=key 无效、404=base 或 model 名不对、超时=网络不通）。
+
+| 服务商 | base | 常用 model（2026-07；会过时，不确定就 `add` 试或问用户） |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` / `deepseek-reasoner` |
+| Kimi (月之暗面) | `https://api.moonshot.cn/v1` | `kimi-k2-0711-preview` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.5` |
+| 通义 Qwen (百炼) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3` |
+| OpenRouter | `https://openrouter.ai/api/v1` | 任意（如 `anthropic/claude-sonnet-4.5`） |
+| OpenAI | `https://api.openai.com/v1` | `gpt-5` / `gpt-4o` |
+| Anthropic（OpenAI 兼容层） | `https://api.anthropic.com/v1` | `claude-sonnet-4-5` |
+| Gemini（OpenAI 兼容层） | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-flash` |
+| Ollama（用户本机） | `http://127.0.0.1:11434/v1` | 用户装了啥用啥；key 随便填（如 `ollama`） |
+
+**守则**：① 协议只有 OpenAI-compatible 一种（上表全是，Anthropic/Gemini 走各自兼容层）。② **key 只落酒馆 state 文件（0600），控制台界面只显尾 4 位**；你跟用户确认时同样**只报名字和尾 4 位，永远不要复述完整 key**，也不要把 key 发给酒馆之外的任何地方。③ 用户说「换回默认/原来的」→ `model use 墨自带`。④ 配置在控制台右栏「大模型」里用户自己也能切/删——你配完可以顺嘴提一句。
 
 ## 卡 / 世界书去哪找
 

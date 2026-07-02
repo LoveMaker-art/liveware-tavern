@@ -57,13 +57,25 @@ def _http(url, data=None, headers=None, timeout=30):
 
 
 def _event(ev):
-    """POST 一个控制台事件，返回解析后的 dict。"""
+    """POST 一个控制台事件，返回解析后的 dict。
+    server 对事件异常回 HTTP 500 + {ok:false,error:人话}——这里接住 body 只报人话
+    （别走 _http 的 HTTPError 分支打「HTTP 500 + 原始 JSON」，墨要把错误读给用户）。"""
     body = json.dumps(ev, ensure_ascii=False).encode("utf-8")
-    raw = _http(CONSOLE + "/api/event", data=body,
-                headers={"Content-Type": "application/json"}, timeout=120)
-    res = json.loads(raw)
-    if isinstance(res, dict) and res.get("error"):
-        _die("控制台报错：" + str(res["error"]))
+    req = urllib.request.Request(CONSOLE + "/api/event", data=body,
+                                 headers={"User-Agent": UA, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+    except Exception as e:  # noqa: BLE001
+        _die(f"请求失败 {CONSOLE}/api/event: {e}")
+    try:
+        res = json.loads(raw)
+    except Exception:
+        _die("控制台返回不是 JSON：" + raw.decode("utf-8", "replace")[:200])
+    if isinstance(res, dict) and (res.get("error") or res.get("ok") is False):
+        _die("控制台报错：" + str(res.get("error")))
     return res
 
 
@@ -307,6 +319,54 @@ def cmd_note(a):
         print(f"（「{p['name']}」导演提示已清空）")
 
 
+# ---------- 大模型配置（帮用户配自定义 API，docs/design/model-config.md） ----------
+def _models():
+    d = json.loads(_http(CONSOLE + "/api/models", timeout=15))
+    return d.get("configs", []), d.get("active", "builtin")
+
+
+def _active_name():
+    configs, active = _models()
+    return next((c["name"] for c in configs if c["id"] == active), "墨自带")
+
+
+def cmd_model_list(a):
+    configs, active = _models()
+    print("大模型配置（✓ = 当前在用）：")
+    for c in configs:
+        mark = "✓" if c["id"] == active else "·"
+        if c.get("builtin"):
+            key = "agent 环境自带" if c.get("key_set") else "⚠️ 容器里没配到 key"
+            print(f"  {mark} 墨自带 — {c.get('model', '')}（{key}）")
+        else:
+            print(f"  {mark} {c['name']} — {c['model']}（key {c.get('key_masked', '')} · {c.get('base', '')}）")
+    print("（加新配置：`model add <名> --base <url> --model <id> --key <key>`，会先实测、通了才落盘）")
+
+
+def cmd_model_add(a):
+    res = _event({"type": "model_add", "name": a.name, "base": a.base,
+                  "model": a.model, "key": a.key})
+    c = res.get("config", {})
+    print(f"✅ 已配好并切换：{c.get('name')} — {c.get('model')}"
+          f"（实测通，{res.get('latency_ms')}ms · key {c.get('key_masked')}）")
+    print("（跟用户确认时只报名字和 key 尾 4 位，永远不要复述完整 key）")
+
+
+def cmd_model_use(a):
+    res = _event({"type": "model_use", "id": a.which})
+    print(f"✅ 已切换到：{res.get('name')}（下一回合就用它）")
+
+
+def cmd_model_rm(a):
+    res = _event({"type": "model_delete", "id": a.which})
+    print(f"✅ 已删除：{res.get('name')}（当前在用：{_active_name()}）")
+
+
+def cmd_model_test(a):
+    res = _event({"type": "model_test", "id": a.which or "builtin"})
+    print(f"✅ 通：{res.get('model')} @ {res.get('base')} · {res.get('latency_ms')}ms")
+
+
 def cmd_card(a):
     # 读你自己的「演员卡」——生涯数值/亲密度/对用户的了解/成长。给你自我觉察：
     # ① 聊天里自然引用成长（"我记得你爱慢热的，这次收着点"）= 越演越懂用户的体感；
@@ -407,6 +467,26 @@ def main():
     s.add_argument("production", help="剧组 id 或名字片段")
     s.add_argument("note", help="导演提示,如「回复短点」「多点环境描写」；空串清除")
     s.set_defaults(fn=cmd_note)
+
+    s = sub.add_parser("model", help="大模型配置:帮用户配/切/删自定义 API(add 先实测再落盘)")
+    ms = s.add_subparsers(dest="mcmd", required=True)
+    m = ms.add_parser("list", help="列全部配置(✓=当前在用)")
+    m.set_defaults(fn=cmd_model_list)
+    m = ms.add_parser("add", help="加一份配置:实测通过才落盘,并自动切换过去(同名=更新)")
+    m.add_argument("name", help="给配置起个名(如 DeepSeek / Kimi / 本地Ollama)")
+    m.add_argument("--base", required=True, help="OpenAI-compatible base_url(到 /v1 为止)")
+    m.add_argument("--model", required=True, help="model id(如 deepseek-chat / kimi-k2)")
+    m.add_argument("--key", required=True, help="API key(只落酒馆 state 文件,不外传)")
+    m.set_defaults(fn=cmd_model_add)
+    m = ms.add_parser("use", help="切换在用配置(名字或 id;「墨自带」= 切回默认)")
+    m.add_argument("which", help="配置名 / id / 墨自带")
+    m.set_defaults(fn=cmd_model_use)
+    m = ms.add_parser("rm", help="删一份配置(删的是在用的会自动回落墨自带)")
+    m.add_argument("which", help="配置名 / id")
+    m.set_defaults(fn=cmd_model_rm)
+    m = ms.add_parser("test", help="实测某配置通不通(不给参数=测墨自带)")
+    m.add_argument("which", nargs="?", help="配置名 / id;缺省=墨自带")
+    m.set_defaults(fn=cmd_model_test)
 
     a = ap.parse_args()
     a.fn(a)

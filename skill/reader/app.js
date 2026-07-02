@@ -1,7 +1,7 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
 const state = { cards: [], cardMap: {}, worldbooks: {}, productions: [], activeId: null, active: null,
-  actor: "", version: "", busy: false, abort: null, stick: true, _anchor: null };
+  agentUserId: "", version: "", models: null, busy: false, abort: null, stick: true, _anchor: null };
 
 function esc(s) { return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function fmt(t) { return esc(t).replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>'); }
@@ -10,11 +10,12 @@ function el(tag, cls) { const e = document.createElement(tag); if (cls) e.classN
 
 // 内联图标(reader 不挂图标字体)——细描边,克制。
 const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
-const SEED_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V11M12 11C12 7 9 5 4 5c0 5 3 6 8 6M12 13c0-3 3-5 8-5 0 4-3 5-8 5"/></svg>';
-const BOOK_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4a2 2 0 0 1 2-2h12v15H7a2 2 0 0 0-2 2zM19 17H7M5 4v16"/></svg>';
+const CHAT_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12z"/></svg>';
+const CARD_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2"/><path d="M6.5 16c.5-1.6 1.5-2.4 2.5-2.4s2 .8 2.5 2.4M15 10h3.5M15 13.5h3.5"/></svg>';
 const WORLD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>';
 const SEND_SVG = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V5M6 11l6-6 6 6"/></svg>';
 const STOP_SVG = '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" y="6.5" width="11" height="11" rx="2.6" fill="currentColor"/></svg>';
+const SLIDERS_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h9M20 8h0M4 16h1M12 16h8"/><circle cx="16" cy="8" r="2.2"/><circle cx="8" cy="16" r="2.2"/></svg>';
 
 // 对话轮数 = 用户出手数(first_mes 是 char 开场,不算)。最近活跃 = story 末条时间。
 function countTurns(story) { return (story || []).filter((m) => m.role === "user").length; }
@@ -35,16 +36,19 @@ function relTime(ts) {
 }
 
 async function loadAll() {
-  const [pr, cr, wr, ar] = await Promise.all([
+  const [pr, cr, wr, ar, mr] = await Promise.all([
     bridge.get("/api/productions"), bridge.get("/api/cards"), bridge.get("/api/worldbooks"),
-    bridge.get("/api/actor"),
+    bridge.get("/api/actor"), bridge.get("/api/models"),
   ]);
   state.productions = pr.productions || [];
   state.cards = cr.cards || [];
   state.cardMap = {}; state.cards.forEach((c) => (state.cardMap[c.id] = c));
   state.worldbooks = {}; (wr.worldbooks || []).forEach((w) => (state.worldbooks[w.id] = w));
-  state.actor = ar.actor_self || "";        // 演员墨技艺层(富提示词,会积累)
+  state.agentUserId = ar.agent_user_id || ""; // 墨的 ClawChat 身份(「找墨复盘」深链;空=隐入口)
   state.version = ar.version || "";          // 活件版本(酒馆 app 自己的发版号)
+  // 大模型配置(脱敏列表);旧 server 没这端点 → 兜一个只有墨自带的默认,面板不裸奔
+  state.models = (mr && mr.configs) ? mr
+    : { configs: [{ id: "builtin", name: "墨自带", builtin: true }], active: "builtin" };
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
   state.active = state.productions.find((p) => p.id === state.activeId) || null;
   renderRail(); renderStage(); renderPanel();
@@ -125,36 +129,31 @@ function provenanceHtml(card) {
   return "";
 }
 
-// 演员墨技艺层(Task 5):随演出/复盘积累的富提示词,把「越演越懂你」做成可见特征。
-function parseActorSelf(md) {
-  const out = { knows: [], growth: 0 };
-  if (!md) return out;
-  const sections = {}; let cur = null;
-  md.split("\n").forEach((line) => {
-    const h = line.match(/^#\s+(.+)/);
-    if (h) { cur = h[1]; sections[cur] = []; return; }
-    if (cur) sections[cur].push(line);
-  });
-  const find = (kw) => Object.keys(sections).find((k) => k.includes(kw));
-  const isPlaceholder = (s) => /^（.*）$/.test(s.trim()) || s.includes("还不了解") || s.includes("空。");
-  const ks = find("我对你的了解");
-  if (ks) sections[ks].forEach((l) => { const m = l.match(/^[-*]\s+(.+)/); if (m && !isPlaceholder(m[1])) out.knows.push(m[1].trim()); });
-  const gs = find("成长记");
-  if (gs) sections[gs].forEach((l) => { const m = l.match(/^[-*]\s+(.+)/); if (m && !isPlaceholder(m[1])) out.growth++; });
-  return out;
+// 演员墨小节:收敛为两个入口(反馈 2026-07-02——演员卡已承载 knows/年表的完整呈现,
+// panel 不再摘要复读)。① 找墨复盘 = 深链跳 ClawChat 与墨的会话(clawchat://u/{id}?chat=1,
+// 容器拦非同源导航 → openLinkExternally → in-app deep link;老版本 app 降级开资料页)。
+// 必须是真 <a> 链接——移动容器只放行带手势的 LINK_ACTIVATED,JS 跳转会被静默拦。
+// ② 墨的演员卡 = 同源 /actor 页内直达(?from=console 让演员卡显返回)。
+function actorSectionHtml() {
+  const reflectLink = state.agentUserId
+    ? `<a class="pLink" href="clawchat://u/${esc(state.agentUserId)}?chat=1">${CHAT_SVG}找墨复盘</a>`
+    : "";  // 拿不到墨的身份(本地 dev 无容器 config)→ 隐入口
+  return `<div class="pSection actorSec">
+    <div class="pHead">演员 · 墨</div>
+    ${reflectLink}
+    <a class="pLink" href="/actor?from=console">${CARD_SVG}墨的演员卡</a>
+  </div>`;
 }
 
-function actorSectionHtml() {
-  const a = parseActorSelf(state.actor);
-  const knows = a.knows.length
-    ? `<ul class="knowList">${a.knows.slice(0, 4).map((k) => `<li>${esc(k)}</li>`).join("")}</ul>`
-    : `<p class="pmuted">还在熟悉你。等演几场，墨会把你的口味记到这。</p>`;
-  const grow = a.growth > 0 ? `<div class="growRow">${SEED_SVG}成长记 ${a.growth} 条</div>` : "";
-  return `<div class="pSection actorSec">
-    <div class="actorHd"><span class="pHead">演员 · 墨</span></div>
-    <div class="knowHd">越演越懂你</div>
-    ${knows}${grow}
-    <button class="actorMore" id="actorMore">${BOOK_SVG}查看演员手记</button>
+// 大模型小节(panel):只报当前在用的配置;管理(切/删)+教育(怎么加)走 sheet。model-config.md。
+function modelSectionHtml() {
+  const ms = state.models || { configs: [], active: "builtin" };
+  const cur = ms.configs.find((c) => c.id === ms.active) || ms.configs[0]
+    || { name: "墨自带", model: "" };
+  return `<div class="pSection">
+    <div class="pHead">大模型</div>
+    <p class="mdlCur">${esc(cur.name)}<span class="mdlModel">${esc(cur.model || "")}</span></p>
+    <button class="actorMore" id="modelManage">${SLIDERS_SVG}切换 / 管理</button>
   </div>`;
 }
 
@@ -162,6 +161,7 @@ function renderPanel() {
   const body = $("#panelBody");
   const p = state.active;
   const actorSec = actorSectionHtml();   // 演员墨跨剧组,始终显
+  const modelSec = modelSectionHtml();   // 大模型配置跨剧组,始终显
   const lwFoot = state.version
     ? `<div class="lwFoot" title="酒馆是一个活件：墨可以改它的功能与样子，再发一版"><span class="mark">✦</span>活件 · 酒馆 v${esc(state.version)}</div>`
     : "";
@@ -187,9 +187,9 @@ function renderPanel() {
     </div>`;
     sections = charSec + loreSec;
   }
-  body.innerHTML = sections + actorSec + lwFoot;
-  const more = $("#actorMore");
-  if (more) more.onclick = openActorSheet;
+  body.innerHTML = sections + actorSec + modelSec + lwFoot;
+  const mm = $("#modelManage");
+  if (mm) mm.onclick = openModelSheet;
 }
 
 async function switchProd(id) {
@@ -489,28 +489,79 @@ async function askDeleteProduction(id) {
   } catch (e) { toast("删除失败：" + e.message); }
 }
 
-// 演员手记:把 actor_self.md(随演出积累的那份富提示词)整份渲染出来——「越演越懂你」看得见。
-const mfmt = (s) => esc(s).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*([^*]+)\*/g, "<em>$1</em>");
-function mdToHtml(md) {
-  let html = "";
-  (md || "").split("\n").forEach((raw) => {
-    const line = raw.replace(/\r$/, "");
-    const h = line.match(/^#+\s+(.+)/), li = line.match(/^[-*]\s+(.+)/);
-    if (h) html += `<div class="mh">${mfmt(h[1])}</div>`;
-    else if (li) html += `<div class="mli">${mfmt(li[1])}</div>`;
-    else if (line.trim()) html += `<div class="mp">${mfmt(line)}</div>`;
-  });
-  return `<div class="md">${html}</div>`;
+// ---- 大模型配置管理(model-config.md):tap 行=切换、trash=删;添加只走「对墨说」----
+async function refreshModels() {
+  try {
+    const mr = await bridge.get("/api/models");
+    if (mr && mr.configs) state.models = mr;
+  } catch (_) { /* 刷新失败保留旧列表,操作路径各自有 toast */ }
+  renderPanel();
 }
-function openActorSheet() {
-  closeDrawers();  // 从右抽屉点进来:先收抽屉,别让 sheet 叠在抽屉+scrim 上(三层灰)
-  const intro = '<div class="mp" style="color:var(--muted);margin-bottom:13px">墨随每场戏与复盘积累的演艺手记——越演越懂你。这是注入每一场戏的那份提示词。</div>';
+
+function openModelSheet() {
+  closeDrawers();
   const card = el("div", "modalCard sheetCard");
-  card.innerHTML = `<div class="sheetHd"><span class="t">演员手记 · 墨</span>
+  card.innerHTML = `<div class="sheetHd"><span class="t">大模型</span>
       <button class="sheetClose" aria-label="关闭">✕</button></div>
-    <div class="sheetBody">${intro}${mdToHtml(state.actor)}</div>`;
+    <div class="sheetBody"><div id="mcBody"></div></div>`;
   openModal(card);
   card.querySelector(".sheetClose").onclick = closeModal;
+  renderModelSheet();
+}
+
+function renderModelSheet() {
+  const box = document.getElementById("mcBody");
+  if (!box) return;  // sheet 没开着(如乐观切换回滚时),只有 panel 需要刷
+  const ms = state.models || { configs: [], active: "builtin" };
+  const rows = ms.configs.map((c) => {
+    const meta = c.builtin
+      ? `${c.model || ""} · 调用墨的大模型,开箱即用`
+      : `${c.model} · key ${c.key_masked || "**"}`;
+    const del = c.builtin ? ""
+      : `<button class="mcDel" data-del="${c.id}" aria-label="删除配置" title="删除配置">${TRASH_SVG}</button>`;
+    return `<div class="mcItem ${c.id === ms.active ? "active" : ""}" data-use="${c.id}">
+      <div class="mcInfo"><div class="mcName">${esc(c.name)}</div><div class="mcMeta">${esc(meta)}</div></div>
+      <span class="mcCheck">✓</span>${del}</div>`;
+  }).join("");
+  // 教育文案即「添加入口」:没有表单,配置由墨代办(实测通过才落盘)——chat 即管理。
+  box.innerHTML = rows + `<p class="mcHint">想用自己的 API？对墨说：<br>
+    <span class="q">「帮我配上 DeepSeek，key 是 sk-…」</span><br>
+    墨认识市面上主流的大模型服务，会先实测、通了才保存，存好即刻生效。</p>`;
+  box.querySelectorAll("[data-use]").forEach((d) => d.onclick = () => useModel(d.dataset.use));
+  box.querySelectorAll("[data-del]").forEach((b) =>
+    b.onclick = (e) => { e.stopPropagation(); askDeleteModel(b.dataset.del); });
+}
+
+async function useModel(id) {
+  const ms = state.models;
+  if (!ms || id === ms.active) return;
+  const prev = ms.active;
+  ms.active = id; renderModelSheet(); renderPanel();  // 乐观切换,失败回滚
+  try {
+    await bridge.event({ type: "model_use", id });
+  } catch (e) {
+    ms.active = prev; renderModelSheet(); renderPanel();
+    toast("切换失败：" + e.message);
+  }
+}
+
+async function askDeleteModel(id) {
+  const c = ((state.models || {}).configs || []).find((x) => x.id === id);
+  if (!c) return;
+  // confirmDialog 与 sheet 共用 #modal(确认框顶掉列表),答完重开 sheet 回到列表
+  const ok = await confirmDialog({
+    title: `删除「${c.name}」？`,
+    body: "这份 API 配置会被删除。正在用它的话，会切回墨自带。",
+    confirmLabel: "删除",
+  });
+  if (ok) {
+    try {
+      await bridge.event({ type: "model_delete", id });
+      await refreshModels();
+      toast("已删除配置");
+    } catch (e) { toast("删除失败：" + e.message); }
+  }
+  openModelSheet();
 }
 
 // 软键盘弹起把可视视口压小:iOS WKWebView 不认 interactive-widget/dvh 的键盘收缩,

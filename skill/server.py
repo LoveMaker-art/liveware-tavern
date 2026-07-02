@@ -11,6 +11,7 @@ import secrets
 import sys
 import threading
 import time
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -79,6 +80,27 @@ def liveware_version():
             for line in f:
                 if line.startswith("version:"):
                     return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def agent_user_id():
+    """墨在 ClawChat 里的身份 id(usr_…)——「找墨复盘」深链 clawchat://u/{id}?chat=1 用。
+    env 优先(dev/测试);容器里从 hermes config.yaml 文本扫描 `user_id: usr_…`
+    (锚定行首键名,不撞 owner_user_id;不引 yaml 依赖,保持纯 stdlib)。拿不到返回
+    空串,reader 会隐藏复盘入口——本地 dev 无容器 config 是常态,不算错。"""
+    envv = os.environ.get("TAVERN_AGENT_USER_ID", "").strip()
+    if envv:
+        return envv
+    try:
+        with open("/opt/data/config.yaml", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("user_id:"):
+                    v = s.split(":", 1)[1].strip().strip("'\"")
+                    if v.startswith("usr_"):
+                        return v
     except OSError:
         pass
     return ""
@@ -383,7 +405,8 @@ def _loadout(p):
 
 def _perform_into(p):
     card, wbs, persona, note = _loadout(p)
-    return actor.perform(card, actor_self_text(), wbs, persona, p["story"], note)
+    return actor.perform(card, actor_self_text(), wbs, persona, p["story"], note,
+                         model=_active_model())  # 用户自配大模型;None=墨自带
 
 
 def ev_send_message(ev):
@@ -529,7 +552,7 @@ def _reflect_production(p):
     if sum(1 for m in story if m.get("role") == "user") < 2:
         return {"learned": None, "reason": "戏太短，没什么可学的"}
     card = load_card(p["card_id"]) or {}
-    learned = actor.reflect_on_play(card, story, actor_self_text())
+    learned = actor.reflect_on_play(card, story, actor_self_text(), model=_active_model())
     if not learned:
         return {"learned": None, "reason": "这场没看出明显偏好"}
     merged = _merge_into_knows(learned)
@@ -563,6 +586,146 @@ def ev_set_note(ev):
     return {"production_id": p["id"], "author_note": p["author_note"]}
 
 
+# ---------- 大模型配置（docs/design/model-config.md）----------
+# 用户自配的大模型（OpenAI-compatible 一种协议）。添加只走「对墨说」→ CLI → 这里的 event；
+# reader 界面只做管理（选中/删除）+ 教育。key 只落 server 端 state 文件（0600），
+# 任何读端点一律脱敏——bridge「creds 只在 server 端，页面永不见」原则的延伸。
+MODELS_PATH = os.path.join(STATE, "model_configs.json")
+
+
+def _models_state():
+    return _read(MODELS_PATH, {"configs": [], "active": "builtin"})
+
+
+def _save_models(s):
+    _write(MODELS_PATH, s)
+    try:
+        os.chmod(MODELS_PATH, 0o600)  # 存明文 key,别让同机其他用户读
+    except OSError:
+        pass
+
+
+def _active_model():
+    """当前生效的 override {base,key,model}；None = 墨自带（env 路径，actor 模块常量）。
+    每回合现读文件（_actor_host 同款范式）：CLI/事件写入即生效、重启不丢。"""
+    s = _models_state()
+    aid = s.get("active") or "builtin"
+    if aid == "builtin":
+        return None
+    for c in s["configs"]:
+        if c["id"] == aid:
+            return {"base": c["base"], "key": c["key"], "model": c["model"]}
+    return None  # active 悬空(配置已删) → 回落墨自带
+
+
+def _mask_key(k):
+    return ("**" + k[-4:]) if len(k or "") >= 8 else "**"
+
+
+def _public_models():
+    """脱敏配置列表（reader / CLI list 用）。墨自带恒在首位、不可删。"""
+    s = _models_state()
+    builtin = {"id": "builtin", "name": "墨自带", "model": actor.MODEL_NAME,
+               "builtin": True, "key_set": bool(actor.MODEL_KEY)}
+    configs = [builtin] + [{"id": c["id"], "name": c["name"], "model": c["model"],
+                            "base": c["base"], "key_masked": _mask_key(c.get("key")),
+                            "added_at": c.get("added_at")} for c in s["configs"]]
+    aid = s.get("active") or "builtin"
+    if aid != "builtin" and not any(c["id"] == aid for c in s["configs"]):
+        aid = "builtin"  # 悬空同 _active_model 的回落语义
+    return {"configs": configs, "active": aid}
+
+
+def _ping_or_raise(ov):
+    """实测一份配置，失败转成人话错误（CLI/reader 直接给用户看）。"""
+    try:
+        return actor.ping(ov)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:200]
+        hint = {401: "（key 无效或没权限）", 404: "（base_url 或 model 名不对）",
+                429: "（限流/欠费）"}.get(e.code, "")
+        raise ValueError(f"实测失败 HTTP {e.code}{hint}：{body}")
+    except Exception as e:  # noqa: BLE001 — DNS/超时/拒连等,统一转人话
+        raise ValueError(f"实测失败：{e}")
+
+
+def ev_model_add(ev):
+    """加一份用户自配模型：先实测（1 次极小请求），通了才落盘并自动切换。
+    同名 = 更新（墨「再配一次」= 换 key/model，id 不变）。"""
+    name = (ev.get("name") or "").strip()
+    base = (ev.get("base") or "").strip().rstrip("/")
+    model_name = (ev.get("model") or "").strip()
+    key = (ev.get("key") or "").strip()
+    if not (name and base and model_name and key):
+        raise ValueError("缺参数：name / base / model / key 都要")
+    if name == "墨自带":
+        raise ValueError("这个名字留给内置配置了，换一个")
+    ms = _ping_or_raise({"base": base, "key": key, "model": model_name})
+    s = _models_state()
+    cfg = next((c for c in s["configs"] if c["name"] == name), None)
+    if cfg:
+        cfg.update({"base": base, "model": model_name, "key": key})
+    else:
+        cfg = {"id": "m_" + secrets.token_hex(3), "name": name, "base": base,
+               "model": model_name, "key": key, "added_at": int(time.time())}
+        s["configs"].append(cfg)
+    s["active"] = cfg["id"]
+    _save_models(s)
+    return {"config": {"id": cfg["id"], "name": name, "model": model_name,
+                       "key_masked": _mask_key(key)},
+            "active": cfg["id"], "latency_ms": ms}
+
+
+def _find_config(s, ref):
+    """按 id 或名字找配置（CLI 让墨用名字，reader 用 id）。"""
+    return next((c for c in s["configs"] if c["id"] == ref or c["name"] == ref), None)
+
+
+def ev_model_use(ev):
+    ref = ev.get("id") or ""
+    s = _models_state()
+    if ref in ("builtin", "墨自带"):
+        s["active"] = "builtin"
+        _save_models(s)
+        return {"active": "builtin", "name": "墨自带"}
+    cfg = _find_config(s, ref)
+    if not cfg:
+        raise ValueError("没有这份配置：%s" % ref)
+    s["active"] = cfg["id"]
+    _save_models(s)
+    return {"active": cfg["id"], "name": cfg["name"]}
+
+
+def ev_model_delete(ev):
+    ref = ev.get("id") or ""
+    if ref in ("builtin", "墨自带"):
+        raise ValueError("墨自带是内置配置，删不得")
+    s = _models_state()
+    cfg = _find_config(s, ref)
+    if not cfg:
+        raise ValueError("没有这份配置：%s" % ref)
+    s["configs"] = [c for c in s["configs"] if c["id"] != cfg["id"]]
+    if s.get("active") == cfg["id"]:
+        s["active"] = "builtin"  # 删掉在用的 → 回落墨自带
+    _save_models(s)
+    return {"deleted": cfg["id"], "name": cfg["name"], "active": s["active"]}
+
+
+def ev_model_test(ev):
+    """实测某份已存配置（或 builtin）。返回耗时；失败走统一人话错误。"""
+    ref = ev.get("id") or "builtin"
+    if ref in ("builtin", "墨自带"):
+        ov = None
+    else:
+        s = _models_state()
+        cfg = _find_config(s, ref)
+        if not cfg:
+            raise ValueError("没有这份配置：%s" % ref)
+        ov = {"base": cfg["base"], "key": cfg["key"], "model": cfg["model"]}
+    ms = _ping_or_raise(ov)
+    return {"latency_ms": ms, **actor.model_info(ov)}
+
+
 EVENTS = {
     "import_card": ev_import_card, "import_card_json": ev_import_card_json,
     "import_worldbook": ev_import_worldbook, "attach_worldbook": ev_attach_worldbook,
@@ -572,6 +735,8 @@ EVENTS = {
     "regenerate": ev_regenerate,
     "swipe": ev_swipe, "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
     "reflect": ev_reflect, "set_persona": ev_set_persona, "set_note": ev_set_note,
+    "model_add": ev_model_add, "model_use": ev_model_use,
+    "model_delete": ev_model_delete, "model_test": ev_model_test,
 }
 
 
@@ -632,7 +797,11 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/api/health":
-            return self._json(200, {"ok": True, "dry_run": False, **actor.model_info()})
+            # model_info 传 active override → health 反映当前实际生效的模型
+            return self._json(200, {"ok": True, "dry_run": False, **actor.model_info(_active_model())})
+        if path == "/api/models":
+            # 大模型配置列表(脱敏,key 永不出 server)——reader 管理面 + CLI model list 共用
+            return self._json(200, _public_models())
         if path == "/api/cards":
             return self._json(200, {"cards": _list("cards")})
         if path == "/api/worldbooks":
@@ -641,8 +810,10 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, {"productions": _list("productions"),
                                     "active": _get_state().get("active_production_id")})
         if path == "/api/actor":
-            # 演员技艺层(actor_self.md,会随演出/复盘积累的富提示词) + 活件版本(应用发版号)。
-            return self._json(200, {"actor_self": actor_self_text(), "version": liveware_version()})
+            # 演员技艺层(actor_self.md,会随演出/复盘积累的富提示词) + 活件版本(应用发版号)
+            # + 墨的 ClawChat 身份(「找墨复盘」深链用;拿不到为空,reader 隐入口)。
+            return self._json(200, {"actor_self": actor_self_text(), "version": liveware_version(),
+                                    "agent_user_id": agent_user_id()})
         if path == "/api/actor_card":
             # 演员卡聚合(生涯数值/亲密度/口味/年表)——纯聚合读,见 docs/design/actor-card.md。
             return self._json(200, actor_card_data())
@@ -721,7 +892,8 @@ class H(BaseHTTPRequestHandler):
         card, wbs, persona, note = _loadout(p)
         chunks = []
         try:
-            for delta in actor.perform_stream(card, actor_self_text(), wbs, persona, p["story"], note):
+            for delta in actor.perform_stream(card, actor_self_text(), wbs, persona, p["story"], note,
+                                              model=_active_model()):
                 chunks.append(delta)
                 if not self._sse({"delta": delta}):
                     return  # 客户端断开 → 不落盘

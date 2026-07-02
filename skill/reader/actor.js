@@ -86,4 +86,11 @@ async function load() {
       `<div class="acEmpty">读不到演员卡：${esc(e.message || e)}</div>`;
   }
 }
+
+// 从酒馆页内跳来(?from=console)才显返回——独立打开演员卡活件时无处可返(liveware-frontend §3)。
+if (new URLSearchParams(location.search).get('from') === 'console') {
+  const b = document.getElementById('acBack');
+  b.classList.remove('hidden');
+  b.onclick = () => history.back();
+}
 load();

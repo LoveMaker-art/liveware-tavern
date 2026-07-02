@@ -214,19 +214,41 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .lore .lk{color:var(--brandink);font-size:11px}
 .pmuted{font-size:12px;color:var(--muted)}
 
-/* 演员墨 · 技艺层(Task 5):随演出/复盘积累的富提示词,把「越演越懂你」做成可见特征 */
-.actorHd{display:flex;align-items:center;gap:7px;margin-bottom:9px}
-.actorHd .pHead{margin:0}
-.lvBadge{font-size:9.5px;padding:1px 6px;border-radius:999px;
-  background:var(--brandtint2);color:var(--brandink);white-space:nowrap}
-.knowHd{font-size:10px;color:var(--muted);margin-bottom:4px}
-.knowList{font-size:11.5px;color:var(--ink2);line-height:1.62;margin:0;padding:0;list-style:none}
-.knowList li{position:relative;padding-left:11px;margin-bottom:3px}
-.knowList li::before{content:"·";position:absolute;left:2px;color:var(--muted)}
-.growRow{font-size:10.5px;color:var(--muted);margin-top:9px;display:flex;align-items:center;gap:5px}
+/* 演员墨小节 = 两个入口(反馈 2026-07-02:摘要复读撤,演员卡承载完整呈现):
+   找墨复盘(深链跳与墨的会话)+ 墨的演员卡(/actor 页内直达)。.pLink = panel 通用入口行。 */
+.pLink{display:flex;align-items:center;gap:7px;padding:7px 0;font-size:12.5px;
+  color:var(--brandink);text-decoration:none;cursor:pointer}
+.pLink:hover{text-decoration:underline}
+.pLink:active{opacity:.7}
+.pLink svg{flex:0 0 auto;opacity:.85}
 .actorMore{margin-top:10px;font-size:11.5px;color:var(--brandink);background:none;border:0;
   padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .actorMore:hover{text-decoration:underline}
+/* 大模型配置(docs/design/model-config.md):panel 小节 = 当前配置一览,管理走 sheet。
+   列表行 tap=切换、trash=删(prodDel 同款渐进披露);**没有添加表单**——添加只走「对墨说」,
+   sheet 底部教育文案即入口(chat 即管理)。key 全程脱敏,页面永不见全 key。 */
+.mdlCur{font-size:13px;color:var(--ink);margin:0;font-weight:600}
+.mdlModel{font-size:11px;color:var(--muted);font-weight:400;margin-left:6px}
+.mcItem{position:relative;display:flex;align-items:center;gap:8px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:var(--radius2);margin-bottom:7px;cursor:pointer}
+.mcItem:hover,.mcItem:active{background:var(--bg)}
+.mcItem.active{border-color:var(--brand);background:var(--brandtint)}
+.mcInfo{flex:1;min-width:0}
+.mcName{font-size:13.5px;font-weight:600;color:var(--ink)}
+.mcMeta{font-size:11px;color:var(--muted);margin-top:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcCheck{flex:0 0 auto;color:var(--brandink);font-size:13px;opacity:0}
+.mcItem.active .mcCheck{opacity:1}
+.mcDel{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  border:0;background:none;color:var(--muted);cursor:pointer;
+  width:26px;height:26px;border-radius:7px;  /* 小件豁免,同 prodDel */
+  opacity:0;transition:opacity .12s, color .12s}
+.mcItem:hover .mcDel{opacity:.5}
+.mcDel:hover{opacity:1;background:var(--surface);color:var(--danger)}
+@media (hover:none){ .mcDel{opacity:.42;width:30px;height:30px} .mcDel:active{color:var(--danger)} }
+.mcHint{font-size:12px;color:var(--muted);line-height:1.7;margin:12px 2px 0}
+.mcHint .q{color:var(--ink2)}
+
 /* 活件版本 = 应用层标记(与演员是两回事),钉在面板最底 */
 .lwFoot{margin-top:auto;padding-top:13px;border-top:1px solid var(--line);
   font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
@@ -263,19 +285,11 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .sheetHd{display:flex;align-items:center;justify-content:space-between;
   padding:15px 18px 12px;border-bottom:1px solid var(--line)}
 .sheetHd .t{font-weight:600;font-size:14.5px;display:flex;align-items:center;gap:7px}
-.sheetHd .lvBadge{margin-left:2px}
 .sheetClose{border:0;background:none;color:var(--muted);font-size:17px;cursor:pointer;
   width:30px;height:30px;border-radius:var(--radius2)}
 .sheetClose:hover{background:var(--bg)}
 .sheetClose:active{background:var(--bg);color:var(--ink)}
 .sheetBody{overflow-y:auto;padding:14px 18px 20px}
-.md .mh{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;
-  color:var(--brandink);margin:17px 0 7px}
-.md .mh:first-child{margin-top:0}
-.md .mp{font-size:13px;color:var(--ink2);line-height:1.62;margin:0 0 6px;white-space:pre-wrap}
-.md .mli{font-size:13px;color:var(--ink2);line-height:1.62;margin:0 0 5px;
-  padding-left:13px;position:relative}
-.md .mli::before{content:"·";position:absolute;left:3px;color:var(--muted)}
 
 .hidden{display:none!important}
 
