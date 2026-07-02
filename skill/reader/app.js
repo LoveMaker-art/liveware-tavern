@@ -1,11 +1,12 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
+const t = I18N.t;  // 文案一律走 i18n.js 的 STRINGS(locale contract,liveware-frontend §i18n)
 const state = { cards: [], cardMap: {}, worldbooks: {}, productions: [], activeId: null, active: null,
   agentUserId: "", version: "", models: null, busy: false, abort: null, stick: true, _anchor: null };
 
 function esc(s) { return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
-function fmt(t) { return esc(t).replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>'); }
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), 2600); }
+function fmt(s) { return esc(s).replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>'); }
+function toast(msg) { const box = $("#toast"); box.textContent = msg; box.classList.remove("hidden"); clearTimeout(box._h); box._h = setTimeout(() => box.classList.add("hidden"), 2600); }
 function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
 
 // 内联图标(reader 不挂图标字体)——细描边,克制。
@@ -20,19 +21,19 @@ const SLIDERS_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"
 // 对话轮数 = 用户出手数(first_mes 是 char 开场,不算)。最近活跃 = story 末条时间。
 function countTurns(story) { return (story || []).filter((m) => m.role === "user").length; }
 function lastActivity(story, createdAt) {
-  let t = createdAt || 0;
-  (story || []).forEach((m) => { if (m.ts && m.ts > t) t = m.ts; });
-  return t ? relTime(t) : "";
+  let last = createdAt || 0;
+  (story || []).forEach((m) => { if (m.ts && m.ts > last) last = m.ts; });
+  return last ? relTime(last) : "";
 }
 function relTime(ts) {
   const d = Math.max(0, Date.now() / 1000 - ts);
-  if (d < 60) return "刚刚";
-  if (d < 3600) return Math.floor(d / 60) + " 分钟前";
-  if (d < 86400) return Math.floor(d / 3600) + " 小时前";
-  if (d < 172800) return "昨天";
-  if (d < 86400 * 8) return Math.floor(d / 86400) + " 天前";
+  if (d < 60) return t("justNow");
+  if (d < 3600) return t("minAgo", { n: Math.floor(d / 60) });
+  if (d < 86400) return t("hourAgo", { n: Math.floor(d / 3600) });
+  if (d < 172800) return t("yesterday");
+  if (d < 86400 * 8) return t("dayAgo", { n: Math.floor(d / 86400) });
   const dt = new Date(ts * 1000);
-  return (dt.getMonth() + 1) + " 月 " + dt.getDate() + " 日";
+  return t("monthDay", { m: dt.getMonth() + 1, d: dt.getDate() });
 }
 
 async function loadAll() {
@@ -48,7 +49,7 @@ async function loadAll() {
   state.version = ar.version || "";          // 活件版本(酒馆 app 自己的发版号)
   // 大模型配置(脱敏列表);旧 server 没这端点 → 兜一个只有墨自带的默认,面板不裸奔
   state.models = (mr && mr.configs) ? mr
-    : { configs: [{ id: "builtin", name: "墨自带", builtin: true }], active: "builtin" };
+    : { configs: [{ id: "builtin", builtin: true }], active: "builtin" };
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
   state.active = state.productions.find((p) => p.id === state.activeId) || null;
   renderRail(); renderStage(); renderPanel();
@@ -59,12 +60,12 @@ function renderRail() {
   ul.innerHTML = state.productions.map((p) => {
     const card = state.cardMap[p.card_id] || {};
     const turns = countTurns(p.story);
-    const meta = [card.name, turns > 0 ? turns + " 轮" : "新戏", lastActivity(p.story, p.created_at)]
-      .filter(Boolean).join(" · ");
+    const meta = [card.name, turns > 0 ? t("turnsShort", { n: turns }) : t("newPlay"),
+      lastActivity(p.story, p.created_at)].filter(Boolean).join(" · ");
     return `<li class="prodItem ${p.id === state.activeId ? "active" : ""}" data-id="${p.id}">
       <div class="prodName2">${esc(p.name)}</div>
       <div class="prodMeta">${esc(meta)}</div>
-      <button class="prodDel" data-del="${p.id}" aria-label="删除剧组" title="删除剧组">${TRASH_SVG}</button>
+      <button class="prodDel" data-del="${p.id}" aria-label="${esc(t("deleteProd"))}" title="${esc(t("deleteProd"))}">${TRASH_SVG}</button>
     </li>`;
   }).join("");
   ul.querySelectorAll(".prodItem").forEach((li) =>
@@ -76,12 +77,12 @@ function renderRail() {
 
 function renderStage() {
   const p = state.active;
-  $("#prodName").textContent = p ? p.name : "酒馆";
+  $("#prodName").textContent = p ? p.name : t("appTitle");
   const card = p ? (state.cardMap[p.card_id] || {}) : {};
-  $("#prodSub").textContent = card.name ? "墨 · " + card.name : "";   // 活件/演员归属(副标题)
+  $("#prodSub").textContent = card.name ? t("prodSubPrefix", { name: card.name }) : "";   // 活件/演员归属(副标题)
   $("#composer").classList.toggle("hidden", !p);  // 没开戏没处发:空态收掉输入框,导入引导是唯一动作
   const c = $("#convo");
-  if (!p) { c.innerHTML = `<div class="empty"><div class="emptyMark">✦</div><p>导入一张角色卡，开一场戏。</p><p class="hint">墨会入戏陪你演。</p></div>`; return; }
+  if (!p) { c.innerHTML = `<div class="empty"><div class="emptyMark">✦</div><p>${esc(t("emptyLead"))}</p><p class="hint">${esc(t("emptyHint"))}</p></div>`; return; }
   const turns = p.story.map((m, i) => turnHtml(m, i === p.story.length - 1)).join("");
   c.innerHTML = `<div class="thread">${turns}</div>`;
   bindCtls();
@@ -97,15 +98,15 @@ function turnHtml(m, isLast) {
   const active = m.active_alt || 0;
   const swipe = alts > 1
     ? `<span class="swipe">
-         <button data-act="swl" aria-label="上一条" ${active === 0 ? "disabled" : ""}>‹</button>
+         <button data-act="swl" aria-label="${esc(t("ariaPrev"))}" ${active === 0 ? "disabled" : ""}>‹</button>
          <span class="idx">${active + 1}/${alts}</span>
-         <button data-act="swr" aria-label="下一条" ${active === alts - 1 ? "disabled" : ""}>›</button>
+         <button data-act="swr" aria-label="${esc(t("ariaNext"))}" ${active === alts - 1 ? "disabled" : ""}>›</button>
        </span>` : "";
   // 重生成只挂最后一条 char(服务端只重演 story 末条;挂别处会重生成错的那条)
-  const regen = isLast ? `<button data-act="regen">重生成</button>` : "";
+  const regen = isLast ? `<button data-act="regen">${esc(t("regen"))}</button>` : "";
   return `<div class="turn char" data-id="${m.id}">
     <div class="body">${fmt(m.text)}</div>
-    <div class="ctl">${swipe}${regen}<button data-act="edit">编辑</button></div></div>`;
+    <div class="ctl">${swipe}${regen}<button data-act="edit">${esc(t("edit"))}</button></div></div>`;
 }
 
 function bindCtls() {
@@ -123,37 +124,43 @@ function bindCtls() {
 function provenanceHtml(card) {
   const creator = (card.creator || "").trim();
   const src = card.source || "";
-  if (creator) return `<div class="prov">${WORLD_SVG}${esc("来源 · " + creator)}</div>`;
-  if (src === "agent") return `<div class="prov"><span style="color:var(--brand)">✦</span>Agent 创作</div>`;
-  if (src === "chub") return `<div class="prov">${WORLD_SVG}来源 · Chub</div>`;
+  if (creator) return `<div class="prov">${WORLD_SVG}${esc(t("provSource", { name: creator }))}</div>`;
+  if (src === "agent") return `<div class="prov"><span style="color:var(--brand)">✦</span>${esc(t("provAgent"))}</div>`;
+  if (src === "chub") return `<div class="prov">${WORLD_SVG}${esc(t("provSource", { name: "Chub" }))}</div>`;
   return "";
 }
 
 // 演员墨小节:收敛为两个入口(反馈 2026-07-02——演员卡已承载 knows/年表的完整呈现,
 // panel 不再摘要复读)。① 找墨复盘 = 深链跳 ClawChat 与墨的会话(clawchat://u/{id}?chat=1,
-// 容器拦非同源导航 → openLinkExternally → in-app deep link;老版本 app 降级开资料页)。
-// 必须是真 <a> 链接——移动容器只放行带手势的 LINK_ACTIVATED,JS 跳转会被静默拦。
-// ② 墨的演员卡 = 同源 /actor 页内直达(?from=console 让演员卡显返回)。
+// 容器拦非同源导航 → openLinkExternally → in-app deep link;老版本 app 降级开资料页);
+// &draft= 带「复盘「剧组名」这场戏」预填进输入框(反馈 2026-07-02:给墨定位关键字;
+// 只填不发,发送权在用户)。必须是真 <a> 链接——移动容器只放行带手势的 LINK_ACTIVATED,
+// JS 跳转会被静默拦。② 墨的演员卡 = 同源 /actor 页内直达(?from=console 让演员卡显返回)。
 function actorSectionHtml() {
+  const draft = state.active
+    ? t("reflectDraft", { name: state.active.name }) : t("reflectDraftNoPlay");
   const reflectLink = state.agentUserId
-    ? `<a class="pLink" href="clawchat://u/${esc(state.agentUserId)}?chat=1">${CHAT_SVG}找墨复盘</a>`
+    ? `<a class="pLink" href="clawchat://u/${encodeURIComponent(state.agentUserId)}?chat=1&draft=${encodeURIComponent(draft)}">${CHAT_SVG}${esc(t("reflectWithMo"))}</a>`
     : "";  // 拿不到墨的身份(本地 dev 无容器 config)→ 隐入口
   return `<div class="pSection actorSec">
-    <div class="pHead">演员 · 墨</div>
+    <div class="pHead">${esc(t("pActor"))}</div>
     ${reflectLink}
-    <a class="pLink" href="/actor?from=console">${CARD_SVG}墨的演员卡</a>
+    <a class="pLink" href="/actor?from=console">${CARD_SVG}${esc(t("moActorCard"))}</a>
   </div>`;
 }
 
 // 大模型小节(panel):只报当前在用的配置;管理(切/删)+教育(怎么加)走 sheet。model-config.md。
+// 配置显示名:builtin 用本地化「墨自带」(server 的 name 字段是中文 canonical,给 CLI 用)
+function modelDisplayName(c) { return c.builtin ? t("modelBuiltin") : c.name; }
+
 function modelSectionHtml() {
   const ms = state.models || { configs: [], active: "builtin" };
   const cur = ms.configs.find((c) => c.id === ms.active) || ms.configs[0]
-    || { name: "墨自带", model: "" };
+    || { builtin: true, model: "" };
   return `<div class="pSection">
-    <div class="pHead">大模型</div>
-    <p class="mdlCur">${esc(cur.name)}<span class="mdlModel">${esc(cur.model || "")}</span></p>
-    <button class="actorMore" id="modelManage">${SLIDERS_SVG}切换 / 管理</button>
+    <div class="pHead">${esc(t("pModel"))}</div>
+    <p class="mdlCur">${esc(modelDisplayName(cur))}<span class="mdlModel">${esc(cur.model || "")}</span></p>
+    <button class="actorMore" id="modelManage">${SLIDERS_SVG}${esc(t("modelManage"))}</button>
   </div>`;
 }
 
@@ -163,16 +170,16 @@ function renderPanel() {
   const actorSec = actorSectionHtml();   // 演员墨跨剧组,始终显
   const modelSec = modelSectionHtml();   // 大模型配置跨剧组,始终显
   const lwFoot = state.version
-    ? `<div class="lwFoot" title="酒馆是一个活件：墨可以改它的功能与样子，再发一版"><span class="mark">✦</span>活件 · 酒馆 v${esc(state.version)}</div>`
+    ? `<div class="lwFoot" title="${esc(t("lwFootTip"))}"><span class="mark">✦</span>${esc(t("lwFoot", { v: state.version }))}</div>`
     : "";
   let sections;
   if (!p) {
-    sections = `<div class="pSection"><div class="pHead">角色</div><p class="pmuted">还没开戏。</p></div>`;
+    sections = `<div class="pSection"><div class="pHead">${esc(t("pCharacter"))}</div><p class="pmuted">${esc(t("pNoPlay"))}</p></div>`;
   } else {
     const card = state.cardMap[p.card_id] || {};
-    const tags = (card.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("");
+    const tags = (card.tags || []).map((x) => `<span class="tag">${esc(x)}</span>`).join("");
     const charSec = `<div class="pSection">
-      <div class="pHead">角色</div>
+      <div class="pHead">${esc(t("pCharacter"))}</div>
       <p class="cname">${esc(card.name || "")}</p>
       ${provenanceHtml(card)}
       <p class="cdesc">${esc(card.description || "")}</p>
@@ -181,9 +188,9 @@ function renderPanel() {
     const lore = [];
     (p.worldbook_ids || []).forEach((wid) => (state.worldbooks[wid]?.entries || []).forEach((e) => lore.push(e)));
     const loreSec = `<div class="pSection">
-      <div class="pHead">世界书</div>
-      ${lore.length ? lore.map((e) => `<div class="lore"><span class="lk">${esc((e.keys || []).join(" · ") || "常驻")}</span><br>${esc(e.content)}</div>`).join("")
-        : '<p class="pmuted">无</p>'}
+      <div class="pHead">${esc(t("pLorebook"))}</div>
+      ${lore.length ? lore.map((e) => `<div class="lore"><span class="lk">${esc((e.keys || []).join(" · ") || t("pAlwaysOn"))}</span><br>${esc(e.content)}</div>`).join("")
+        : `<p class="pmuted">${esc(t("pNone"))}</p>`}
     </div>`;
     sections = charSec + loreSec;
   }
@@ -198,7 +205,7 @@ async function switchProd(id) {
     const r = await bridge.event({ type: "switch_loadout", production_id: id });
     state.active = r.production; state.activeId = id;
     renderRail(); renderStage(); renderPanel();
-  } catch (e) { toast("切换失败：" + e.message); }
+  } catch (e) { toast(t("switchFailed", { err: e.message })); }
 }
 
 // 发送中按钮变「停止」:点它/回车 = 早停(中途停)。否则 = 发送。
@@ -210,7 +217,7 @@ function setComposerSending(sending) {
   const b = $("#sendBtn");
   b.classList.toggle("stop", sending);
   b.innerHTML = sending ? STOP_SVG : SEND_SVG;
-  b.setAttribute("aria-label", sending ? "停止" : "发送");
+  b.setAttribute("aria-label", sending ? t("ariaStop") : t("ariaSend"));
   if (sending) b.classList.remove("empty");
   else updateSendEmpty();
 }
@@ -229,7 +236,7 @@ async function send() {
   if (isTouch()) input.blur(); // 移动端:发送即收键盘,别盖住正在生成的回复(反馈 2026-06-30)
   state.active.story.push({ role: "user", text });
   renderStage();
-  $(".thread").insertAdjacentHTML("beforeend", `<div class="turn char" id="think"><div class="body thinking">墨正在入戏…</div></div>`);
+  $(".thread").insertAdjacentHTML("beforeend", `<div class="turn char" id="think"><div class="body thinking">${esc(t("thinking"))}</div></div>`);
   anchorTurn(lastUserTurn(), true); // 锚到「我刚输入的那条」(新回合,重置 stick)
   const ev = { type: "send_message", production_id: state.active.id, text };
   let acc = "";
@@ -261,7 +268,7 @@ async function send() {
     renderStage();
     anchorTurn(lastUserTurn()); // 回复就位:沿用锚定(尊重用户生成中途的上滚)
   } catch (e) {
-    $("#think")?.remove(); toast("生成失败：" + e.message);
+    $("#think")?.remove(); toast(t("genFailed", { err: e.message }));
     state.active.story.pop(); renderStage();
     input.value = text; autoGrow(input); // 失败不丢已输入文字,可直接重发(§4)
   } finally {
@@ -279,7 +286,7 @@ async function regenerate() {
     state.active.story[state.active.story.length - 1] = r.message;
     renderStage();
     anchorTurn(lastUserTurn(), true); // 重生成:重新锚到我的话,新回复在下方
-  } catch (e) { toast("重生成失败：" + e.message); }
+  } catch (e) { toast(t("regenFailed", { err: e.message })); }
   finally { state.busy = false; }
 }
 
@@ -294,7 +301,7 @@ async function swipe(id, dir) {
   try {
     await bridge.event({ type: "swipe", production_id: state.active.id, message_id: id, dir });
   } catch (e) {
-    m.active_alt = cur; m.text = m.alts[cur]; renderStage(); toast("切换失败：" + e.message);
+    m.active_alt = cur; m.text = m.alts[cur]; renderStage(); toast(t("switchFailed", { err: e.message }));
   }
 }
 
@@ -310,7 +317,7 @@ function editMsg(id) {
   ta.className = "editbox"; ta.value = m.text;
   const acts = document.createElement("div");
   acts.className = "editacts";
-  acts.innerHTML = `<button class="save">保存</button><button class="cancel">取消</button>`;
+  acts.innerHTML = `<button class="save">${esc(t("save"))}</button><button class="cancel">${esc(t("cancel"))}</button>`;
   body.style.display = "none"; if (ctl) ctl.style.display = "none";
   turn.appendChild(ta); turn.appendChild(acts);
   growEdit(ta); ta.focus();
@@ -321,7 +328,7 @@ function editMsg(id) {
       await bridge.event({ type: "edit_message", production_id: state.active.id, message_id: id, text: v });
       m.text = v; if (Array.isArray(m.alts)) m.alts[m.active_alt || 0] = v;
       renderStage();
-    } catch (e) { toast("编辑失败：" + e.message); }
+    } catch (e) { toast(t("editFailed", { err: e.message })); }
   };
   ta.oninput = () => growEdit(ta);
   ta.onkeydown = (e) => {
@@ -345,28 +352,28 @@ function fileToB64(file) {
 
 async function importCard(file) {
   if (!file) return;
-  toast("解析角色卡…");
+  toast(t("parsingCard"));
   try {
     const b64 = await fileToB64(file);
     const r = await bridge.event({ type: "import_card", png_base64: b64 });
     await loadAll();
-    toast("已导入：" + r.card.name);
+    toast(t("imported", { name: r.card.name }));
     await newProductionFrom(r.card.id);
-  } catch (e) { toast("导入失败：" + e.message); }
+  } catch (e) { toast(t("importFailed", { err: e.message })); }
 }
 
 // 粘贴卡 JSON 导入(import_card_json):macOS 容器文件选择器是死的,这是纯 web 旁路。
 async function importCardJson(raw) {
   let card;
   try { card = JSON.parse(raw); }
-  catch (_) { toast("不是合法的角色卡 JSON"); return; }
-  toast("解析角色卡…");
+  catch (_) { toast(t("badCardJson")); return; }
+  toast(t("parsingCard"));
   try {
     const r = await bridge.event({ type: "import_card_json", card });
     await loadAll();
-    toast("已导入：" + r.card.name);
+    toast(t("imported", { name: r.card.name }));
     await newProductionFrom(r.card.id);
-  } catch (e) { toast("导入失败：" + e.message); }
+  } catch (e) { toast(t("importFailed", { err: e.message })); }
 }
 
 // 拖入 PNG(import_card)/JSON(import_card_json)——另一条不依赖文件选择器的入口。
@@ -386,7 +393,7 @@ function wireDropImport() {
     if (!file) return;
     if (/\.png$/i.test(file.name) || file.type === "image/png") importCard(file);
     else if (/\.json$/i.test(file.name) || file.type === "application/json") importCardJson(await file.text());
-    else toast("拖入 PNG 角色卡或卡 JSON");
+    else toast(t("dropWrongType"));
   });
 }
 
@@ -404,12 +411,12 @@ async function newProductionFrom(cardId) {
   try {
     const r = await bridge.event({ type: "create_production", card_id: cardId, worldbook_ids: wbs, name: card.name });
     await loadAll(); switchProd(r.production.id);
-  } catch (e) { toast("建剧组失败：" + e.message); }
+  } catch (e) { toast(t("createProdFailed", { err: e.message })); }
 }
 
 function showCardPicker() {
   const box = $("#cardPicker");
-  if (!state.cards.length) { toast("先导入一张角色卡"); return; }
+  if (!state.cards.length) { toast(t("importFirst")); return; }
   box.innerHTML = state.cards.map((c) => `<div class="cardPick" data-id="${c.id}">${esc(c.name)}</div>`).join("");
   box.classList.toggle("hidden");
   box.querySelectorAll(".cardPick").forEach((d) => d.onclick = () => { box.classList.add("hidden"); newProductionFrom(d.dataset.id); });
@@ -458,13 +465,14 @@ function closeModal() {
 function modalEsc(e) { if (e.key === "Escape") closeModal(); }
 
 // 二次确认(不可逆动作):返回 Promise<bool>。背板/Esc/取消 → false。
-function confirmDialog({ title, body, confirmLabel = "删除" }) {
+function confirmDialog({ title, body, confirmLabel }) {
+  confirmLabel = confirmLabel || t("delete");
   return new Promise((resolve) => {
     let decided = false;
     const card = el("div", "modalCard");
     card.innerHTML = `<p class="modalTitle">${esc(title)}</p>
       <p class="modalBody">${esc(body)}</p>
-      <div class="modalActs"><button class="mBtnCancel">取消</button>
+      <div class="modalActs"><button class="mBtnCancel">${esc(t("cancel"))}</button>
       <button class="mBtnDanger">${esc(confirmLabel)}</button></div>`;
     openModal(card, () => { if (!decided) resolve(false); });
     const done = (v) => { decided = true; closeModal(); resolve(v); };
@@ -477,16 +485,15 @@ async function askDeleteProduction(id) {
   const p = state.productions.find((x) => x.id === id);
   if (!p) return;
   const ok = await confirmDialog({
-    title: `删除「${p.name}」？`,
-    body: "这场戏的全部对话记录会一起删除，且无法恢复。",
-    confirmLabel: "删除",
+    title: t("prodDeleteTitle", { name: p.name }),
+    body: t("prodDeleteBody"),
   });
   if (!ok) return;
   try {
     await bridge.event({ type: "delete_production", production_id: id });
     await loadAll();   // server 已切好 active,loadAll 重渲染
-    toast("已删除剧组");
-  } catch (e) { toast("删除失败：" + e.message); }
+    toast(t("prodDeleted"));
+  } catch (e) { toast(t("prodDeleteFailed", { err: e.message })); }
 }
 
 // ---- 大模型配置管理(model-config.md):tap 行=切换、trash=删;添加只走「对墨说」----
@@ -501,8 +508,8 @@ async function refreshModels() {
 function openModelSheet() {
   closeDrawers();
   const card = el("div", "modalCard sheetCard");
-  card.innerHTML = `<div class="sheetHd"><span class="t">大模型</span>
-      <button class="sheetClose" aria-label="关闭">✕</button></div>
+  card.innerHTML = `<div class="sheetHd"><span class="t">${esc(t("modelSheetTitle"))}</span>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">✕</button></div>
     <div class="sheetBody"><div id="mcBody"></div></div>`;
   openModal(card);
   card.querySelector(".sheetClose").onclick = closeModal;
@@ -515,18 +522,16 @@ function renderModelSheet() {
   const ms = state.models || { configs: [], active: "builtin" };
   const rows = ms.configs.map((c) => {
     const meta = c.builtin
-      ? `${c.model || ""} · 调用墨的大模型,开箱即用`
-      : `${c.model} · key ${c.key_masked || "**"}`;
+      ? t("modelBuiltinMeta", { model: c.model || "" })
+      : t("modelKeyMeta", { model: c.model, mask: c.key_masked || "**" });
     const del = c.builtin ? ""
-      : `<button class="mcDel" data-del="${c.id}" aria-label="删除配置" title="删除配置">${TRASH_SVG}</button>`;
+      : `<button class="mcDel" data-del="${c.id}" aria-label="${esc(t("ariaDeleteConfig"))}" title="${esc(t("ariaDeleteConfig"))}">${TRASH_SVG}</button>`;
     return `<div class="mcItem ${c.id === ms.active ? "active" : ""}" data-use="${c.id}">
-      <div class="mcInfo"><div class="mcName">${esc(c.name)}</div><div class="mcMeta">${esc(meta)}</div></div>
+      <div class="mcInfo"><div class="mcName">${esc(modelDisplayName(c))}</div><div class="mcMeta">${esc(meta)}</div></div>
       <span class="mcCheck">✓</span>${del}</div>`;
   }).join("");
   // 教育文案即「添加入口」:没有表单,配置由墨代办(实测通过才落盘)——chat 即管理。
-  box.innerHTML = rows + `<p class="mcHint">想用自己的 API？对墨说：<br>
-    <span class="q">「帮我配上 DeepSeek，key 是 sk-…」</span><br>
-    墨认识市面上主流的大模型服务，会先实测、通了才保存，存好即刻生效。</p>`;
+  box.innerHTML = rows + `<p class="mcHint">${t("modelHint")}</p>`;
   box.querySelectorAll("[data-use]").forEach((d) => d.onclick = () => useModel(d.dataset.use));
   box.querySelectorAll("[data-del]").forEach((b) =>
     b.onclick = (e) => { e.stopPropagation(); askDeleteModel(b.dataset.del); });
@@ -541,7 +546,7 @@ async function useModel(id) {
     await bridge.event({ type: "model_use", id });
   } catch (e) {
     ms.active = prev; renderModelSheet(); renderPanel();
-    toast("切换失败：" + e.message);
+    toast(t("modelSwitchFailed", { err: e.message }));
   }
 }
 
@@ -550,16 +555,15 @@ async function askDeleteModel(id) {
   if (!c) return;
   // confirmDialog 与 sheet 共用 #modal(确认框顶掉列表),答完重开 sheet 回到列表
   const ok = await confirmDialog({
-    title: `删除「${c.name}」？`,
-    body: "这份 API 配置会被删除。正在用它的话，会切回墨自带。",
-    confirmLabel: "删除",
+    title: t("modelDeleteTitle", { name: modelDisplayName(c) }),
+    body: t("modelDeleteBody"),
   });
   if (ok) {
     try {
       await bridge.event({ type: "model_delete", id });
       await refreshModels();
-      toast("已删除配置");
-    } catch (e) { toast("删除失败：" + e.message); }
+      toast(t("modelDeleted"));
+    } catch (e) { toast(t("modelDeleteFailed", { err: e.message })); }
   }
   openModelSheet();
 }
@@ -580,6 +584,8 @@ function keyboardInset() {
 }
 
 function wire() {
+  I18N.applyStatic();  // 静态 data-i18n 节点按解析出的语言填一遍(html 里的中文只是闪现兜底)
+  $("#stage").dataset.drophint = t("dropHint");  // 拖入高亮的文案(CSS content:attr 读)
   $("#composer").onsubmit = (e) => { e.preventDefault(); submitOrStop(); };
   const input = $("#input");
   input.oninput = (e) => { autoGrow(e.target); updateSendEmpty(); };
@@ -616,4 +622,4 @@ function wire() {
 
 keyboardInset();
 wire();
-loadAll().catch((e) => toast("加载失败：" + e.message));
+loadAll().catch((e) => toast(t("loadFailed", { err: e.message })));

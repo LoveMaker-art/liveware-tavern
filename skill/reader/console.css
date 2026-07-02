@@ -121,8 +121,9 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .cardPick:active{border-color:var(--brand);color:var(--ink)}
 
 #stage{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);position:relative}
-/* 拖入角色卡(PNG/JSON)高亮:不依赖文件选择器的另一条纯 web 入口 */
-#stage.dragging::after{content:"松手导入角色卡（PNG / JSON）";position:absolute;inset:10px;z-index:4;
+/* 拖入角色卡(PNG/JSON)高亮:不依赖文件选择器的另一条纯 web 入口。
+   文案从 data-drophint 读(app.js wire 时按语言设,CSS 里不写死文案——i18n) */
+#stage.dragging::after{content:attr(data-drophint);position:absolute;inset:10px;z-index:4;
   display:flex;align-items:center;justify-content:center;border:2px dashed var(--brand);
   border-radius:var(--radius);background:var(--brandtint);color:var(--brandink);font-size:14px;pointer-events:none}
 /* 书页质感:窄栏居中(阅读宽度)、段落留白大,叙事压过「聊天 app」感(沉静/空气感) */

@@ -13,7 +13,7 @@ import threading
 import time
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -115,6 +115,21 @@ INTIMACY_LADDER = [("初见", 0), ("相识", 15), ("搭档", 40), ("默契", 100
 INTIMACY_BLURB = {"初见": "刚认识，还在摸你的脾气", "相识": "演过几场，记住了你几样",
                   "搭档": "有默契雏形，接得住你的球", "默契": "一个眼神就懂，越演越顺",
                   "知己": "最懂你怎么玩的那个演员"}
+# 级名/blurb 的多语言表(locale contract:reader 带 ?lang= 来取——它们是 UI 标签,不是内容;
+# 中文名是 canonical(技艺层/CLI 用),其他语言只在下发时映射)。
+# 给二创墨的「加语言」入口②:reader 的 STRINGS 加完,在这两张表加同 code 的项(全量 5 级),
+# 缺表回落 en。①在 reader/i18n.js,教程见 SKILL.md「帮用户加界面语言」。
+INTIMACY_LEVEL_I18N = {
+    "en": {"初见": "First Meeting", "相识": "Acquainted", "搭档": "Partners",
+           "默契": "In Sync", "知己": "Confidant"},
+}
+INTIMACY_BLURB_I18N = {
+    "en": {"初见": "Just met — still learning your rhythms",
+           "相识": "A few scenes in — noted a few of your tastes",
+           "搭档": "Early chemistry — I can catch what you throw",
+           "默契": "One glance is enough — smoother every scene",
+           "知己": "The actor who knows exactly how you play"},
+}
 
 
 def _sections(md):
@@ -167,7 +182,7 @@ def parse_actor_self(md):
     return tagline, knows, timeline
 
 
-def _intimacy(score):
+def _intimacy(score, lang="zh"):
     cur, cur_thr = INTIMACY_LADDER[0]
     nxt, nxt_thr = None, None
     for i, (name, thr) in enumerate(INTIMACY_LADDER):
@@ -177,17 +192,25 @@ def _intimacy(score):
                 nxt, nxt_thr = INTIMACY_LADDER[i + 1]
             else:
                 nxt, nxt_thr = None, None
+    lvl_map = INTIMACY_LEVEL_I18N.get(lang) or INTIMACY_LEVEL_I18N["en"]
+    blurb_map = INTIMACY_BLURB_I18N.get(lang) or INTIMACY_BLURB_I18N["en"]
+
+    def loc(name):  # 级名本地化(zh 是 canonical,其他查表;缺表/缺项回落 en/原名)
+        return name if lang == "zh" or name is None else lvl_map.get(name, name)
+    blurb = (INTIMACY_BLURB if lang == "zh" else blurb_map).get(cur, "")
     if nxt_thr is None:  # 已到顶
-        return {"level": cur, "score": score, "next": None, "to_next": 0, "progress": 1.0,
-                "blurb": INTIMACY_BLURB.get(cur, "")}
+        return {"level": loc(cur), "score": score, "next": None, "to_next": 0, "progress": 1.0,
+                "blurb": blurb}
     span = nxt_thr - cur_thr
     prog = 0.0 if span <= 0 else max(0.0, min(1.0, (score - cur_thr) / span))
-    return {"level": cur, "score": score, "next": nxt, "to_next": nxt_thr - score,
-            "progress": round(prog, 3), "blurb": INTIMACY_BLURB.get(cur, "")}
+    return {"level": loc(cur), "score": score, "next": loc(nxt), "to_next": nxt_thr - score,
+            "progress": round(prog, 3), "blurb": blurb}
 
 
-def actor_card_data():
-    """演员卡聚合数据（/api/actor_card）。全部从现有 state 算，无写、无新事件。"""
+def actor_card_data(lang="zh"):
+    """演员卡聚合数据（/api/actor_card?lang=）。全部从现有 state 算，无写、无新事件。
+    lang 只影响 server 下发的 UI 标签（级名/blurb/name 兜底）；内容层（口味/年表/tagline）
+    是墨写的东西，不翻。"""
     prods = _list("productions")
     total_turns, total_words, role_ids, debut = 0, 0, set(), None
     roles_played = {}  # card_id -> 轮数（v1.1 角色名录）
@@ -210,7 +233,7 @@ def actor_card_data():
             roles_played[cid] = roles_played.get(cid, 0) + uturns
     debut_days = 0 if debut is None else max(0, (int(time.time()) - int(debut)) // 86400)
     tagline, knows, timeline = parse_actor_self(actor_self_text())
-    intim = _intimacy(total_turns + INTIMACY_W * len(timeline))
+    intim = _intimacy(total_turns + INTIMACY_W * len(timeline), lang)
     intim["turns"] = total_turns
     intim["log"] = len(timeline)
     cards = {c["id"]: c for c in _list("cards")}
@@ -222,8 +245,10 @@ def actor_card_data():
             if t not in specs:
                 specs.append(t)
     return {
-        "name": "墨",
-        "tagline": tagline or "能钻进任何角色里的人",
+        # name/tagline 兜底:zh 之外统一 en 写法(加语言时通常不用动——名字/tagline 是内容层)
+        "name": "墨" if lang == "zh" else "Mo",
+        "tagline": tagline or ("能钻进任何角色里的人"
+                               if lang == "zh" else "The actor who can step into any role"),
         "career": {"debut_days": debut_days, "productions": len(prods),
                    "turns": total_turns, "words": total_words, "roles": len(role_ids)},
         "intimacy": intim,
@@ -816,7 +841,10 @@ class H(BaseHTTPRequestHandler):
                                     "agent_user_id": agent_user_id()})
         if path == "/api/actor_card":
             # 演员卡聚合(生涯数值/亲密度/口味/年表)——纯聚合读,见 docs/design/actor-card.md。
-            return self._json(200, actor_card_data())
+            # ?lang= 只换 UI 标签(级名/blurb);非 zh 一律走 en 表(回落链对齐 reader)。
+            q = parse_qs(urlparse(self.path).query)
+            lang = (q.get("lang", ["zh"])[0] or "zh")[:2].lower()
+            return self._json(200, actor_card_data(lang))
         # static reader（*.html 走版本化注入,破 relay 的 immutable 缓存）
         rel = path.lstrip("/") or "index.html"
         if rel == "index.html":

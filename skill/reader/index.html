@@ -7,43 +7,45 @@
   <title>酒馆</title>
   <link rel="stylesheet" href="console.css" />
 </head>
-<body>
+<!-- 文案 i18n:静态节点走 data-i18n*(i18n.js applyStatic 填),动态节点 app.js 用 t()。
+     HTML 里保留中文 = JS 前的闪现兜底,权威文案在 i18n.js 的 STRINGS。 -->
+<body data-doc-title="docTitleConsole">
   <header id="topbar">
     <!-- 顶栏图标 = 内联细描边 SVG(与 app.js 图标同族;字符 ☰/ⓘ 跨平台字体渲染不稳且视觉重量不配对) -->
-    <button id="railToggle" class="iconbtn" aria-label="剧组">
+    <button id="railToggle" class="iconbtn" aria-label="剧组" data-i18n-aria="ariaRail">
       <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <div class="topTitle">
       <div class="tline"><span class="mark">✦</span><span id="prodName" class="prodName">酒馆</span></div>
       <div id="prodSub" class="prodSub"></div>
     </div>
-    <button id="panelToggle" class="iconbtn" aria-label="角色与世界书">
+    <button id="panelToggle" class="iconbtn" aria-label="角色与世界书" data-i18n-aria="ariaPanel">
       <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 11.2v5"/><circle cx="12" cy="7.7" r=".6" fill="currentColor" stroke="none"/></svg>
     </button>
   </header>
 
   <div id="layout">
     <aside id="rail" class="pane">
-      <div class="panehd">剧组</div>
+      <div class="panehd" data-i18n="railHead">剧组</div>
       <ul id="prodList" class="prodList"></ul>
       <!-- 一个主动作 + 一行次级链接:导入是主路径(容器文件选择器已通,2026-06-30);
            粘贴 JSON 是无选择器环境的旁路、从已有卡新建是复用路,都不配常驻大按钮 -->
       <div class="railacts">
         <label class="btn">
-          <span>导入角色卡</span>
+          <span data-i18n="importCard">导入角色卡</span>
           <input id="cardFile" type="file" accept="image/png" hidden />
         </label>
         <div class="railsub">
-          <button id="pasteCardBtn">粘贴卡 JSON</button>
+          <button id="pasteCardBtn" data-i18n="pasteJson">粘贴卡 JSON</button>
           <span class="dot">·</span>
-          <button id="newProdBtn">从已有卡新建</button>
+          <button id="newProdBtn" data-i18n="newFromCards">从已有卡新建</button>
         </div>
       </div>
       <div id="pastePanel" class="pastePanel hidden">
-        <textarea id="pasteBox" placeholder="粘贴角色卡 JSON（V1/V2/V3，可含 character_book）…"></textarea>
+        <textarea id="pasteBox" placeholder="粘贴角色卡 JSON（V1/V2/V3，可含 character_book）…" data-i18n-placeholder="pastePlaceholder"></textarea>
         <div class="pasteActs">
-          <button id="pasteImport" class="btn">导入</button>
-          <button id="pasteCancel" class="btn ghost">取消</button>
+          <button id="pasteImport" class="btn" data-i18n="pasteImport">导入</button>
+          <button id="pasteCancel" class="btn ghost" data-i18n="cancel">取消</button>
         </div>
       </div>
       <div id="cardPicker" class="cardPicker hidden"></div>
@@ -53,13 +55,13 @@
       <div id="convo" class="convo">
         <div id="empty" class="empty">
           <div class="emptyMark">✦</div>
-          <p>导入一张角色卡，开一场戏。</p>
-          <p class="hint">墨会入戏陪你演。</p>
+          <p data-i18n="emptyLead">导入一张角色卡，开一场戏。</p>
+          <p class="hint" data-i18n="emptyHint">墨会入戏陪你演。</p>
         </div>
       </div>
       <form id="composer" class="composer">
-        <textarea id="input" rows="1" placeholder="续写这一场…"></textarea>
-        <button id="sendBtn" type="submit" class="sendbtn" aria-label="发送"></button>
+        <textarea id="input" rows="1" placeholder="续写这一场…" data-i18n-placeholder="composerPlaceholder"></textarea>
+        <button id="sendBtn" type="submit" class="sendbtn" aria-label="发送" data-i18n-aria="ariaSend"></button>
       </form>
     </main>
 
@@ -72,6 +74,7 @@
   <div id="modal" class="modal hidden"></div>
   <div id="toast" class="toast hidden"></div>
 
+  <script src="i18n.js"></script>
   <script src="bridge.js"></script>
   <script src="app.js"></script>
 </body>

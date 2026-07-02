@@ -58,7 +58,7 @@
 
 **中栏 · 舞台（stage）**：`.convo`>`.thread`（窄栏居中 486px 阅读宽；**回合节奏** = 同回合内「我的话→墨的回复」14px 收紧、回合间 30px 放松——段落 vs 场景的呼吸层次）· `.turn`（`.char` 干净文本块 / `.user` 后退气泡）· `.body`/`.nar`（叙述 = serif 斜体 muted）· `.ctl`（渐进披露控制条；触屏热区用 padding+负 margin 撑到 ~28px，视觉行高不变）· `.swipe`（`‹ i/n ›` 备选回复）· `.editbox`/`.editacts`（行内编辑）· `.composer`>`textarea`+`.sendbtn`（`.empty` 静默 / `.stop` 早停；**空态整体隐藏**——没开戏没处发，导入引导是唯一动作）· `.empty`/`.emptyMark`（空态）· `.thinking`（生成中）。
 
-**右栏 · 信息面板（panel，前缀 `p*`）**：`.pSection`/`.pHead`（分区 + 小标题）· 角色：`.cname`/`.prov`（来源出处）/`.cdesc`/`.ctags`>`.tag` · 世界书：`.lore`/`.lk` · **演员墨**（反馈 2026-07-02 收敛为两个入口——摘要/手记撤，完整呈现归演员卡）：`.pLink`（panel 通用入口行）× 2 = **找墨复盘**（深链 `clawchat://u/{id}?chat=1` 跳与墨的会话；须是真 `<a>`——移动容器只放行带手势的链接点击；拿不到墨身份时隐）+ **墨的演员卡**（同源 `/actor?from=console` 页内直达）· `.actorMore`（小字操作钮，「切换 / 管理」在用）· **大模型**（`model-config.md`）：`.mdlCur`/`.mdlModel`（当前配置一览）+ 管理 sheet `.mcItem`/`.mcName`/`.mcMeta`/`.mcCheck`/`.mcDel`（tap=切换、trash=删，`prodDel` 同款渐进披露）/`.mcHint`（教育文案 = 添加入口，**没有表单**——添加只走「对墨说」）· `.lwFoot`（活件版本 footer）。
+**右栏 · 信息面板（panel，前缀 `p*`）**：`.pSection`/`.pHead`（分区 + 小标题）· 角色：`.cname`/`.prov`（来源出处）/`.cdesc`/`.ctags`>`.tag` · 世界书：`.lore`/`.lk` · **演员墨**（反馈 2026-07-02 收敛为两个入口——摘要/手记撤，完整呈现归演员卡）：`.pLink`（panel 通用入口行）× 2 = **找墨复盘**（深链 `clawchat://u/{id}?chat=1&draft=复盘「剧组名」这场戏` 跳与墨的会话，draft 预填进输入框给墨定位关键字、只填不发；须是真 `<a>`——移动容器只放行带手势的链接点击；拿不到墨身份时隐）+ **墨的演员卡**（同源 `/actor?from=console` 页内直达）· `.actorMore`（小字操作钮，「切换 / 管理」在用）· **大模型**（`model-config.md`）：`.mdlCur`/`.mdlModel`（当前配置一览）+ 管理 sheet `.mcItem`/`.mcName`/`.mcMeta`/`.mcCheck`/`.mcDel`（tap=切换、trash=删，`prodDel` 同款渐进披露）/`.mcHint`（教育文案 = 添加入口，**没有表单**——添加只走「对墨说」）· `.lwFoot`（活件版本 footer）。
 
 **弹层**：`.modal`>`.modalCard`（二次确认：`.modalActs`/`.mBtnCancel`/`.mBtnDanger`；浮现带缓动 `modalIn`）· `.sheetCard`（大卡如大模型管理；**打开前先收抽屉**——别叠三层灰）· `.hidden` 通用隐藏。
 
@@ -74,6 +74,16 @@
 - **BEM-lite 小驼峰**：块 + 元素扁平命名（`.mcItem`/`.acKnow`），不堆多级。
 - **状态类固定词**：`.active`（选中）/`.open`（抽屉开）/`.hidden`（隐）/`.empty`（无内容静默）/`.stop`（发送中）/`.ghost`（次级）/`.dragging`（拖入高亮）。复用这套，别新造同义词。
 - **id 给唯一节点，class 给样式/复用**：JS 抓取用 `#id`，视觉用 `.class`。
+
+---
+
+## i18n（界面语言，2026-07-02）
+
+**机制**：全部界面文案住 `reader/i18n.js` 的 `STRINGS`（纯 JS 字典，`t(key, params)` 取用）；静态节点走 `data-i18n*` 属性（`applyStatic` 填），动态节点 JS 里 `t()` 拼。语言由 **locale contract** 决定：容器打开活件时 URL 带 `?lang=<app语言>`（clawchat 仓 `docs/liveware/container.md` §语言）→ 存 sessionStorage（页内导航不丢）→ `navigator.language` 兜底（独立浏览器）→ zh；**未收录语言回落 en**（对齐 ClawChat 策略）。server 下发的 UI 标签（亲密度级名/blurb）由 `/api/actor_card?lang=` 按语言给（`INTIMACY_*_I18N` 表）。
+
+**边界**：i18n 只管**界面家具**。墨写的东西（口味/年表内容/tagline/对话生成/角色卡）是**内容层，不翻**——内容语言跟人走，不跟界面走。
+
+**二创守则**（墨加语言 = SKILL.md「帮用户加界面语言」）：① 加 locale = `STRINGS` 加全量 key 对象（拿 en 当模板）+ server 两张 `INTIMACY_*_I18N` 表加同 code 项；② 「Liveware」「✦」品牌锚不翻，「墨」用该语言自然写法（en=Mo）；③ `{x}` 插值占位原样保留；④ **CSS 里不写文案**（拖入提示走 `content:attr(data-drophint)`，JS 按语言设）；⑤ 不做语言切换按钮——语言选择是自动的（跟 ClawChat 设置）。
 
 ---
 

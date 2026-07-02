@@ -1,7 +1,7 @@
 ---
 name: tavern
 description: "酒馆角色扮演：从 Chub 找角色卡/世界书，干净导入到沉浸控制台建剧组；可帮用户配自定义大模型 API。"
-version: 1.2.0
+version: 1.3.0
 author: ClawChat Tavern
 license: MIT
 platforms: [linux, macos, windows]
@@ -60,6 +60,15 @@ python3 /opt/data/tavern/tools/tavern_cli.py <命令>
 | Ollama（用户本机） | `http://127.0.0.1:11434/v1` | 用户装了啥用啥；key 随便填（如 `ollama`） |
 
 **守则**：① 协议只有 OpenAI-compatible 一种（上表全是，Anthropic/Gemini 走各自兼容层）。② **key 只落酒馆 state 文件（0600），控制台界面只显尾 4 位**；你跟用户确认时同样**只报名字和尾 4 位，永远不要复述完整 key**，也不要把 key 发给酒馆之外的任何地方。③ 用户说「换回默认/原来的」→ `model use 墨自带`。④ 配置在控制台右栏「大模型」里用户自己也能切/删——你配完可以顺嘴提一句。
+
+## 帮用户加界面语言(i18n 二创)
+
+酒馆界面内置 **zh / en**,跟随 ClawChat 的 app 语言自动切换(容器打开活件时在 URL 带 `?lang=`)。用户想要**更多语言**(「给酒馆加个日语界面」"add Japanese to the tavern")→ 这是你的二创活,两步:
+
+1. **reader 全部界面文案**:编辑 `/opt/data/tavern/reader/i18n.js` 的 `STRINGS`,加一个 locale 对象(如 `ja: { … }`)——**拿 `en` 对象当模板,全量 key 逐条翻**,别漏(缺 key 会回落 en,但别依赖回落)。
+2. **演员卡的养成标签**(亲密度级名/一句话):编辑 `/opt/data/tavern/server.py` 的 `INTIMACY_LEVEL_I18N` / `INTIMACY_BLURB_I18N`,加同 code 的项(5 级全量)。
+
+**守则**:①「Liveware」「✦」是品牌锚不翻;「墨」用该语言的自然写法(en=Mo,日语可用「墨(ボク)」之类,跟用户商量)。② 带 `{x}` 的是插值占位,原样保留。③ 改完升本文件 frontmatter 的 `version` 发一版,并告诉用户「重开酒馆生效」。④ 你只管加语言包——语言的**选择**是自动的(跟 ClawChat 设置),不要做语言切换按钮。
 
 ## 卡 / 世界书去哪找
 
