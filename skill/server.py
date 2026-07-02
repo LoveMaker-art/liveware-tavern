@@ -853,10 +853,10 @@ class H(BaseHTTPRequestHandler):
             fwd = self.headers.get("X-Forwarded-Host", "") or self.headers.get("X-Original-Host", "")
             ah = _actor_host()
             if ah and ah in fwd:
-                return self._serve_html("actor.html", ("console.css", "actor.js"))
-            return self._serve_html("index.html", ("console.css", "bridge.js", "app.js"))
+                return self._serve_html("actor.html", ("console.css", "i18n.js", "actor.js"))
+            return self._serve_html("index.html", ("console.css", "i18n.js", "bridge.js", "app.js"))
         if path == "/actor" or rel == "actor.html":  # 直达路径也保留（任一 app 域名 + /actor 都能开）
-            return self._serve_html("actor.html", ("console.css", "actor.js"))
+            return self._serve_html("actor.html", ("console.css", "i18n.js", "actor.js"))
         return self._file(os.path.join(READER, rel))
 
     def _read_body(self):
