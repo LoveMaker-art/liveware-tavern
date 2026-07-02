@@ -23,7 +23,7 @@
 5. **渐进披露**：控制项默认隐/ghost，**桌面 hover 显、触屏常驻低透明**（`.ctl` / `.prodDel` 已是范式）。触屏无 hover 通道，**别把控件藏在 `:hover` 后面就完事**。
 6. **web reader ≠ 原生 app**：reader 是 webview 里的**网页**。用**看得见、可点**的控件；**别用长按 / 侧滑 / 3D touch**（在 webview 里被浏览器占用 = 文字选择/放大镜，且用户不对网页长按）。详见 `surfaces-and-features.md`「web reader ≠ 原生 app」。
 7. **明暗镜像**：每个色 token 在 `@media (prefers-color-scheme:dark)` 有对应值。**改一个色 = 改亮暗两处**，否则暗色漂移。
-8. **app 质感（是 liveware，不是网页；反馈 2026-07-02）**：原则 6 管**输入**（别学原生手势），这条管**手感**——别露网页马脚。已落地且**加新东西必须延续**的一揽子：UI 家具不可选中（`body user-select:none`，正文/输入白名单恢复 `text`）、禁用户缩放（viewport `maximum-scale=1` + `touch-action:manipulation`，两页 `.html` 同款）、页面不橡皮筋露底（`overscroll-behavior:none`，滚动区 `contain`）、无 tap 高亮（`-webkit-tap-highlight-color:transparent`）、按压有反馈（触屏没有 hover，交互件都有 `:active` 态）、弹层/toast 带浮现缓动、composer 垫 `env(safe-area-inset-bottom)`（键盘在场时 `body.kbd` 收掉）、抽屉**全高覆盖**（`top:0`，不给顶栏留缝）、移动输入字号 ≥16px（防 iOS 聚焦自动放大）。
+8. **app 质感（是 liveware，不是网页；反馈 2026-07-02）**：原则 6 管**输入**（别学原生手势），这条管**手感**——别露网页马脚。已落地且**加新东西必须延续**的一揽子：UI 家具不可选中（`body user-select:none`，正文/输入白名单恢复 `text`）、禁用户缩放（viewport `maximum-scale=1` + `touch-action:manipulation`，两页 `.html` 同款）、页面不橡皮筋露底（`overscroll-behavior:none`，滚动区 `contain`）、无 tap 高亮（`-webkit-tap-highlight-color:transparent`）、按压有反馈（触屏没有 hover，交互件都有 `:active` 态）、弹层/toast 带浮现缓动、composer 垫 `env(safe-area-inset-bottom)`（键盘在场时 `body.kbd` 收掉）、抽屉**全高覆盖**（`top:0`，不给顶栏留缝）、移动输入字号 ≥16px（防 iOS 聚焦自动放大）、滚动条暖纸化（`::-webkit-scrollbar` 8px 细条 + `--line2` thumb，系统黑块不许出现；autosize 输入框未到 max-height 保持 `overflow-y:hidden`，真超限才开滚——防 1px 误差冒常驻滚动条）。
 
 ---
 
