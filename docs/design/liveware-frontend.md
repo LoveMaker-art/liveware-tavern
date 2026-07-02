@@ -23,6 +23,7 @@
 5. **渐进披露**：控制项默认隐/ghost，**桌面 hover 显、触屏常驻低透明**（`.ctl` / `.prodDel` 已是范式）。触屏无 hover 通道，**别把控件藏在 `:hover` 后面就完事**。
 6. **web reader ≠ 原生 app**：reader 是 webview 里的**网页**。用**看得见、可点**的控件；**别用长按 / 侧滑 / 3D touch**（在 webview 里被浏览器占用 = 文字选择/放大镜，且用户不对网页长按）。详见 `surfaces-and-features.md`「web reader ≠ 原生 app」。
 7. **明暗镜像**：每个色 token 在 `@media (prefers-color-scheme:dark)` 有对应值。**改一个色 = 改亮暗两处**，否则暗色漂移。
+8. **app 质感（是 liveware，不是网页；反馈 2026-07-02）**：原则 6 管**输入**（别学原生手势），这条管**手感**——别露网页马脚。已落地且**加新东西必须延续**的一揽子：UI 家具不可选中（`body user-select:none`，正文/输入白名单恢复 `text`）、禁用户缩放（viewport `maximum-scale=1` + `touch-action:manipulation`，两页 `.html` 同款）、页面不橡皮筋露底（`overscroll-behavior:none`，滚动区 `contain`）、无 tap 高亮（`-webkit-tap-highlight-color:transparent`）、按压有反馈（触屏没有 hover，交互件都有 `:active` 态）、弹层/toast 带浮现缓动、composer 垫 `env(safe-area-inset-bottom)`（键盘在场时 `body.kbd` 收掉）、抽屉**全高覆盖**（`top:0`，不给顶栏留缝）、移动输入字号 ≥16px（防 iOS 聚焦自动放大）。
 
 ---
 
@@ -41,8 +42,9 @@
 | `--brandtint` / `--brandtint2` | 橙淡底 | active 背景/徽标底 | 需要"淡橙一片"用它，别用半透明硬调 |
 | `--danger` / `--dangerink` | 危险红 | 删除/破坏性 | 仅破坏性动作 |
 | `--userbg` | 用户气泡底 | 用户输入后退弱化 | 只给 `.user .body` |
-| `--radius` | `14px` | 标准圆角 | 卡/大块用它；小控件可 9–11px |
-| `--shadow` | 大柔阴影 | 浮层投影 | 弹层/抽屉用，别滥用 |
+| `--radius` / `--radius2` | `14px` / `10px` | 大块圆角（卡/弹层/气泡/编辑框）/ 控件圆角（按钮/列表项/toast） | 就这两档 + 胶囊 `999px`/正圆 `50%` 字面值；别的档位（如 composer 的 18px 胶囊输入）必须行内注释豁免 |
+| `--scrim` | 半透黑背板 | 抽屉背板 + 弹层背板共用 | 别再写第二个 rgba 黑 |
+| `--shadow` / `--shadow2` | 大柔阴影 / 无方向环影 | 弹层投影 / 抽屉侧影（左右抽屉共用一个无方向值） | 弹层用前者、抽屉用后者，别滥用 |
 | `--serif` | 宋体族 | **叙事体** | 只用于叙述/入戏/thinking，别用于 UI |
 | `--sans` | 系统 sans | **界面体** | 一切 UI 家具 |
 
@@ -50,15 +52,17 @@
 
 ## 3. 组件词汇表（按 surface 分，每个一句用途）
 
-**布局骨架**（`index.html`）：`#topbar`（顶栏：`✦ + 剧组名`居中 `.topTitle`/`.tline`/`.prodName`/`.prodSub` + 移动抽屉开关 `.iconbtn`）· `#layout` = `#rail`（左栏剧组）｜`#stage`（中舞台）｜`#panel`（右信息面板）· overlays `#scrim`/`#modal`/`#toast`。桌面三栏并排，`≤760px` 时 `#rail`/`#panel` 变抽屉（`.open`）。
+**布局骨架**（`index.html`）：`#topbar`（顶栏：`✦ + 剧组名`**绝对居中** `.topTitle`/`.tline`/`.prodName`/`.prodSub`——两侧按钮数随断点变，flex 配不平——+ 抽屉开关 `.iconbtn`，图标一律**内联细描边 SVG**，与 app.js 图标同族，别用 ☰/ⓘ 类字符）· `#layout` = `#rail`（左栏剧组）｜`#stage`（中舞台）｜`#panel`（右信息面板）· overlays `#scrim`（`.show` 渐显）/`#modal`/`#toast`。**断点两段收纳**：`≤1020px` 右 `#panel` 先收成抽屉（保住 486 阅读栏）+ ⓘ 现身；`≤760px` 左 `#rail` 也收，进移动全屏舞台。抽屉（`.open`）= **全高覆盖**（`top:0` 盖过顶栏，内衬 safe-area，原则 8）。
 
-**左栏 · 剧组（rail，前缀 `prod*`）**：`.prodList`>`.prodItem`（`.active` = 左 accent 竖条 + 淡橙底）· `.prodName2`/`.prodMeta`（名 + 数值行）· `.prodDel`（删除 = 可点 trash，非长按）· `.railacts`>`.btn`（`.ghost` = 次级）· `.pastePanel`/`.cardPicker`（导入旁路）。
+**左栏 · 剧组（rail，前缀 `prod*`）**：`.prodList`>`.prodItem`（`.active` = 左 accent 竖条 + 淡橙底）· `.prodName2`/`.prodMeta`（名 + 数值行）· `.prodDel`（删除 = 可点 trash，非长按）· `.railacts`>`.btn`（**唯一主按钮 = 导入角色卡**）+ `.railsub`（次级一行小字链接：粘贴卡 JSON · 从已有卡新建——旁路/复用路不配常驻大按钮）· `.pastePanel`/`.cardPicker`（导入旁路）。
 
-**中栏 · 舞台（stage）**：`.convo`>`.thread`（窄栏居中 486px 阅读宽）· `.turn`（`.char` 干净文本块 / `.user` 后退气泡）· `.body`/`.nar`（叙述 = serif 斜体 muted）· `.ctl`（渐进披露控制条）· `.swipe`（`‹ i/n ›` 备选回复）· `.editbox`/`.editacts`（行内编辑）· `.composer`>`textarea`+`.sendbtn`（`.empty` 静默 / `.stop` 早停）· `.empty`/`.emptyMark`（空态）· `.thinking`（生成中）。
+**中栏 · 舞台（stage）**：`.convo`>`.thread`（窄栏居中 486px 阅读宽；**回合节奏** = 同回合内「我的话→墨的回复」14px 收紧、回合间 30px 放松——段落 vs 场景的呼吸层次）· `.turn`（`.char` 干净文本块 / `.user` 后退气泡）· `.body`/`.nar`（叙述 = serif 斜体 muted）· `.ctl`（渐进披露控制条；触屏热区用 padding+负 margin 撑到 ~28px，视觉行高不变）· `.swipe`（`‹ i/n ›` 备选回复）· `.editbox`/`.editacts`（行内编辑）· `.composer`>`textarea`+`.sendbtn`（`.empty` 静默 / `.stop` 早停；**空态整体隐藏**——没开戏没处发，导入引导是唯一动作）· `.empty`/`.emptyMark`（空态）· `.thinking`（生成中）。
 
 **右栏 · 信息面板（panel，前缀 `p*`）**：`.pSection`/`.pHead`（分区 + 小标题）· 角色：`.cname`/`.prov`（来源出处）/`.cdesc`/`.ctags`>`.tag` · 世界书：`.lore`/`.lk` · **演员墨技艺层**：`.actorHd`/`.lvBadge`/`.knowHd`/`.knowList`/`.growRow`/`.actorMore`（"我对你的了解"+"成长记 N 条"+展开手记）· `.lwFoot`（活件版本 footer）。
 
-**弹层**：`.modal`>`.modalCard`（二次确认：`.modalActs`/`.mBtnCancel`/`.mBtnDanger`）· `.sheetCard`（大卡如演员手记）· `.md`（渲染 markdown：`.mh`/`.mp`/`.mli`）· `.hidden` 通用隐藏。
+**弹层**：`.modal`>`.modalCard`（二次确认：`.modalActs`/`.mBtnCancel`/`.mBtnDanger`；浮现带缓动 `modalIn`）· `.sheetCard`（大卡如演员手记；**打开前先收抽屉**——别叠三层灰）· `.md`（渲染 markdown：`.mh`/`.mp`/`.mli`）· `.hidden` 通用隐藏。
+
+**演员卡 · 数值格（`actor.html`，前缀 `ac*`，spec 待建先记这）**：`.acStatV`+`.acStatU`（值 + **单位小字**：「3 天 / 出道」连读成词，标签单看也成立——数值不许无单位裸奔，养成进度同理「还差 N 轮戏」）· 亲密度**只住自己那张卡**（`.acIntimacy`），不进数值格重复连显 · 版本 footer 文案 = `活件 · 酒馆 v<版本>`（**v 前缀两 surface 一致**，console `.lwFoot` 同款）。
 
 > **代码里已在做的**：每个组件块 CSS 上方有一行注释写**用途 + 链回它落实的 doc 段**（如 `conversation-surface §3.1`）。**二创时延续这个习惯**——加块就加这行注释，是给下一个 agent 的路标。
 

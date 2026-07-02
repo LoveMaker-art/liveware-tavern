@@ -29,6 +29,9 @@
 | 老 WebView 兜底 | `visualViewport` 监听 `resize`/`scroll`，把根容器高度/位移贴到可视视口（给不认 `interactive-widget` 的旧 iOS WKWebView）。 |
 | **触屏能点出控制条** | 控制条原来 `:hover` 才显——触屏无 hover 通道 = 死的。`@media (hover:none)` 下常驻低透明（`.55`），保证拇指可达。桌面维持 hover 渐进披露。 |
 | **发送后不抢键盘**（移动） | 发送即 `input.blur()` 收键盘（别盖住正在生成的回复），回复完成也**不回焦**，留给用户阅读；桌面（`hover:hover`）维持续焦点方便接着打。`isTouch()` = `matchMedia("(hover:none)")`（反馈 2026-06-30）。 |
+| **composer 不贴手势条**（移动，反馈 2026-07-02） | composer 垫 `env(safe-area-inset-bottom)`，容器不上报 env 时触屏兜底 10px；**键盘在场时收掉**（`visualViewport` 判 `vv.height < innerHeight*0.8` → `body.kbd`，composer 回到 12px 贴键盘），否则键盘上方多一条空白。 |
+| **触屏热区 ≥28px** | `.ctl`/`.swipe`/`.editacts` 的小字按钮 `(hover:none)` 下用 padding+负 margin 撑热区，视觉行高不变（12px 小字仍沉静，指头不再点不中）。 |
+| **移动输入字号 16px** | `(hover:none)` 下 composer/编辑框/粘贴框字号钉 16px——iOS 聚焦自动放大的阈值，小于它页面会被缩放抖一下（app 质感，`liveware-frontend.md` 原则 8）。 |
 
 > 注：真 IME / 软键盘行为只能真机验（Android 我自动、桌面走 winrig、macOS 协作）；preview 只验布局与 JS 无错。
 

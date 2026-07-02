@@ -11,8 +11,9 @@ function fmtWords(n) {
   return n >= 10000 ? (n / 10000).toFixed(1) + '万' : String(n);
 }
 
-function stat(v, label) {
-  return `<div class="acStat"><div class="acStatV">${v}</div><div class="acStatL">${esc(label)}</div></div>`;
+// 值 + 单位小字 + 标签:「3 天 / 出道」连读成词,标签单看也成立(actor-card 数值文案)。
+function stat(v, unit, label) {
+  return `<div class="acStat"><div class="acStatV">${v}${unit ? `<span class="acStatU">${esc(unit)}</span>` : ''}</div><div class="acStatL">${esc(label)}</div></div>`;
 }
 
 function render(d) {
@@ -20,19 +21,21 @@ function render(d) {
   const knows = (d.knows || []).filter(Boolean);
   const tl = d.timeline || [];
 
+  // 亲密度不进数值格(它有自己的整张卡,紧挨其下,连显两遍是冗余);第 6 格给年表笔数。
   const stats = [
-    stat(c.debut_days, '出道天'),
-    stat(c.turns, '轮演出'),
-    stat(fmtWords(c.words), '累计字'),
-    stat(c.productions, '个剧组'),
-    stat(c.roles, '戏路'),                       // 戏路 = 演过的角色数（不是搭档）
-    stat(`<span class="acStatBrand">${esc(it.level || '初见')}</span>`, '亲密度'),
+    stat(c.debut_days, '天', '出道'),
+    stat(c.turns, '轮', '演出'),
+    stat(fmtWords(c.words), '字', '累计'),
+    stat(c.productions, '个', '剧组'),
+    stat(c.roles, '条', '戏路'),                 // 戏路 = 演过的角色数（不是搭档）
+    stat(it.log || 0, '笔', '年表'),
   ].join('');
 
   const pct = Math.round((it.progress || 0) * 100);
   const sub = `一起 ${c.turns || 0} 轮 · 记下你 ${it.log || 0} 笔`;  // 笔 = 年表条数（非口味）
+  // to_next 以「轮」计(1 轮 = 1 分;复盘记一笔年表 = 8 分,会跳级)——给用户可预期的最慢路径
   const foot = it.next
-    ? `<span>${esc(it.blurb || '')}</span><span>距「${esc(it.next)}」还差 ${Math.max(0, it.to_next || 0)}</span>`
+    ? `<span>${esc(it.blurb || '')}</span><span>距「${esc(it.next)}」还差 ${Math.max(0, it.to_next || 0)} 轮戏</span>`
     : `<span>${esc(it.blurb || '')}</span><span>已是知己</span>`;
   const intimacy = `
     <div class="acIntimacy">
@@ -71,7 +74,7 @@ function render(d) {
     ${intimacy}
     ${knowsBlock}
     ${timelineBlock}
-    <div class="acFoot"><span class="mark">✦</span> 活件 · 酒馆 ${esc(d.version || '')}</div>`;
+    <div class="acFoot"><span class="mark">✦</span> 活件 · 酒馆 v${esc(d.version || '')}</div>`;  // v 前缀与 console lwFoot 一致
 }
 
 async function load() {

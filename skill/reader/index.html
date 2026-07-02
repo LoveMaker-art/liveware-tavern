@@ -2,31 +2,42 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <!-- 禁用户缩放:liveware 容器里的 app 质感(双击/捏合缩放是「网页感」的来源,微信小程序同款) -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>酒馆</title>
   <link rel="stylesheet" href="console.css" />
 </head>
 <body>
   <header id="topbar">
-    <button id="railToggle" class="iconbtn" aria-label="剧组">☰</button>
+    <!-- 顶栏图标 = 内联细描边 SVG(与 app.js 图标同族;字符 ☰/ⓘ 跨平台字体渲染不稳且视觉重量不配对) -->
+    <button id="railToggle" class="iconbtn" aria-label="剧组">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
     <div class="topTitle">
       <div class="tline"><span class="mark">✦</span><span id="prodName" class="prodName">酒馆</span></div>
       <div id="prodSub" class="prodSub"></div>
     </div>
-    <button id="panelToggle" class="iconbtn" aria-label="角色与世界书">ⓘ</button>
+    <button id="panelToggle" class="iconbtn" aria-label="角色与世界书">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 11.2v5"/><circle cx="12" cy="7.7" r=".6" fill="currentColor" stroke="none"/></svg>
+    </button>
   </header>
 
   <div id="layout">
     <aside id="rail" class="pane">
       <div class="panehd">剧组</div>
       <ul id="prodList" class="prodList"></ul>
+      <!-- 一个主动作 + 一行次级链接:导入是主路径(容器文件选择器已通,2026-06-30);
+           粘贴 JSON 是无选择器环境的旁路、从已有卡新建是复用路,都不配常驻大按钮 -->
       <div class="railacts">
         <label class="btn">
           <span>导入角色卡</span>
           <input id="cardFile" type="file" accept="image/png" hidden />
         </label>
-        <button id="pasteCardBtn" class="btn ghost">粘贴角色卡 JSON</button>
-        <button id="newProdBtn" class="btn ghost">从已有卡新建</button>
+        <div class="railsub">
+          <button id="pasteCardBtn">粘贴卡 JSON</button>
+          <span class="dot">·</span>
+          <button id="newProdBtn">从已有卡新建</button>
+        </div>
       </div>
       <div id="pastePanel" class="pastePanel hidden">
         <textarea id="pasteBox" placeholder="粘贴角色卡 JSON（V1/V2/V3，可含 character_book）…"></textarea>
@@ -57,7 +68,7 @@
     </aside>
   </div>
 
-  <div id="scrim" class="scrim hidden"></div>
+  <div id="scrim" class="scrim"></div>
   <div id="modal" class="modal hidden"></div>
   <div id="toast" class="toast hidden"></div>
 

@@ -75,6 +75,7 @@ function renderStage() {
   $("#prodName").textContent = p ? p.name : "酒馆";
   const card = p ? (state.cardMap[p.card_id] || {}) : {};
   $("#prodSub").textContent = card.name ? "墨 · " + card.name : "";   // 活件/演员归属(副标题)
+  $("#composer").classList.toggle("hidden", !p);  // 没开戏没处发:空态收掉输入框,导入引导是唯一动作
   const c = $("#convo");
   if (!p) { c.innerHTML = `<div class="empty"><div class="emptyMark">✦</div><p>导入一张角色卡，开一场戏。</p><p class="hint">墨会入戏陪你演。</p></div>`; return; }
   const turns = p.story.map((m, i) => turnHtml(m, i === p.story.length - 1)).join("");
@@ -432,8 +433,9 @@ function anchorTurn(el, force) {
 }
 // 触屏(移动)= 无 hover。用于「发送后不自动弹键盘」等只在移动端做的事(反馈 2026-06-30)。
 const isTouch = () => window.matchMedia("(hover: none)").matches;
-function openDrawer(id) { $(id).classList.add("open"); $("#scrim").classList.remove("hidden"); }
-function closeDrawers() { $("#rail").classList.remove("open"); $("#panel").classList.remove("open"); $("#scrim").classList.add("hidden"); }
+// scrim 用 .show(opacity 过渡)而非 .hidden(display 切换吃不了 transition)——抽屉开合背板渐显。
+function openDrawer(id) { $(id).classList.add("open"); $("#scrim").classList.add("show"); }
+function closeDrawers() { $("#rail").classList.remove("open"); $("#panel").classList.remove("open"); $("#scrim").classList.remove("show"); }
 
 // ---- 弹层(二次确认 / 演员手记):点背板或 Esc 关闭 ----
 let _modalClose = null;
@@ -501,6 +503,7 @@ function mdToHtml(md) {
   return `<div class="md">${html}</div>`;
 }
 function openActorSheet() {
+  closeDrawers();  // 从右抽屉点进来:先收抽屉,别让 sheet 叠在抽屉+scrim 上(三层灰)
   const intro = '<div class="mp" style="color:var(--muted);margin-bottom:13px">墨随每场戏与复盘积累的演艺手记——越演越懂你。这是注入每一场戏的那份提示词。</div>';
   const card = el("div", "modalCard sheetCard");
   card.innerHTML = `<div class="sheetHd"><span class="t">演员手记 · 墨</span>
@@ -512,10 +515,14 @@ function openActorSheet() {
 
 // 软键盘弹起把可视视口压小:iOS WKWebView 不认 interactive-widget/dvh 的键盘收缩,
 // 用 visualViewport 把 body 高度贴到可视视口(Android 由 meta interactive-widget+dvh 覆盖)。
+// 同时打 body.kbd 标:键盘在场时 composer 收掉手势条安全区垫高(贴键盘,不留空白条)。
 function keyboardInset() {
   const vv = window.visualViewport;
   if (!vv) return;
-  const apply = () => { document.body.style.height = vv.height + "px"; };
+  const apply = () => {
+    document.body.style.height = vv.height + "px";
+    document.body.classList.toggle("kbd", vv.height < window.innerHeight * 0.8);
+  };
   vv.addEventListener("resize", apply);
   vv.addEventListener("scroll", apply);
   apply();
