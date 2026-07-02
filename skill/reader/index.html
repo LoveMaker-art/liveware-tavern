@@ -60,6 +60,11 @@
         </div>
       </div>
       <form id="composer" class="composer">
+        <!-- 动作按钮:把文字框成 *动作*(星号=RP 动作/叙述惯例,渲染成 serif 斜体;
+             中括号在 RP 圈是 OOC 戏外话,不用)。桌面同功快捷键 Ctrl/⌘+I。 -->
+        <button id="actBtn" type="button" class="actbtn" aria-label="插入动作" data-i18n-aria="ariaAction" data-i18n-title="titleAction">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M6.8 8.5l10.4 7M17.2 8.5 6.8 15.5"/></svg>
+        </button>
         <textarea id="input" rows="1" placeholder="续写这一场…" data-i18n-placeholder="composerPlaceholder"></textarea>
         <button id="sendBtn" type="submit" class="sendbtn" aria-label="发送" data-i18n-aria="ariaSend"></button>
       </form>

@@ -1,7 +1,7 @@
 ---
 name: tavern
 description: "酒馆角色扮演：从 Chub 找角色卡/世界书，干净导入到沉浸控制台建剧组；可帮用户配自定义大模型 API。"
-version: 1.3.1
+version: 1.4.0
 author: ClawChat Tavern
 license: MIT
 platforms: [linux, macos, windows]

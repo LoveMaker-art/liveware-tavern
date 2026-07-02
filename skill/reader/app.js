@@ -458,6 +458,25 @@ function anchorTurn(el, force) {
   const top = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - 20;
   c.scrollTop = state._anchor = Math.max(0, Math.min(top, c.scrollHeight - c.clientHeight));
 }
+// 动作输入辅助(反馈 2026-07-02):把文字框成 *动作*——星号是 RP 动作/叙述惯例
+// (fmt() 渲染成 .nar serif 斜体;中括号在 RP 圈是 OOC 戏外话,不用)。
+// 编辑器式三态:选中→包裹;空光标→插入 ** 居中;紧贴右 * →跳出(连按自然收尾)。
+function wrapAction() {
+  const el = $("#input");
+  const s = el.selectionStart, e = el.selectionEnd, v = el.value;
+  if (s !== e) {
+    el.value = v.slice(0, s) + "*" + v.slice(s, e) + "*" + v.slice(e);
+    el.setSelectionRange(e + 2, e + 2);
+  } else if (v[s] === "*") {
+    el.setSelectionRange(s + 1, s + 1);
+  } else {
+    el.value = v.slice(0, s) + "**" + v.slice(s);
+    el.setSelectionRange(s + 1, s + 1);
+  }
+  el.focus();
+  autoGrow(el); updateSendEmpty();
+}
+
 // 触屏(移动)= 无 hover。用于「发送后不自动弹键盘」等只在移动端做的事(反馈 2026-06-30)。
 const isTouch = () => window.matchMedia("(hover: none)").matches;
 // scrim 用 .show(opacity 过渡)而非 .hidden(display 切换吃不了 transition)——抽屉开合背板渐显。
@@ -619,11 +638,16 @@ function wire() {
   input.addEventListener("compositionend", () => { imeComposing = false; imeEndedAt = Date.now(); });
   input.onkeydown = (e) => {
     if (e.isComposing || e.keyCode === 229 || imeComposing) return;
+    // Ctrl/⌘+I = 动作标记(动作渲染就是斜体,借斜体的通用键;Cmd 或 Ctrl 都认,不分平台)
+    if ((e.metaKey || e.ctrlKey) && (e.key === "i" || e.key === "I")) {
+      e.preventDefault(); wrapAction(); return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       if (Date.now() - imeEndedAt < 120) return; // 刚确认候选词的那个回车(WebKit 排序),别当发送
       e.preventDefault(); submitOrStop();
     }
   };
+  $("#actBtn").onclick = () => wrapAction();
   $("#cardFile").onchange = (e) => importCard(e.target.files[0]);
   $("#pasteCardBtn").onclick = () => togglePastePanel();
   $("#pasteCancel").onclick = () => togglePastePanel(false);

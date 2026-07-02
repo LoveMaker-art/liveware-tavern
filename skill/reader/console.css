@@ -202,6 +202,14 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
   /* iOS 聚焦自动放大的阈值是 16px:移动端输入字号钉 16,别让页面被缩放抖一下 */
   .composer textarea,.pastePanel textarea,.editbox{font-size:16px}
 }
+/* 动作按钮:把文字框成 *动作*(星号=RP 叙述惯例;Ctrl/⌘+I 同功)。ghost 圆钮,不抢发送键 */
+.actbtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:1px solid var(--line2);
+  background:none;color:var(--muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:color .15s, border-color .15s, transform .12s}
+.actbtn:hover{color:var(--brandink);border-color:var(--brand)}
+.actbtn:active{transform:scale(.9);color:var(--brandink)}
+
 /* 发送键:内联 SVG 图标(上箭头发送 / 圆角方块停止),按压回弹,空输入静默灰态 */
 .sendbtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:0;cursor:pointer;
   background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;

@@ -28,6 +28,7 @@
 | 布局高度跟随可视视口 | `interactive-widget=resizes-content`（viewport meta）+ 用 `100dvh` 而非 `100%/vh`。 |
 | 老 WebView 兜底 | `visualViewport` 监听 `resize`/`scroll`，把根容器高度/位移贴到可视视口（给不认 `interactive-widget` 的旧 iOS WKWebView）。 |
 | **触屏能点出控制条** | 控制条原来 `:hover` 才显——触屏无 hover 通道 = 死的。`@media (hover:none)` 下常驻低透明（`.55`），保证拇指可达。桌面维持 hover 渐进披露。 |
+| **动作输入辅助**（反馈 2026-07-02） | composer 左侧 `.actbtn` ✳ 圆钮 + 桌面 Ctrl/⌘+I（动作渲染就是斜体，借斜体通用键；Cmd/Ctrl 都认不分平台）：把文字框成 `*动作*`（星号 = RP 动作/叙述惯例，`fmt()` 渲染成 `.nar` serif 斜体；**中括号在 RP 圈是 OOC 戏外话，不用**）。编辑器式三态：选中→包裹、空光标→插入 `**` 居中、紧贴右 `*`→跳出（连按自然收尾）。移动端靠按钮（键盘打 `*` 费劲，这是按钮的主要价值）。 |
 | **发送后不抢键盘**（移动） | 发送即 `input.blur()` 收键盘（别盖住正在生成的回复），回复完成也**不回焦**，留给用户阅读；桌面（`hover:hover`）维持续焦点方便接着打。`isTouch()` = `matchMedia("(hover:none)")`（反馈 2026-06-30）。 |
 | **composer 不贴手势条**（移动，反馈 2026-07-02） | composer 垫 `env(safe-area-inset-bottom)`，容器不上报 env 时触屏兜底 10px；**键盘在场时收掉**（`visualViewport` 判 `vv.height < innerHeight*0.8` → `body.kbd`，composer 回到 12px 贴键盘），否则键盘上方多一条空白。 |
 | **触屏热区 ≥28px** | `.ctl`/`.swipe`/`.editacts` 的小字按钮 `(hover:none)` 下用 padding+负 margin 撑热区，视觉行高不变（12px 小字仍沉静，指头不再点不中）。 |
