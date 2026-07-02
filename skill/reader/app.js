@@ -20,9 +20,15 @@ const SLIDERS_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"
 
 // 对话轮数 = 用户出手数(first_mes 是 char 开场,不算)。最近活跃 = story 末条时间。
 function countTurns(story) { return (story || []).filter((m) => m.role === "user").length; }
-function lastActivity(story, createdAt) {
-  let last = createdAt || 0;
-  (story || []).forEach((m) => { if (m.ts && m.ts > last) last = m.ts; });
+// 剧组的「最近动静」时间戳 = max(创建, 最新一条消息)——既是「最近活跃」文案的数据源,
+// 也是 rail 排序键(聊天列表式:最近的在最上,反馈 2026-07-02)。
+function lastTs(p) {
+  let last = p.created_at || 0;
+  (p.story || []).forEach((m) => { if (m.ts && m.ts > last) last = m.ts; });
+  return last;
+}
+function lastActivity(p) {
+  const last = lastTs(p);
   return last ? relTime(last) : "";
 }
 function relTime(ts) {
@@ -57,11 +63,13 @@ async function loadAll() {
 
 function renderRail() {
   const ul = $("#prodList");
-  ul.innerHTML = state.productions.map((p) => {
+  // 最近动静倒序(新建/刚演过的浮顶)——每次渲染现排,发送/导入后重渲即自动上浮
+  const prods = [...state.productions].sort((a, b) => lastTs(b) - lastTs(a));
+  ul.innerHTML = prods.map((p) => {
     const card = state.cardMap[p.card_id] || {};
     const turns = countTurns(p.story);
     const meta = [card.name, turns > 0 ? t("turnsShort", { n: turns }) : t("newPlay"),
-      lastActivity(p.story, p.created_at)].filter(Boolean).join(" · ");
+      lastActivity(p)].filter(Boolean).join(" · ");
     return `<li class="prodItem ${p.id === state.activeId ? "active" : ""}" data-id="${p.id}">
       <div class="prodName2">${esc(p.name)}</div>
       <div class="prodMeta">${esc(meta)}</div>
@@ -266,6 +274,7 @@ async function send() {
     $("#think")?.remove();
     state.active.story.push(msg);
     renderStage();
+    renderRail();  // 新回合落盘 → 本剧组上浮 + 「刚刚」文案即时(聊天列表式)
     anchorTurn(lastUserTurn()); // 回复就位:沿用锚定(尊重用户生成中途的上滚)
   } catch (e) {
     $("#think")?.remove(); toast(t("genFailed", { err: e.message }));

@@ -54,7 +54,7 @@
 
 **布局骨架**（`index.html`）：`#topbar`（顶栏：`✦ + 剧组名`**绝对居中** `.topTitle`/`.tline`/`.prodName`/`.prodSub`——两侧按钮数随断点变，flex 配不平——+ 抽屉开关 `.iconbtn`，图标一律**内联细描边 SVG**，与 app.js 图标同族，别用 ☰/ⓘ 类字符）· `#layout` = `#rail`（左栏剧组）｜`#stage`（中舞台）｜`#panel`（右信息面板）· overlays `#scrim`（`.show` 渐显）/`#modal`/`#toast`。**断点两段收纳**：`≤1020px` 右 `#panel` 先收成抽屉（保住 486 阅读栏）+ ⓘ 现身；`≤760px` 左 `#rail` 也收，进移动全屏舞台。抽屉（`.open`）= **全高覆盖**（`top:0` 盖过顶栏，内衬 safe-area，原则 8）。
 
-**左栏 · 剧组（rail，前缀 `prod*`）**：`.prodList`>`.prodItem`（`.active` = 左 accent 竖条 + 淡橙底）· `.prodName2`/`.prodMeta`（名 + 数值行）· `.prodDel`（删除 = 可点 trash，非长按）· `.railacts`>`.btn`（**唯一主按钮 = 导入角色卡**）+ `.railsub`（次级一行小字链接：粘贴卡 JSON · 从已有卡新建——旁路/复用路不配常驻大按钮）· `.pastePanel`/`.cardPicker`（导入旁路）。
+**左栏 · 剧组（rail，前缀 `prod*`）**：`.prodList`>`.prodItem`（`.active` = 左 accent 竖条 + 淡橙底；**最近动静倒序**——排序键 `lastTs` = max(创建, 最新消息)，与「最近活跃」文案同源，发送后即时上浮，聊天列表式，反馈 2026-07-02）· `.prodName2`/`.prodMeta`（名 + 数值行）· `.prodDel`（删除 = 可点 trash，非长按）· `.railacts`>`.btn`（**唯一主按钮 = 导入角色卡**）+ `.railsub`（次级一行小字链接：粘贴卡 JSON · 从已有卡新建——旁路/复用路不配常驻大按钮）· `.pastePanel`/`.cardPicker`（导入旁路）。
 
 **中栏 · 舞台（stage）**：`.convo`>`.thread`（窄栏居中 486px 阅读宽；**回合节奏** = 同回合内「我的话→墨的回复」14px 收紧、回合间 30px 放松——段落 vs 场景的呼吸层次）· `.turn`（`.char` 干净文本块 / `.user` 后退气泡）· `.body`/`.nar`（叙述 = serif 斜体 muted）· `.ctl`（渐进披露控制条；触屏热区用 padding+负 margin 撑到 ~28px，视觉行高不变）· `.swipe`（`‹ i/n ›` 备选回复）· `.editbox`/`.editacts`（行内编辑）· `.composer`>`textarea`+`.sendbtn`（`.empty` 静默 / `.stop` 早停；**空态整体隐藏**——没开戏没处发，导入引导是唯一动作）· `.empty`/`.emptyMark`（空态）· `.thinking`（生成中）。
 
