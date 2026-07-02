@@ -34,6 +34,15 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);
   user-select:text;-webkit-user-select:text}
 ::selection{background:var(--brandtint2)}
 .convo,.pane,.sheetBody,.acPage{overscroll-behavior:contain}
+/* 滚动条:系统默认黑块太重(macOS 常显模式下尤甚,反馈 2026-07-02),样式化成暖纸系细条。
+   容器全是 WebKit/Chromium 系,::-webkit-scrollbar 全覆盖;不设标准 scrollbar-* 属性
+   (Chromium 下两者并存时标准属性会禁用这组伪类)。 */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:999px;
+  border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 /* 键盘可达性:焦点环只给键盘导航(桌面容器 Tab),鼠标/触摸不显 */
 button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
@@ -168,7 +177,8 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 /* 行内编辑器(替代 prompt()，macOS 容器 WKWebView 里 prompt 是死的，conversation-surface §3.2) */
 .editbox{width:100%;resize:none;border:1px solid var(--brand);border-radius:var(--radius2);
   padding:8px 11px;font-family:inherit;font-size:15.5px;line-height:1.78;background:var(--surface);
-  color:var(--ink);outline:none;max-height:50vh}
+  color:var(--ink);outline:none;max-height:50vh;
+  overflow-y:hidden}  /* growEdit 同款:未到 max 不滚,到顶 JS 切 auto */
 .editacts{display:flex;gap:14px;margin-top:8px}
 .editacts button{border:0;background:none;font-size:12px;cursor:pointer;padding:0}
 .editacts .save{color:var(--brandink);font-weight:600}
@@ -183,7 +193,8 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .composer textarea{flex:1;resize:none;border:1px solid var(--line2);
   border-radius:18px;  /* 胶囊输入:半径≈单行高一半,非 token 档位(iMessage 式) */
   padding:9px 14px;font-family:var(--sans);font-size:14px;line-height:1.5;background:var(--bg);
-  color:var(--ink);max-height:140px;outline:none}
+  color:var(--ink);max-height:140px;outline:none;
+  overflow-y:hidden}  /* autoGrow 撑高,未到 max 不滚——防 1px 误差冒出滚动条(反馈 2026-07-02);到顶 JS 切 auto */
 .composer textarea:focus{border-color:var(--brand)}
 @media (hover:none){
   .composer{padding-bottom:calc(12px + max(env(safe-area-inset-bottom,0px), 10px))}

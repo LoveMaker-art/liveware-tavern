@@ -340,7 +340,12 @@ function editMsg(id) {
   acts.querySelector(".save").onclick = save;
 }
 
-function growEdit(el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
+// 编辑框自撑高;到 50vh 上限才开滚(未到顶保持 hidden,防 1px 误差冒滚动条,反馈 2026-07-02)
+function growEdit(el) {
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + "px";
+  el.style.overflowY = el.scrollHeight > window.innerHeight * 0.5 ? "auto" : "hidden";  // 与 CSS max-height:50vh 同步
+}
 
 function fileToB64(file) {
   return new Promise((res, rej) => {
@@ -422,7 +427,13 @@ function showCardPicker() {
   box.querySelectorAll(".cardPick").forEach((d) => d.onclick = () => { box.classList.add("hidden"); newProductionFrom(d.dataset.id); });
 }
 
-function autoGrow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 140) + "px"; }
+// composer 自撑高;只有内容真超过 max(140px)才开滚——否则保持 hidden,
+// 防「输入过一次后 scrollHeight 与设定高差 1px → macOS 冒常驻黑滚动条」(反馈 2026-07-02)
+function autoGrow(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 140) + "px";
+  el.style.overflowY = el.scrollHeight > 140 ? "auto" : "hidden";
+}
 function scrollDown() { const c = $("#convo"); c.scrollTop = c.scrollHeight; }
 // 这一回合「我说的那条」(末条用户消息)——滚动锚定的基准。
 function lastUserTurn() { const us = document.querySelectorAll(".turn.user"); return us[us.length - 1] || null; }
