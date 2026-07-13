@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tavern Updater"
+  short_description: "Review, merge, update, and roll back Tavern releases"
+  default_prompt: "Check the latest Tavern release, review its code differences and merge safety, then wait for approval before applying it."

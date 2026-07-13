@@ -1,7 +1,7 @@
 ---
 name: tavern
 description: "Use when the user wants Ruotang's Tavern: story worlds, roleplay scenes, SillyTavern character cards, world lore, liveware tavern scenes, story memory/reflection, or tavern model setup."
-version: 1.15.0
+version: 1.16.0
 author: ClawChat Tavern
 license: MIT
 platforms: [linux, macos, windows]

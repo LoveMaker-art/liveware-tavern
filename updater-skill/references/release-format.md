@@ -11,14 +11,17 @@ Manifest schema:
 
 ```json
 {
-  "schema": 1,
-  "version": "1.15.0",
+  "schema": 2,
+  "version": "1.16.0",
   "archive": "tavern-release.tar.gz",
-  "sha256": "<64 lowercase hex characters>"
+  "sha256": "<archive SHA256>",
+  "files": {
+    "runtime/server.py": "<file SHA256>"
+  }
 }
 ```
 
-The archive must contain exactly these top-level application areas:
+The archive contains three managed top-level areas:
 
 ```text
 runtime/
@@ -31,6 +34,11 @@ skill/
   SKILL.md
   scripts/
   references/
+updater/
+  SKILL.md
+  scripts/
+  references/
+  agents/
 ```
 
-Runtime state and credentials are never release assets. Build releases with the repository's `scripts/build_release.py`, then attach both generated files to a stable GitHub Release whose tag is `v<version>`.
+Runtime state and credentials are never release assets. Every regular archive file must appear in `files`. Build with `scripts/build_release.py`, then attach both generated files to a stable GitHub Release tagged `v<version>`.
