@@ -4,7 +4,6 @@
 import hashlib
 import json
 from pathlib import Path
-import re
 import shutil
 import tarfile
 
@@ -14,7 +13,7 @@ UPDATER = ROOT / "updater-skill"
 DIST = ROOT / "dist"
 STAGE = DIST / "release"
 ARCHIVE = DIST / "tavern-release.tar.gz"
-VERSION_RE = re.compile(r"^version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
+BACKEND_FILES = ("actor.py", "server.py", "card_import.py", "actor_self.md")
 
 
 def copy(source, destination):
@@ -26,23 +25,13 @@ def copy(source, destination):
 
 
 def main():
-    text = (SOURCE / "SKILL.md").read_text(encoding="utf-8")
-    match = VERSION_RE.search(text)
-    if not match:
-        raise SystemExit("SKILL.md has no version")
-    version = match.group(1)
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     shutil.rmtree(DIST, ignore_errors=True)
     (STAGE / "runtime").mkdir(parents=True)
-    (STAGE / "skill").mkdir(parents=True)
     (STAGE / "updater").mkdir(parents=True)
-    for name in ("actor.py", "server.py", "card_import.py", "actor_self.md"):
+    for name in BACKEND_FILES:
         copy(SOURCE / name, STAGE / "runtime" / name)
-    copy(SOURCE / "reader", STAGE / "runtime/web")
-    if (SOURCE / "assets").is_dir():
-        copy(SOURCE / "assets", STAGE / "runtime/assets")
-    copy(SOURCE / "SKILL.md", STAGE / "skill/SKILL.md")
-    copy(SOURCE / "tools", STAGE / "skill/scripts")
-    copy(SOURCE / "references", STAGE / "skill/references")
+    (STAGE / "runtime/.tavern-release-version").write_text(version + "\n", encoding="utf-8")
     copy(UPDATER / "SKILL.md", STAGE / "updater/SKILL.md")
     copy(UPDATER / "scripts", STAGE / "updater/scripts")
     copy(UPDATER / "references", STAGE / "updater/references")
@@ -55,10 +44,17 @@ def main():
     }
     with tarfile.open(ARCHIVE, "w:gz", format=tarfile.PAX_FORMAT) as package:
         package.add(STAGE / "runtime", arcname="runtime")
-        package.add(STAGE / "skill", arcname="skill")
         package.add(STAGE / "updater", arcname="updater")
     digest = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
-    manifest = {"schema": 2, "version": version, "archive": ARCHIVE.name, "sha256": digest, "files": files}
+    manifest = {
+        "schema": 3,
+        "scope": "backend-system",
+        "version": version,
+        "archive": ARCHIVE.name,
+        "sha256": digest,
+        "managed_files": sorted(files),
+        "files": files,
+    }
     (DIST / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     shutil.rmtree(STAGE)
     print(json.dumps(manifest, ensure_ascii=False))

@@ -11,17 +11,19 @@ Manifest schema:
 
 ```json
 {
-  "schema": 2,
-  "version": "1.16.0",
+  "schema": 3,
+  "scope": "backend-system",
+  "version": "1.16.1",
   "archive": "tavern-release.tar.gz",
   "sha256": "<archive SHA256>",
+  "managed_files": ["runtime/server.py"],
   "files": {
     "runtime/server.py": "<file SHA256>"
   }
 }
 ```
 
-The archive contains three managed top-level areas:
+The archive contains only backend application code and the updater itself:
 
 ```text
 runtime/
@@ -29,11 +31,7 @@ runtime/
   server.py
   card_import.py
   actor_self.md
-  web/
-skill/
-  SKILL.md
-  scripts/
-  references/
+  .tavern-release-version
 updater/
   SKILL.md
   scripts/
@@ -41,4 +39,4 @@ updater/
   agents/
 ```
 
-Runtime state and credentials are never release assets. Every regular archive file must appear in `files`. Build with `scripts/build_release.py`, then attach both generated files to a stable GitHub Release tagged `v<version>`.
+Frontend files, starter/fixture assets, the creative Tavern skill, runtime state, and credentials are never release assets. Every regular archive file must appear in both `managed_files` and `files`. Build with `scripts/build_release.py`, then attach both generated files to a stable GitHub Release tagged `v<version>`.

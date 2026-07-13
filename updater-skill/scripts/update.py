@@ -24,7 +24,6 @@ HEALTH_URL = os.environ.get("TAVERN_HEALTH_URL", "http://127.0.0.1:8799/api/heal
 SKIP_SERVICE = os.environ.get("TAVERN_SKIP_SERVICE") == "1"
 TARGETS = {
     "runtime": DATA / "apps/tavern-runtime",
-    "skill": DATA / "skills/creative/tavern",
     "updater": DATA / "skills/system/tavern-updater",
 }
 UPDATE_ROOT = DATA / "tavern-updates"
@@ -67,8 +66,15 @@ def sha256_file(path):
 
 
 def local_version():
+    marker = TARGETS["runtime"] / ".tavern-release-version"
     try:
-        match = VERSION_RE.search((TARGETS["skill"] / "SKILL.md").read_text(encoding="utf-8"))
+        value = marker.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except OSError:
+        pass
+    try:
+        match = VERSION_RE.search((DATA / "skills/creative/tavern/SKILL.md").read_text(encoding="utf-8"))
         return match.group(1) if match else "0.0.0"
     except OSError:
         return "0.0.0"
@@ -92,7 +98,8 @@ def release_material(work):
     download(release["assets"][ASSET_MANIFEST], manifest_path)
     download(release["assets"][ASSET_ARCHIVE], archive_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema") not in (1, 2) or manifest.get("archive") != ASSET_ARCHIVE:
+    if (manifest.get("schema") != 3 or manifest.get("scope") != "backend-system"
+            or manifest.get("archive") != ASSET_ARCHIVE):
         raise RuntimeError("unsupported release manifest")
     version = str(manifest.get("version") or "")
     if release.get("tag") != "v" + version:
@@ -105,7 +112,7 @@ def release_material(work):
 
 def safe_extract(archive, destination, manifest):
     destination = destination.resolve()
-    allowed_areas = {"runtime", "skill", "updater"}
+    allowed_areas = {"runtime", "updater"}
     with tarfile.open(archive, "r:gz") as package:
         for member in package.getmembers():
             parts = Path(member.name).parts
@@ -117,15 +124,16 @@ def safe_extract(archive, destination, manifest):
             if member.issym() or member.islnk() or member.isdev():
                 raise RuntimeError("release archive contains an unsupported link or device")
         package.extractall(destination)
-    required = (destination / "runtime/server.py", destination / "runtime/actor.py", destination / "skill/SKILL.md")
+    required = (destination / "runtime/server.py", destination / "runtime/actor.py",
+                destination / "runtime/.tavern-release-version", destination / "updater/SKILL.md")
     for path in required:
         if not path.is_file():
             raise RuntimeError(f"release archive is missing {path.relative_to(destination)}")
-    if manifest.get("schema") == 2:
-        expected = manifest.get("files") or {}
-        actual = tree_hashes(destination)
-        if actual != expected:
-            raise RuntimeError("release file manifest mismatch")
+    expected = manifest.get("files") or {}
+    managed = manifest.get("managed_files") or []
+    actual = tree_hashes(destination)
+    if actual != expected or sorted(expected) != sorted(managed):
+        raise RuntimeError("release file manifest mismatch")
 
 
 def ignored(path):
@@ -188,13 +196,14 @@ def merge_file(base, current, incoming, output):
     return False
 
 
-def merge_area(area, base_root, current_root, incoming_root, output_root):
+def merge_area(area, base_root, current_root, incoming_root, output_root, managed_names):
     base = tree_files(base_root)
     current = tree_files(current_root)
     incoming = tree_files(incoming_root)
+    copy_tree(current_root, output_root)
     report = []
     conflicts = []
-    for name in sorted(set(base) | set(current) | set(incoming)):
+    for name in sorted(managed_names):
         b, c, n = base.get(name), current.get(name), incoming.get(name)
         bh = sha256_file(b) if b else None
         ch = sha256_file(c) if c else None
@@ -207,14 +216,8 @@ def merge_area(area, base_root, current_root, incoming_root, output_root):
             source, status = n, "upstream"
         elif nh == bh:
             source, status = c, "local"
-        elif not b and c and not n:
-            source, status = c, "local-added"
         elif not b and n and not c:
             source, status = n, "upstream-added"
-        elif b and not c and nh == bh:
-            status = "local-deleted"
-        elif b and not n and ch == bh:
-            status = "upstream-deleted"
         elif b and c and n and not any(binary(path) for path in (b, c, n)):
             if merge_file(b, c, n, output_root / name):
                 status = "merged"
@@ -227,11 +230,6 @@ def merge_area(area, base_root, current_root, incoming_root, output_root):
         elif status != "merged" and source:
             copy_file(source, output_root / name)
         report.append({"path": f"{area}/{name}", "category": category(area, name), "status": status})
-    # Preserve credentials and local state that are deliberately outside release control.
-    for name, path in tree_files(current_root).items():
-        rel = Path(name)
-        if protected(rel):
-            copy_file(path, output_root / rel)
     return report, conflicts
 
 
@@ -289,7 +287,7 @@ def stop_server():
 
 def start_server():
     if not SKIP_SERVICE:
-        run(["sh", str(TARGETS["skill"] / "scripts/bringup.sh")])
+        run(["sh", str(DATA / "skills/creative/tavern/scripts/bringup.sh")])
 
 
 def restore(backup):
@@ -352,11 +350,16 @@ def command_review(_args):
         staged = plan_dir / "staged"
         staged.mkdir(parents=True)
         files, conflicts = [], []
+        managed_by_area = {area: set() for area in TARGETS}
+        for path in manifest["managed_files"]:
+            area, separator, name = path.partition("/")
+            if not separator or area not in managed_by_area:
+                raise RuntimeError(f"release manages an unsupported path: {path}")
+            managed_by_area[area].add(name)
         for area, target in TARGETS.items():
             incoming = unpacked / area
-            if not incoming.is_dir():
-                copy_tree(target, incoming)
-            area_files, area_conflicts = merge_area(area, BASELINE / area, target, incoming, staged / area)
+            area_files, area_conflicts = merge_area(
+                area, BASELINE / area, target, incoming, staged / area, managed_by_area[area])
             files.extend(area_files)
             conflicts.extend(area_conflicts)
         counts = {}
@@ -414,7 +417,6 @@ def command_apply(args):
     try:
         stop_server()
         replace_tree(staged / "runtime", TARGETS["runtime"])
-        replace_tree(staged / "skill", TARGETS["skill"])
         start_server()
         ok, report = health()
         if not ok:
@@ -437,7 +439,7 @@ def command_rollback(args):
         raise RuntimeError("no updater state is available for rollback")
     state = json.loads(STATE.read_text(encoding="utf-8"))
     backup = Path(state.get("backup") or "")
-    if not (backup / "runtime").is_dir() or not (backup / "skill").is_dir():
+    if not (backup / "runtime").is_dir():
         raise RuntimeError("rollback backup is missing")
     current = local_version()
     restore(backup)
