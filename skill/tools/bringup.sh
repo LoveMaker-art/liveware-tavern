@@ -12,21 +12,47 @@
 #
 # app ID 不再写死：从 state/apps.json 读（由 provision.sh 首跑写入，缺则报错指向 install）。
 # 两个活件 app 同一 server（:8799），靠 tunnel 透传的 X-Forwarded-Host 分流：
-#   console（酒馆）→ / = 控制台      actor（演员卡）→ / = 演员卡
+#   console（酒馆）→ / = 控制台      actor（故事档案）→ / = 故事档案
 #
-# 跑：docker exec <容器> sh /opt/data/tavern/tools/bringup.sh
+# 跑：sh /opt/data/skills/creative/tavern/scripts/bringup.sh
 set -u
-TAVERN=/opt/data/tavern
-LW=/opt/data/clawchat/liveware
+TAVERN_SKILL=/opt/data/skills/creative/tavern
+TAVERN_APP=/opt/data/apps/tavern-runtime
+TAVERN_STATE=/opt/data/tavern-state
+LW_DIR=/opt/data/clawchat/liveware
+LW_BIN="${LIVEWARE_BIN:-}"
+if [ -z "$LW_BIN" ]; then
+  if command -v liveware >/dev/null 2>&1; then
+    LW_BIN="$(command -v liveware)"
+  else
+    LW_BIN="$LW_DIR/liveware"
+  fi
+fi
+TUNNEL_AGENT_BIN="${TUNNEL_AGENT_BIN:-}"
+if [ -z "$TUNNEL_AGENT_BIN" ]; then
+  if command -v tunnel-agent >/dev/null 2>&1; then
+    TUNNEL_AGENT_BIN="$(command -v tunnel-agent)"
+  else
+    TUNNEL_AGENT_BIN="$LW_DIR/tunnel-agent"
+  fi
+fi
+if [ ! -x "$LW_BIN" ]; then
+  echo "✗ liveware command not found: $LW_BIN" >&2
+  exit 1
+fi
+if [ ! -x "$TUNNEL_AGENT_BIN" ]; then
+  echo "✗ tunnel-agent command not found: $TUNNEL_AGENT_BIN" >&2
+  exit 1
+fi
 PLUGIN=/opt/data/plugins/clawchat
 PY=/opt/hermes/.venv/bin/python
 PORT="${TAVERN_PORT:-8799}"
-APPS="$TAVERN/state/apps.json"
+APPS="$TAVERN_STATE/apps.json"
 
-# 0. 读 app ID / 演员卡域名（provision.sh 首跑写入；无则这是首跑，指向 install）
+# 0. 读 app ID / 故事档案域名（provision.sh 首跑写入；无则这是首跑，指向 install）
 if [ ! -f "$APPS" ]; then
   echo "✗ 未找到 $APPS —— 这看起来是首跑。" >&2
-  echo "  先在 host 侧跑：tools/install.sh <容器>（建 app + 写 apps.json + register），再由它调本脚本。" >&2
+  echo "  先跑：/opt/data/skills/creative/tavern/scripts/provision.sh（建 app + 写 apps.json + register），再跑本脚本。" >&2
   exit 1
 fi
 eval "$("$PY" - "$APPS" <<'PY'
@@ -44,15 +70,47 @@ if [ -z "$APP_ID" ] || [ -z "$ACTOR_APP_ID" ]; then
 fi
 
 # 1. 控制台 server.py（setsid 完全脱离，docker exec 返回也不被杀）
-if ! curl -fsS "127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
-  setsid sh -c "cd $TAVERN && exec python3 server.py --port $PORT" \
-    > "$TAVERN/server.log" 2>&1 < /dev/null &
+# 从 Hermes config 提取 Clawling API key（容器环境可能不设 DEEPSEEK_API_KEY）
+TK=$("$PY" -c "
+import yaml
+with open('/opt/data/config.yaml') as f:
+    cfg = yaml.safe_load(f) or {}
+model = cfg.get('model', {}) or {}
+provider = (cfg.get('providers', {}) or {}).get('clawling', {}) or {}
+k = provider.get('api_key') or model.get('api_key') or ''
+b = provider.get('api') or model.get('base_url') or 'http://api.clawling.io/v1'
+print(k)
+print(b)
+" 2>/dev/null)
+MODEL_KEY=$(echo "$TK" | head -1)
+MODEL_BASE=$(echo "$TK" | tail -1)
+MODEL_BASE=${MODEL_BASE:-http://api.clawling.io/v1}
+HEALTH=$(curl -fsS "127.0.0.1:$PORT/api/health" 2>/dev/null || true)
+NEED_SERVER=0
+if [ -z "$HEALTH" ]; then
+  NEED_SERVER=1
+else
+  NEED_SERVER=$(printf '%s' "$HEALTH" | MODEL_BASE="$MODEL_BASE" "$PY" -c "
+import json, os, sys
+try:
+    h = json.load(sys.stdin)
+except Exception:
+    print(1); raise SystemExit
+expected = os.environ.get('MODEL_BASE', '')
+print(1 if (not h.get('key_set') or (expected and h.get('base') != expected)) else 0)
+" 2>/dev/null || echo 1)
+fi
+if [ "$NEED_SERVER" = "1" ]; then
+  pkill -f "server.py --port $PORT" >/dev/null 2>&1 || true
+  setsid sh -c "cd $TAVERN_APP && exec env TAVERN_STATE_DIR=$TAVERN_STATE TAVERN_MODEL_KEY='$MODEL_KEY' TAVERN_MODEL_BASE='$MODEL_BASE' $PY server.py --port $PORT" \
+    9>&- > "$TAVERN_STATE/server.log" 2>&1 < /dev/null &
   i=0; while [ $i -lt 8 ]; do curl -fsS "127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break; sleep 1; i=$((i+1)); done
 fi
 echo "console: $(curl -fsS "127.0.0.1:$PORT/api/health" 2>/dev/null || echo DOWN)"
 
-# 1b. 演员卡分流域名（server 每请求读 state/actor_host.txt；/opt/data 持久，幂等确保）
-printf '%s' "$ACTOR_HOST" > "$TAVERN/state/actor_host.txt"
+# 1b. 故事档案分流域名（server 每请求读 state/actor_host.txt；/opt/data 持久，幂等确保）
+mkdir -p "$TAVERN_STATE"
+printf '%s' "$ACTOR_HOST" > "$TAVERN_STATE/actor_host.txt"
 echo "actor_host: $ACTOR_HOST"
 
 # 2. liveware 登录（token 从 plugin profile config 解析；/root/.clawling 易失，每次重登）
@@ -61,17 +119,17 @@ cd "$PLUGIN" && HERMES_HOME=/opt/data "$PY" -c \
 
 # 3. 绑定两个 app 的 upstream 到同一 server（幂等）
 for a in "$APP_ID" "$ACTOR_APP_ID"; do
-  "$LW/liveware" tunnel bind "$a" "http://127.0.0.1:$PORT" >/dev/null 2>&1 \
+  "$LW_BIN" tunnel bind "$a" "http://127.0.0.1:$PORT" >/dev/null 2>&1 \
     && echo "bound: $a -> 127.0.0.1:$PORT" || echo "bind $a: (skipped/failed)"
 done
 
 # 4. tunnel-agent（裸跑：默认生产 relay + control-url，token 读 ~/.clawling/liveware.json）
 if ! pgrep -f tunnel-agent >/dev/null 2>&1; then
-  setsid sh -c "exec $LW/tunnel-agent" \
-    > /root/.clawling/tunnel-agent.boot.log 2>&1 < /dev/null &
+  setsid sh -c "exec \"$TUNNEL_AGENT_BIN\"" \
+    9>&- > /opt/data/.clawling/tunnel-agent.boot.log 2>&1 < /dev/null &
   sleep 3
 fi
 echo "tunnel-agent pid: $(pgrep -f tunnel-agent | head -1 || echo NONE)"
 
 echo "公网: https://$APP_ID.apps.clawling.io/  (酒馆)"
-echo "公网: https://$ACTOR_HOST/  (演员卡)"
+echo "公网: https://$ACTOR_HOST/  (故事档案)"

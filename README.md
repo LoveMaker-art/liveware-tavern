@@ -1,22 +1,45 @@
-# clawchat-tavern
+# Liveware Tavern
 
-把 **agent + liveware** 与开源 AI 角色扮演前端 **SillyTavern（"酒馆"）** 的生态结合，探索一个"更好的酒馆体验"。
+Liveware Tavern is a stateful, multi-character story application for Hermes Agent and ClawChat. It combines reusable character cards, worldbooks, per-world personas, long-story memory, model selection, and a mobile-friendly Liveware console.
 
-> 独立孵化项目，**不进 ClawChat 仓库**（类比 `clawchat-newsdesk` / `clawchat-liveware-skills`）。
-> 当前处于**调研 + 概念讨论**阶段，尚未写任何产品代码。
+## Repository Layout
 
-## 现状
+- `skill/` - Tavern runtime, frontend, Hermes skill, operational scripts, references, and state-free starter assets.
+- `updater-skill/` - Independent Hermes skill for verified in-place updates from GitHub Releases.
+- `scripts/build_release.py` - Builds the signed-by-hash release assets consumed by the updater.
+- `docs/` - Product and implementation notes.
 
-- **阶段**：Phase 0 — 生态调研 + 可能性讨论
-- **不做的事**：不抄 SillyTavern 代码、不假设新增 ClawChat 后端接口、不碰 ClawChat 客户端
+## Data Boundary
 
-## 目录
+Application releases never contain or overwrite instance data. User worlds, cards, worldbooks, stories, model choices, app registration, and identity state live under `/opt/data/tavern-state` on each instance.
 
-- `docs/research/sillytavern-ecosystem.md` — 酒馆生态调研简报（产品 / 口碑 / 用法 / 衍生项目 / 社区 / 痛点）
-- `docs/research/agent-liveware-opportunities.md` — agent+liveware 对酒馆生态的创新可能性（讨论稿）
+Credentials, ClawChat databases, sessions, logs, `.env` files, and `/opt/data/config.yaml` are not part of this repository or release archives.
 
-## 背景指针（ClawChat 侧已有能力）
+## Build A Release
 
-- liveware = 沙箱容器窗口（非浏览器），域锁 + 不注入登录态 + 能力默认关
-- agent 自托管页面与 agent 同源、由 agent 调能力服务器（先例：资讯日报 digest liveware + newsdesk 能力服务器）
-- 详见 ClawChat 仓库 `docs/liveware/`
+```sh
+python3 scripts/build_release.py
+```
+
+This creates:
+
+```text
+dist/manifest.json
+dist/tavern-release.tar.gz
+```
+
+Create a stable GitHub Release tagged `v<SKILL.md version>` and attach both files. Mirrored instances can then update through `tavern-updater` without rebuilding the image.
+
+## Install The Updater Skill
+
+Place `updater-skill/` at:
+
+```text
+/opt/data/skills/system/tavern-updater/
+```
+
+The Agent can then check and install a verified stable release after explicit user confirmation.
+
+## License
+
+MIT

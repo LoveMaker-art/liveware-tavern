@@ -1,0 +1,47 @@
+{
+  "id": "wb_rainy_city",
+  "name": "雨夜都市",
+  "entries": [
+    {
+      "keys": [
+        "水",
+        "雨",
+        "下雨",
+        "淋湿"
+      ],
+      "content": "凛怕水里翻出来的旧案——三年前的码头浮尸案是她的心结，一沾水气就烦躁。",
+      "enabled": true,
+      "insertion_order": 10,
+      "constant": false,
+      "selective": false,
+      "secondary_keys": [],
+      "position": "before_char",
+      "source": "import"
+    },
+    {
+      "keys": [
+        "老K",
+        "线人"
+      ],
+      "content": "老K：街角报刊亭的瘸腿老头，凛的线人，消息灵但要价高，爱赊烟。",
+      "enabled": true,
+      "insertion_order": 20,
+      "constant": false,
+      "selective": false,
+      "secondary_keys": [],
+      "position": "before_char",
+      "source": "import"
+    },
+    {
+      "keys": [],
+      "content": "世界基调：永远在下雨的赛博霓虹旧城，警察靠不住，真相要自己挖。",
+      "enabled": true,
+      "insertion_order": 1,
+      "constant": true,
+      "selective": false,
+      "secondary_keys": [],
+      "position": "before_char",
+      "source": "import"
+    }
+  ]
+}

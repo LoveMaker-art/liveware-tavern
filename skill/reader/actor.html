@@ -4,23 +4,24 @@
   <meta charset="utf-8" />
   <!-- 禁用户缩放:与 index.html 同款 app 质感 -->
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>墨 · 演员卡</title>
+  <title>Story Profile</title>
+  <meta name="application-name" content="Story Profile" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Story Profile" />
+  <meta property="og:description" content="若棠记下的口味、角色和与你走过的故事。" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Story Profile" />
+  <meta name="twitter:description" content="若棠记下的口味、角色和与你走过的故事。" />
   <link rel="stylesheet" href="console.css" />
 </head>
-<body data-doc-title="docTitleActor">
-  <header id="topbar">
-    <!-- 返回:仅从酒馆页内跳来(?from=console)时由 actor.js 显示——独立打开演员卡活件时无处可返。
-         桌面容器窗口没有系统返回,这个钮是页内跳转的唯一回路。 -->
-    <button id="acBack" class="iconbtn hidden" aria-label="返回酒馆" data-i18n-aria="ariaBack">
-      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-    </button>
-    <div class="topTitle">
-      <div class="tline"><span class="mark">✦</span><span class="prodName" data-i18n="actorPageTitle">墨 · 演员</span></div>
-    </div>
-  </header>
+<body data-doc-title="appWindowTitleActor">
   <main id="acPage" class="acPage">
+    <div class="acTopbar">
+      <button id="acBack" class="acBack hidden" type="button" data-i18n-aria="ariaBack" aria-label="返回酒馆"><span class="acBackMark">‹</span><span data-i18n="ariaBack">返回酒馆</span></button>
+      <div class="acTopTitle" data-i18n="docTitleActor">若棠的故事档案</div>
+    </div>
     <div id="acRoot" class="acCard">
-      <div class="acEmpty" data-i18n="acLoading">读取演员卡…</div>
+      <div class="acEmpty" data-i18n="acLoading">读取故事档案…</div>
     </div>
   </main>
   <script src="i18n.js"></script>

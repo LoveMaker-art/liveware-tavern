@@ -5,9 +5,9 @@
 #
 # 一次性做四件事（全幂等，可重跑）：
 #   1. 两处放置（今天靠手动 docker cp 两趟、漏一处技能就形同不存在，这里合一）：
-#        · 运行时  → /opt/data/tavern/                （排除 state/，绝不覆盖运行数据）
+#        · 运行时  → /opt/data/apps/tavern-runtime/                （排除 state/，绝不覆盖运行数据）
 #        · 技能注册 → /opt/data/skills/creative/tavern/ （gateway 只扫这里的 SKILL.md）
-#        · SOUL    → /opt/data/SOUL.md                （chat 侧墨人格，热生效）
+#        · SOUL    → /opt/data/SOUL.md                （chat 侧若棠人格，热生效）
 #   2. 竞争产物卫生：删 agent 自发造的诱导反模式游离产物
 #        · skills/creative/sillytavern-character-cards（PNG 生成器，诱手搓）
 #        · skills/creative/tavern/references/browser-injection-*（手搓 PNG 注入手册）
@@ -54,15 +54,15 @@ echo "  源：$SKILL_DIR"
 # ---- 1. 两处放置 ----
 echo "== 1/4 放置 =="
 # 运行时（排除 state/ 运行数据、__pycache__、日志）——tar 管道进容器，docker cp 不支持 exclude
-docker exec "$CONTAINER" mkdir -p /opt/data/tavern /opt/data/skills/creative/tavern
+docker exec "$CONTAINER" mkdir -p /opt/data/apps/tavern-runtime /opt/data/skills/creative/tavern
 tar -C "$SKILL_DIR" \
   --exclude='./state' --exclude='./__pycache__' --exclude='*.pyc' --exclude='*.log' \
-  -cf - . | docker exec -i "$CONTAINER" tar -C /opt/data/tavern -xf -
-echo "  · 运行时 → /opt/data/tavern/（已排除 state/）"
+  -cf - . | docker exec -i "$CONTAINER" tar -C /opt/data/apps/tavern-runtime -xf -
+echo "  · 运行时 → /opt/data/apps/tavern-runtime/（已排除 state/）"
 # 技能注册：gateway 只扫 skills/<分类>/<名>/，放 SKILL.md 一个文件即可
 docker cp "$SKILL_DIR/SKILL.md" "$CONTAINER:/opt/data/skills/creative/tavern/SKILL.md"
 echo "  · 技能注册 → /opt/data/skills/creative/tavern/SKILL.md"
-# SOUL：chat 侧墨人格，落 HERMES_HOME 根（热生效）
+# SOUL：chat 侧若棠人格，落 HERMES_HOME 根（热生效）
 docker cp "$SKILL_DIR/SOUL.md" "$CONTAINER:/opt/data/SOUL.md"
 echo "  · SOUL → /opt/data/SOUL.md"
 
@@ -97,8 +97,8 @@ echo "== 4/4 provision + bringup =="
 docker exec \
   ${TAVERN_CONSOLE_APP_NAME:+-e TAVERN_CONSOLE_APP_NAME="$TAVERN_CONSOLE_APP_NAME"} \
   ${TAVERN_ACTOR_APP_NAME:+-e TAVERN_ACTOR_APP_NAME="$TAVERN_ACTOR_APP_NAME"} \
-  "$CONTAINER" sh /opt/data/tavern/tools/provision.sh
-docker exec "$CONTAINER" sh /opt/data/tavern/tools/bringup.sh
+  "$CONTAINER" sh /opt/data/skills/creative/tavern/scripts/provision.sh
+docker exec "$CONTAINER" sh /opt/data/skills/creative/tavern/scripts/bringup.sh
 
 echo ""
 echo "✅ 安装完成。"

@@ -9,19 +9,46 @@
 # 复用优先是硬要求——重跑本脚本不会重复建 app。
 #
 # app 名可用 env 覆盖（复制给别的搭子时改名）：
-#   TAVERN_CONSOLE_APP_NAME（默认 墨的酒馆）  TAVERN_ACTOR_APP_NAME（默认 墨的演员卡）
+#   TAVERN_CONSOLE_APP_NAME（默认 若棠的酒馆）  TAVERN_ACTOR_APP_NAME（默认 若棠的故事档案）
 #
 # 前置：容器已激活（hermes clawchat activate）+ 装了 clawchat 插件（带 liveware 二进制）。
-# 跑：docker exec <容器> sh /opt/data/tavern/tools/provision.sh（通常由 install.sh 调）
+# 跑：sh /opt/data/skills/creative/tavern/scripts/provision.sh（通常由 install.sh 调）
 set -eu
-TAVERN=/opt/data/tavern
-LW=/opt/data/clawchat/liveware/liveware
+TAVERN_SKILL=/opt/data/skills/creative/tavern
+TAVERN_APP=/opt/data/apps/tavern-runtime
+TAVERN_STATE=/opt/data/tavern-state
+LW_DIR=/opt/data/clawchat/liveware
+LW="${LIVEWARE_BIN:-}"
+if [ -z "$LW" ]; then
+  if command -v liveware >/dev/null 2>&1; then
+    LW="$(command -v liveware)"
+  else
+    LW="$LW_DIR/liveware"
+  fi
+fi
+if [ ! -x "$LW" ]; then
+  echo "✗ liveware command not found: $LW" >&2
+  exit 1
+fi
 PLUGIN=/opt/data/plugins/clawchat
 PY=/opt/hermes/.venv/bin/python
-CONSOLE_NAME="${TAVERN_CONSOLE_APP_NAME:-墨的酒馆}"
-ACTOR_NAME="${TAVERN_ACTOR_APP_NAME:-墨的演员卡}"
-APPS="$TAVERN/state/apps.json"
-mkdir -p "$TAVERN/state"
+APPS="$TAVERN_STATE/apps.json"
+IDENTITY="$TAVERN_STATE/app_identity.json"
+mkdir -p "$TAVERN_STATE"
+if [ ! -f "$IDENTITY" ]; then
+  cat > "$IDENTITY" <<'JSON'
+{
+  "persona_name": "若棠",
+  "tavern_name": "若棠的酒馆",
+  "actor_name": "若棠的故事档案",
+  "persona_name_en": "Ruotang",
+  "tavern_name_en": "",
+  "actor_name_en": ""
+}
+JSON
+fi
+CONSOLE_NAME="${TAVERN_CONSOLE_APP_NAME:-$($PY -c 'import json; d=json.load(open("'$IDENTITY'",encoding="utf-8")); n=(d.get("persona_name_en") or "Ruotang").strip(); print((d.get("tavern_name_en") or (n + "\047s Tavern")).strip())')}"
+ACTOR_NAME="${TAVERN_ACTOR_APP_NAME:-$($PY -c 'import json; d=json.load(open("'$IDENTITY'",encoding="utf-8")); n=(d.get("persona_name_en") or "Ruotang").strip(); print((d.get("actor_name_en") or (n + "\047s Story Profile")).strip())')}"
 
 # 1. liveware 登录（token 从 plugin profile config 解析；env CLAWCHAT_TOKEN 是空壳别直接传）
 echo "== login =="
@@ -47,8 +74,28 @@ def find(name, apps):
             return a
     return None
 
-def ensure(name):
-    a = find(name, app_list())
+def find_id(app_id, apps):
+    for a in apps:
+        if a.get("appId") == app_id and a.get("status") == "active":
+            return a
+    return None
+
+def existing_id(key):
+    try:
+        with open(apps_path, encoding="utf-8") as f:
+            return ((json.load(f).get(key) or {}).get("app_id") or "").strip()
+    except Exception:
+        return ""
+
+def ensure(key, name):
+    apps = app_list()
+    old_id = existing_id(key)
+    if old_id:
+        a = find_id(old_id, apps)
+        if a:
+            print("  reuse-id:", name, a["appId"])
+            return a
+    a = find(name, apps)
     if a:
         print("  reuse:", name, a["appId"])
         return a
@@ -60,8 +107,8 @@ def ensure(name):
     print("  created:", name, a["appId"])
     return a
 
-con = ensure(console_name)
-act = ensure(actor_name)
+con = ensure("console", console_name)
+act = ensure("actor", actor_name)
 data = {
     "console": {"name": console_name, "app_id": con["appId"], "domain": con["domain"]},
     "actor":   {"name": actor_name,   "app_id": act["appId"], "domain": act["domain"]},
@@ -70,22 +117,36 @@ json.dump(data, open(apps_path, "w"), ensure_ascii=False, indent=2)
 print("  wrote", apps_path)
 PY
 
-# 3. register 进 member-backend（幂等；才进活件入口 launcher 瓦片。已注册则容错跳过）
+# 3. register 进 member-backend（名字/URL 不一致时刷新注册；不删除 liveware app 本体）
 echo "== register apps =="
 cd "$PLUGIN" && HERMES_HOME=/opt/data "$PY" - "$APPS" <<'PY'
 import asyncio, json, sys
 sys.path.insert(0, '.')
 from clawchat_gateway import tools
-d = json.load(open(sys.argv[1]))
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+
+def app_rows(payload):
+    if isinstance(payload, dict):
+        rows = payload.get("apps")
+        return rows if isinstance(rows, list) else []
+    return []
+
 async def go():
+    listed = app_rows(await tools.list_apps())
+    by_app_id = {r.get("app_id") or r.get("appId"): r for r in listed if isinstance(r, dict)}
     for key in ("console", "actor"):
         e = d[key]
         url = "https://%s/" % e["domain"]
-        try:
-            await tools.register_app(name=e["name"], app_id=e["app_id"], url=url)
-            print("  registered:", e["name"])
-        except Exception as ex:
-            print("  register", e["name"], "(skip):", ex)
+        row = by_app_id.get(e["app_id"])
+        same = row and row.get("name") == e["name"] and row.get("url") == url
+        if same:
+            print("  registered-current:", e["name"])
+            continue
+        if row:
+            res = await tools.unregister_app(e["app_id"])
+            print("  unregistered-stale:", row.get("name"), res)
+        res = await tools.register_app(name=e["name"], app_id=e["app_id"], url=url)
+        print("  registered:", e["name"], res)
 asyncio.run(go())
 PY
 

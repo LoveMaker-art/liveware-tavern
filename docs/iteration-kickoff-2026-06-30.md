@@ -20,7 +20,7 @@
 
 ## 1. 现状（已跑通，别重造）
 
-- agent = 容器 **`hermes-clean`**（usr_01KW8SQPTXECF8E4XHYXF7708B，nickname「墨」，SOUL 在 `~/.hermes-clean/SOUL.md`，DeepSeek 基座）。**账号支持多 agent**（干净 config + 新连接码→新 usr_，已实锤）。
+- agent = 独立 Hermes 容器，使用实例自己的 SOUL 与模型配置。账号可连接多个彼此隔离的 Agent 身份。
 - **Loop A** 控制台入戏生成 ✅；**Loop B** liveware tunnel → 公网 `app-02dd46427910ed17.apps.clawling.io` → ClawChat 活件卡 + Windows 独立容器窗 ✅。
 - **找卡/导卡** ✅（Chub.ai 来源，`api.chub.ai/search` + `avatars.charhub.io/avatars/<fullPath>/chara_card_v2.png`）。**乱码已在解析层根治**（任何路径都不乱码）。
 - **记忆桥接（持久搭子）** ✅：墨能 `recall` 读酒馆对戏（实测从「我看不到」逆转成精准复述+点评）；`reflect` 服务端复盘→蒸馏偏好→写技艺层 `actor_self`（注入每场生成）。实测复盘「电子魅魔」蒸出 3 条精准偏好。

@@ -1,22 +1,55 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
 const t = I18N.t;  // 文案一律走 i18n.js 的 STRINGS(locale contract,liveware-frontend §i18n)
-const state = { cards: [], cardMap: {}, worldbooks: {}, productions: [], activeId: null, active: null,
-  agentUserId: "", version: "", models: null, busy: false, abort: null, stick: true, _anchor: null };
+const state = { cards: [], libraryCards: [], cardMap: {}, worldbooks: {}, libraryWorldbooks: [], productions: [], activeId: null, active: null,
+  agentUserId: "", models: null, busy: false, pendingSend: null, stick: true, _anchor: null,
+  persona: {}, _foldChar: true, _foldLore: true, _editPersona: false, _editCast: false, _editLore: false };
 
-function esc(s) { return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
-function fmt(s) { return esc(s).replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>'); }
+function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function fmt(s) {
+  const codes = [];
+  let html = esc(s).replace(/`([^`]+)`/g, (_, code) => {
+    const i = codes.push(`<code>${code}</code>`) - 1;
+    return `@@CODE${i}@@`;
+  });
+  html = html.replace(/\*([^*]+)\*/g, '<span class="nar">$1</span>');
+  return html.replace(/@@CODE(\d+)@@/g, (_, i) => codes[Number(i)] || "");
+}
+function loc(obj, field) {
+  if (!obj || typeof obj !== "object") return obj && obj[field];
+  const lang = I18N.lang === "zh" ? "zh" : "en";
+  const pack = obj.i18n && obj.i18n[lang];
+  let value = null;
+  if (pack && pack[field] !== undefined && pack[field] !== null && String(pack[field]).trim() !== "") value = pack[field];
+  else {
+    const zh = obj.i18n && obj.i18n.zh;
+    if (I18N.lang === "zh" && zh && zh[field]) value = zh[field];
+    else value = obj[field];
+  }
+  return I18N.renderName ? I18N.renderName(value) : value;
+}
+
 function toast(msg) { const box = $("#toast"); box.textContent = msg; box.classList.remove("hidden"); clearTimeout(box._h); box._h = setTimeout(() => box.classList.add("hidden"), 2600); }
 function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
 
 // 内联图标(reader 不挂图标字体)——细描边,克制。
 const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
+const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>';
 const CHAT_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12z"/></svg>';
 const CARD_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2"/><path d="M6.5 16c.5-1.6 1.5-2.4 2.5-2.4s2 .8 2.5 2.4M15 10h3.5M15 13.5h3.5"/></svg>';
 const WORLD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>';
 const SEND_SVG = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V5M6 11l6-6 6 6"/></svg>';
 const STOP_SVG = '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" y="6.5" width="11" height="11" rx="2.6" fill="currentColor"/></svg>';
 const SLIDERS_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h9M20 8h0M4 16h1M12 16h8"/><circle cx="16" cy="8" r="2.2"/><circle cx="8" cy="16" r="2.2"/></svg>';
+
+async function loadIdentity() {
+  try {
+    const identity = await bridge.get("/api/identity");
+    I18N.setIdentity(identity);
+    state.agentUserId = identity.agent_user_id || "";
+  }
+  catch (_) {}
+}
 
 // 对话轮数 = 用户出手数(first_mes 是 char 开场,不算)。最近活跃 = story 末条时间。
 function countTurns(story) { return (story || []).filter((m) => m.role === "user").length; }
@@ -26,6 +59,14 @@ function lastTs(p) {
   let last = p.created_at || 0;
   (p.story || []).forEach((m) => { if (m.ts && m.ts > last) last = m.ts; });
   return last;
+}
+function productionCardIds(p) {
+  const ids = (p && Array.isArray(p.card_ids) && p.card_ids.length) ? p.card_ids : (p && p.card_id ? [p.card_id] : []);
+  return [...new Set(ids.filter(Boolean))];
+}
+function productionCards(p) {
+  if (p && Array.isArray(p.cards)) return p.cards.filter(Boolean);
+  return productionCardIds(p).map((id) => state.cardMap[id]).filter(Boolean);
 }
 function lastActivity(p) {
   const last = lastTs(p);
@@ -41,23 +82,33 @@ function relTime(ts) {
   const dt = new Date(ts * 1000);
   return t("monthDay", { m: dt.getMonth() + 1, d: dt.getDate() });
 }
+function fmtDuration(ms) {
+  const sec = Math.max(0, ms || 0) / 1000;
+  return sec < 60 ? sec.toFixed(sec < 10 ? 1 : 0) + "s" : Math.floor(sec / 60) + "m " + Math.round(sec % 60) + "s";
+}
+function attachGenMs(msg, startedAt) {
+  if (msg && startedAt) msg.gen_ms = Math.max(0, Date.now() - startedAt);
+  return msg;
+}
 
 async function loadAll() {
-  const [pr, cr, wr, ar, mr] = await Promise.all([
+  const [pr, cr, wr, lwr, mr] = await Promise.all([
     bridge.get("/api/productions"), bridge.get("/api/cards"), bridge.get("/api/worldbooks"),
-    bridge.get("/api/actor"), bridge.get("/api/models"),
+    bridge.get("/api/library/worldbooks"),
+    bridge.get("/api/models"),
   ]);
   state.productions = pr.productions || [];
   state.cards = cr.cards || [];
+  state.libraryCards = state.cards;
   state.cardMap = {}; state.cards.forEach((c) => (state.cardMap[c.id] = c));
   state.worldbooks = {}; (wr.worldbooks || []).forEach((w) => (state.worldbooks[w.id] = w));
-  state.agentUserId = ar.agent_user_id || ""; // 墨的 ClawChat 身份(「找墨复盘」深链;空=隐入口)
-  state.version = ar.version || "";          // 活件版本(酒馆 app 自己的发版号)
-  // 大模型配置(脱敏列表);旧 server 没这端点 → 兜一个只有墨自带的默认,面板不裸奔
+  state.libraryWorldbooks = lwr.worldbooks || [];
+  // 大模型配置(脱敏列表);旧 server 没这端点 → 兜一个只有若棠自带的默认,面板不裸奔
   state.models = (mr && mr.configs) ? mr
     : { configs: [{ id: "builtin", builtin: true }], active: "builtin" };
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
   state.active = state.productions.find((p) => p.id === state.activeId) || null;
+  state.persona = (state.active && state.active.persona) || {};
   renderRail(); renderStage(); renderPanel();
 }
 
@@ -66,12 +117,10 @@ function renderRail() {
   // 最近动静倒序(新建/刚演过的浮顶)——每次渲染现排,发送/导入后重渲即自动上浮
   const prods = [...state.productions].sort((a, b) => lastTs(b) - lastTs(a));
   ul.innerHTML = prods.map((p) => {
-    const card = state.cardMap[p.card_id] || {};
     const turns = countTurns(p.story);
-    const meta = [card.name, turns > 0 ? t("turnsShort", { n: turns }) : t("newPlay"),
-      lastActivity(p)].filter(Boolean).join(" · ");
+    const meta = [turns > 0 ? t("turnsShort", { n: turns }) : t("newPlay"), lastActivity(p)].filter(Boolean).join(" · ");
     return `<li class="prodItem ${p.id === state.activeId ? "active" : ""}" data-id="${p.id}">
-      <div class="prodName2">${esc(p.name)}</div>
+      <div class="prodName2">${esc(loc(p, "name") || p.name)}</div>
       <div class="prodMeta">${esc(meta)}</div>
       <button class="prodDel" data-del="${p.id}" aria-label="${esc(t("deleteProd"))}" title="${esc(t("deleteProd"))}">${TRASH_SVG}</button>
     </li>`;
@@ -85,21 +134,40 @@ function renderRail() {
 
 function renderStage() {
   const p = state.active;
-  $("#prodName").textContent = p ? p.name : t("appTitle");
-  const card = p ? (state.cardMap[p.card_id] || {}) : {};
-  $("#prodSub").textContent = card.name ? t("prodSubPrefix", { name: card.name }) : "";   // 活件/演员归属(副标题)
+  const prodNameEl = $("#prodName");
+  if (prodNameEl) prodNameEl.textContent = p ? (loc(p, "name") || p.name) : t("appTitle");
+  const prodSubEl = $("#prodSub");
+  if (prodSubEl) prodSubEl.textContent = "";
   $("#composer").classList.toggle("hidden", !p);  // 没开戏没处发:空态收掉输入框,导入引导是唯一动作
   const c = $("#convo");
-  if (!p) { c.innerHTML = `<div class="empty"><div class="emptyMark">✦</div><p>${esc(t("emptyLead"))}</p><p class="hint">${esc(t("emptyHint"))}</p></div>`; return; }
-  const turns = p.story.map((m, i) => turnHtml(m, i === p.story.length - 1)).join("");
+  if (!p) {
+    c.innerHTML = `<div class="empty"><div class="emptyMark">✦</div><p>${esc(t("emptyLead"))}</p><p class="hint">${esc(t("emptyHint"))}</p></div>`;
+    requestAnimationFrame(() => historyNavigator.sync());
+    return;
+  }
+  const visible = p.story || [];
+  const lastUserIdx = lastUserIndex(visible);
+  const turns = visible.map((m, i) => turnHtml(m, i === visible.length - 1, i >= lastUserIdx)).join("");
   c.innerHTML = `<div class="thread">${turns}</div>`;
   bindCtls();
   scrollDown();
+  requestAnimationFrame(() => historyNavigator.sync());
 }
 
-function turnHtml(m, isLast) {
+function lastUserIndex(story) {
+  if (!Array.isArray(story) || !story.length) return 0;
+  for (let i = story.length - 1; i >= 0; i--) {
+    if (story[i]?.role === "user") return i;
+  }
+  return Math.max(0, story.length - 1);
+}
+
+function turnHtml(m, isLast, canEdit) {
   if (m.role === "user") {
-    return `<div class="turn user"><div class="body">${fmt(m.text)}</div></div>`;
+    const edit = canEdit ? `<div class="ctl"><button data-act="edit">${esc(t("edit"))}</button></div>` : "";
+    return `<div class="turn user" data-id="${m.id}">
+      <div class="body">${fmt(loc(m, "text") || m.text)}</div>
+      ${edit}</div>`;
   }
   // swipe 备选回复:char 消息持有 alts[]/active_alt(非破坏性,conversation-surface §3.1)
   const alts = Array.isArray(m.alts) ? m.alts.length : 0;
@@ -112,16 +180,23 @@ function turnHtml(m, isLast) {
        </span>` : "";
   // 重生成只挂最后一条 char(服务端只重演 story 末条;挂别处会重生成错的那条)
   const regen = isLast ? `<button data-act="regen">${esc(t("regen"))}</button>` : "";
-  return `<div class="turn char" data-id="${m.id}">
-    <div class="body">${fmt(m.text)}</div>
-    <div class="ctl">${swipe}${regen}<button data-act="edit">${esc(t("edit"))}</button></div></div>`;
+  const cont = isLast ? `<button data-act="cont">${esc(t("cont"))}</button>` : "";
+  const sugg = isLast ? `<button data-act="suggest">${esc(t("suggest"))}</button>` : "";
+  const meta = m.gen_ms ? `<span class="genTime">${esc(t("genTime", { s: fmtDuration(m.gen_ms) }))}</span>` : "";
+  return `<div class="turn char ${m._temp ? "temp" : ""}" data-id="${m.id || ""}">
+    <div class="body">${fmt(loc(m, "text") || m.text)}</div>
+    <div class="ctl">${meta}${swipe}${regen}${cont}${sugg}${canEdit ? `<button data-act="edit">${esc(t("edit"))}</button>` : ""}</div></div>`;
 }
 
 function bindCtls() {
   document.querySelectorAll('.ctl [data-act="regen"]').forEach((b) =>
-    b.onclick = () => regenerate());
+    b.onclick = (e) => regenerate(e.currentTarget));
   document.querySelectorAll('.ctl [data-act="edit"]').forEach((b) =>
     b.onclick = (e) => editMsg(e.target.closest(".turn").dataset.id));
+  document.querySelectorAll('.ctl [data-act="cont"]').forEach((b) =>
+    b.onclick = (e) => doContinue(e.currentTarget));
+  document.querySelectorAll('.ctl [data-act="suggest"]').forEach((b) =>
+    b.onclick = (e) => doSuggest(e.currentTarget));
   document.querySelectorAll('.ctl [data-act="swl"]').forEach((b) =>
     b.onclick = (e) => swipe(e.target.closest(".turn").dataset.id, -1));
   document.querySelectorAll('.ctl [data-act="swr"]').forEach((b) =>
@@ -138,28 +213,30 @@ function provenanceHtml(card) {
   return "";
 }
 
-// 演员墨小节:收敛为两个入口(反馈 2026-07-02——演员卡已承载 knows/年表的完整呈现,
-// panel 不再摘要复读)。① 找墨复盘 = 深链跳 ClawChat 与墨的会话(clawchat://u/{id}?chat=1,
+// 故事主理人若棠小节:收敛为两个入口(反馈 2026-07-02——故事档案已承载 knows/年表的完整呈现,
+// panel 不再摘要复读)。① 找若棠复盘 = 深链跳 ClawChat 与若棠的会话(/clawchat/ruotang?draft=...,
 // 容器拦非同源导航 → openLinkExternally → in-app deep link;老版本 app 降级开资料页);
-// &draft= 带「复盘「剧组名」这场戏」预填进输入框(反馈 2026-07-02:给墨定位关键字;
-// 只填不发,发送权在用户)。必须是真 <a> 链接——移动容器只放行带手势的 LINK_ACTIVATED,
-// JS 跳转会被静默拦。② 墨的演员卡 = 同源 /actor 页内直达(?from=console 让演员卡显返回)。
+// &draft= 带「整理「世界名」这一场」预填进输入框(反馈 2026-07-02:给若棠定位关键字;
+// 只填不发,发送权在用户)。必须是真 <a target="_blank"> 链接——移动容器只放行带手势的外部 LINK_ACTIVATED,
+// JS 跳转/当前 WebView 内导航会被静默拦。② 若棠的故事档案 = 当前酒馆同源 /actor 页内直达。
 function actorSectionHtml() {
   const draft = state.active
     ? t("reflectDraft", { name: state.active.name }) : t("reflectDraftNoPlay");
+  const reflectHref = `clawchat://u/${encodeURIComponent(state.agentUserId || "")}?chat=1&draft=${encodeURIComponent(draft)}`;
   const reflectLink = state.agentUserId
-    ? `<a class="pLink" href="clawchat://u/${encodeURIComponent(state.agentUserId)}?chat=1&draft=${encodeURIComponent(draft)}">${CHAT_SVG}${esc(t("reflectWithMo"))}</a>`
-    : "";  // 拿不到墨的身份(本地 dev 无容器 config)→ 隐入口
+    ? `<a class="pLink" href="${esc(reflectHref)}" target="_blank" rel="noopener external">${CHAT_SVG}${esc(t("reflectWithMo"))}</a>`
+    : "";  // 拿不到若棠的身份(本地 dev 无容器 config)→ 隐入口
+  const actorHref = `/actor?from=console&return=${encodeURIComponent(location.origin + "/")}`;
   return `<div class="pSection actorSec">
     <div class="pHead">${esc(t("pActor"))}</div>
     ${reflectLink}
-    <a class="pLink" href="/actor?from=console">${CARD_SVG}${esc(t("moActorCard"))}</a>
+    <a class="pLink" href="${esc(actorHref)}">${CARD_SVG}${esc(t("moActorCard"))}</a>
   </div>`;
 }
 
 // 大模型小节(panel):只报当前在用的配置;管理(切/删)+教育(怎么加)走 sheet。model-config.md。
-// 配置显示名:builtin 用本地化「墨自带」(server 的 name 字段是中文 canonical,给 CLI 用)
-function modelDisplayName(c) { return c.builtin ? t("modelBuiltin") : c.name; }
+// 配置显示名:builtin 用本地化「若棠自带」(server 的 name 字段是中文 canonical,给 CLI 用)
+function modelDisplayName(c) { return c.name || c.model || t("modelBuiltin"); }
 
 function modelSectionHtml() {
   const ms = state.models || { configs: [], active: "builtin" };
@@ -172,62 +249,312 @@ function modelSectionHtml() {
   </div>`;
 }
 
+function loreTriggerText(e) {
+  const keys = Array.isArray(e.keys) ? e.keys.filter(Boolean) : [];
+  if (e.constant || !keys.length) return t("pAlwaysOn");
+  return t("loreTrigger", { keys: keys.join("、") });
+}
+
+async function deleteLoreEntry(ref) {
+  if (!state.active || !ref) return;
+  const ok = await confirmDialog({ title: t("loreDeleteTitle"), body: t("loreDeleteBody"), confirmLabel: t("delete") });
+  if (!ok) return;
+  try {
+    await bridge.event({ type: "delete_lore", production_id: state.active.id,
+      worldbook_id: ref.worldbookId, entry_id: ref.entryId, entry_index: ref.entryIndex });
+    await loadAll();
+    toast(t("loreDeleted"));
+  } catch (e) { toast(t("loreDeleteFailed", { err: e.message })); }
+}
+
+function librarySectionHtml(actorSec, modelSec) {
+  return `<div class="pSection librarySec">
+    <div class="pHead">${esc(t("pLibrary"))}</div>
+    <div class="libraryLinks">
+      <button class="actorMore" id="openCardLibrary">${CARD_SVG}${esc(t("openCardLibrary"))}</button>
+      <button class="actorMore" id="openWorldbookLibrary">${WORLD_SVG}${esc(t("openWorldbookLibrary"))}</button>
+    </div>
+    <div class="librarySupport">
+      ${actorSec}
+      ${modelSec}
+    </div>
+  </div>`;
+}
+
+function loreLabel(e) {
+  const keys = Array.isArray(e.keys) ? e.keys.filter(Boolean) : [];
+  if (e.constant || !keys.length) return t("pAlwaysOn");
+  return keys.join("、");
+}
+
+function sectionHead(title, editKey) {
+  const editing = !!state[editKey];
+  return `<div class="pHead pHeadAction"><span>${esc(title)}</span><button class="sectionEdit" data-edit-section="${esc(editKey)}">${esc(t(editing ? "done" : "edit"))}</button></div>`;
+}
+
 function renderPanel() {
   const body = $("#panelBody");
   const p = state.active;
-  const actorSec = actorSectionHtml();   // 演员墨跨剧组,始终显
-  const modelSec = modelSectionHtml();   // 大模型配置跨剧组,始终显
-  const lwFoot = state.version
-    ? `<div class="lwFoot" title="${esc(t("lwFootTip"))}"><span class="mark">✦</span>${esc(t("lwFoot", { v: state.version }))}</div>`
-    : "";
+  const actorSec = actorSectionHtml();
+  const modelSec = modelSectionHtml();
+  const persona = state.persona || {};
+  const hasPersona = persona.name || persona.description;
+  const persSec = `<div class="pSection">
+    ${sectionHead(t("pPersona"), "_editPersona")}
+    ${hasPersona
+      ? `<p class="pname">${esc(persona.name || "")}</p><p class="pdesc">${esc(persona.description || "")}</p>`
+      : `<p class="pmuted">${esc(t("pPersonaNone"))}</p>`}
+    ${state._editPersona ? `<div class="persLinks"><button data-act="persCustom">${esc(t("personaCustom"))}</button><span class="dot">·</span><button data-act="persImport">${esc(t("personaImport"))}</button></div>` : ""}
+  </div>`;
   let sections;
   if (!p) {
-    sections = `<div class="pSection"><div class="pHead">${esc(t("pCharacter"))}</div><p class="pmuted">${esc(t("pNoPlay"))}</p></div>`;
+    sections = `<div class="pSection"><div class="pHead">${esc(t("pCast"))}</div><p class="pmuted">${esc(t("pNoPlay"))}</p></div>`;
   } else {
-    const card = state.cardMap[p.card_id] || {};
-    const tags = (card.tags || []).map((x) => `<span class="tag">${esc(x)}</span>`).join("");
-    const charSec = `<div class="pSection">
-      <div class="pHead">${esc(t("pCharacter"))}</div>
-      <p class="cname">${esc(card.name || "")}</p>
-      ${provenanceHtml(card)}
-      <p class="cdesc">${esc(card.description || "")}</p>
-      ${tags ? `<div class="ctags">${tags}</div>` : ""}
-    </div>`;
+    const cards = productionCards(p);
+    const charFold = state._foldChar ? " folded" : "";
+    const castHtml = cards.length ? cards.map((card) => {
+      const tags = (card.tags || []).map((x) => `<span class="tag">${esc(x)}</span>`).join("");
+      return `<div class="castCard">
+        <div class="castTop"><p class="cname">${esc(card.name || "")}</p>${state._editCast ? `<span class="itemActions"><button class="itemEdit" data-cast-edit="${esc(card.id)}" aria-label="${esc(t("editCast"))}" title="${esc(t("editCast"))}">${PENCIL_SVG}</button><button class="loreDel" data-cast-del="${esc(card.id)}" aria-label="${esc(t("removeCast"))}" title="${esc(t("removeCast"))}">${TRASH_SVG}</button></span>` : ""}</div>
+        ${provenanceHtml(card)}
+        <p class="cdesc">${esc(card.description || "")}</p>
+        ${tags ? `<div class="ctags">${tags}</div>` : ""}
+      </div>`;
+    }).join("") : `<p class="pmuted">${esc(t("pNone"))}</p>`;
+    const charSec = `<div class="pSection pFold">
+      <div class="pHead pHeadFold${charFold}" data-fold="char">
+        <span>${esc(t("pCast"))}</span><span class="headRight"><button class="sectionEdit" data-edit-section="_editCast">${esc(t(state._editCast ? "done" : "edit"))}</button><span class="arr">▼</span></span>
+      </div>
+      <div class="pFoldBody${charFold}" id="charBody">
+        ${castHtml}
+        ${state._editCast ? `<button class="actorMore" id="addCast">${CARD_SVG}${esc(t("addCast"))}</button>` : ""}
+      </div></div>`;
     const lore = [];
-    (p.worldbook_ids || []).forEach((wid) => (state.worldbooks[wid]?.entries || []).forEach((e) => lore.push(e)));
-    const loreSec = `<div class="pSection">
-      <div class="pHead">${esc(t("pLorebook"))}</div>
-      ${lore.length ? lore.map((e) => `<div class="lore"><span class="lk">${esc((e.keys || []).join(" · ") || t("pAlwaysOn"))}</span><br>${esc(e.content)}</div>`).join("")
-        : `<p class="pmuted">${esc(t("pNone"))}</p>`}
-    </div>`;
-    sections = charSec + loreSec;
+    const currentWorldbooks = Array.isArray(p.worldbooks)
+      ? p.worldbooks
+      : (p.worldbook_ids || []).map((wid) => state.worldbooks[wid]).filter(Boolean);
+    currentWorldbooks.forEach((wb) => (wb.entries || []).forEach((e, index) =>
+      lore.push({ ...e, _worldbookId: wb.id, _entryIndex: index })));
+    const alwaysLore = lore.filter((e) => e.constant || !(Array.isArray(e.keys) && e.keys.filter(Boolean).length));
+    const namedLore = lore.filter((e) => !e.constant && Array.isArray(e.keys) && e.keys.filter(Boolean).length);
+    const renderLoreItems = (items, showLabel) => items.length ? items.map((e) => `<div class="loreItem">
+          ${showLabel || state._editLore ? `<div class="loreTop">${showLabel ? `<span class="lk">${esc(loreLabel(e))}</span>` : `<span></span>`}${state._editLore ? `<span class="itemActions"><button class="itemEdit" data-lore-edit="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" aria-label="${esc(t("editLore"))}" title="${esc(t("editLore"))}">${PENCIL_SVG}</button><button class="loreDel" data-lore-del="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" aria-label="${esc(t("delete"))}" title="${esc(t("delete"))}">${TRASH_SVG}</button></span>` : ""}</div>` : ""}
+          <div class="loreText2">${esc(loc(e, "content") || e.content || "")}</div>
+        </div>`).join("") : `<p class="pmuted">${esc(t("pNone"))}</p>`;
+    const loreFold = state._foldLore ? " folded" : "";
+    const loreSec = `<div class="pSection pFold">
+      <div class="pHead pHeadFold${loreFold}" data-fold="lore">
+        <span>${esc(t("pLorebook"))}</span><span class="headRight"><button class="sectionEdit" data-edit-section="_editLore">${esc(t(state._editLore ? "done" : "edit"))}</button><span class="arr">▼</span></span>
+      </div>
+      <div class="pFoldBody${loreFold}" id="loreBody">
+        <div class="loreGroupTitle">${esc(t("pAlwaysOn"))}</div>${renderLoreItems(alwaysLore, false)}
+        <div class="loreGroupTitle">${esc(t("loreTriggers"))}</div>${renderLoreItems(namedLore, true)}
+        ${state._editLore ? `<button class="actorMore" id="addLore">${CARD_SVG}${esc(t("addLore"))}</button>` : ""}
+      </div></div>`;
+    sections = persSec + charSec + loreSec + librarySectionHtml(actorSec, modelSec);
   }
-  body.innerHTML = sections + actorSec + modelSec + lwFoot;
+  body.innerHTML = sections;
+  body.querySelectorAll(".pHeadFold").forEach((h) => {
+    h.onclick = () => { toggleFold(h.dataset.fold); };
+  });
+  body.querySelectorAll("[data-edit-section]").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const key = b.dataset.editSection;
+      state[key] = !state[key];
+      if (state[key] && key === "_editCast") state._foldChar = false;
+      if (state[key] && key === "_editLore") state._foldLore = false;
+      renderPanel();
+    };
+  });
+  bindPersonaActions();
   const mm = $("#modelManage");
   if (mm) mm.onclick = openModelSheet;
+  const libBtn = $("#openCardLibrary");
+  if (libBtn) libBtn.onclick = openCardLibraryManageSheet;
+  const wbBtn = $("#openWorldbookLibrary");
+  if (wbBtn) wbBtn.onclick = openWorldbookLibraryManageSheet;
+  const addCast = $("#addCast");
+  if (addCast) addCast.onclick = openAddCastSheet;
+  const addLore = $("#addLore");
+  if (addLore) addLore.onclick = openAddLoreSheet;
+  body.querySelectorAll("[data-lore-del]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); deleteLoreEntry({ worldbookId: b.dataset.wid,
+      entryId: b.dataset.entryId, entryIndex: Number(b.dataset.entryIndex) }); };
+  });
+  body.querySelectorAll("[data-lore-edit]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); openEditLoreSheet({ worldbookId: b.dataset.wid,
+      entryId: b.dataset.entryId, entryIndex: Number(b.dataset.entryIndex) }); };
+  });
+  body.querySelectorAll("[data-cast-del]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); detachCardFromActive(b.dataset.castDel); };
+  });
+  body.querySelectorAll("[data-cast-edit]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); openEditCastSheet(b.dataset.castEdit); };
+  });
+}
+
+function toggleFold(key) {
+  if (key === "char") state._foldChar = !state._foldChar;
+  else if (key === "lore") state._foldLore = !state._foldLore;
+  renderPanel();
+}
+
+function bindPersonaActions() {
+  const customBtn = document.querySelector("[data-act='persCustom']");
+  const importBtn = document.querySelector("[data-act='persImport']");
+  if (customBtn) customBtn.onclick = openPersonaCustomSheet;
+  if (importBtn) importBtn.onclick = openPersonaCardSheet;
+}
+
+function openPersonaCustomSheet() {
+  const persona = state.persona || {};
+  const card = el("div", "modalCard newWorldSheet");
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("personaCustom"))}</p><p class="newWorldSub">${esc(t("personaCustomSub"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <input id="persName" class="newWorldInput" placeholder="${esc(t("personaPlaceholder"))}" value="${esc(persona.name || "")}" />
+    <textarea id="persDesc" class="newWorldText" placeholder="${esc(t("personaDescPlaceholder"))}">${esc(persona.description || "")}</textarea>
+    <div class="newWorldActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("personaSave"))}</button></div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelector(".ghost").onclick = closeModal;
+  card.querySelector(".primary").onclick = async () => {
+    const name = (card.querySelector("#persName").value || "").trim();
+    const desc = (card.querySelector("#persDesc").value || "").trim();
+    try {
+      const r = await bridge.event({ type: "set_persona", production_id: state.active?.id, name, description: desc });
+      state.active = r.production; state.persona = { name, description: desc };
+      const i = state.productions.findIndex((p) => p.id === r.production.id);
+      if (i >= 0) state.productions[i] = r.production;
+      closeModal(); renderPanel(); toast(t("personaSave"));
+    } catch (e) { toast(t("genFailed", { err: e.message })); }
+  };
+  card.querySelector("#persName").focus();
+}
+
+function openPersonaCardSheet() {
+  if (!state.cards.length) { toast(t("noCastToAdd")); return; }
+  const card = el("div", "modalCard sheetCard");
+  card.innerHTML = `<div class="sheetHd"><div class="t">${CARD_SVG}${esc(t("personaImport"))}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody cardPicker open">${state.cards.map((c) => `<div class="cardPick" data-id="${esc(c.id)}">${esc(c.name || t("unnamedCard"))}</div>`).join("")}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll(".cardPick").forEach((d) => d.onclick = () => setPersonaFromCard(d.dataset.id));
+}
+
+async function setPersonaFromCard(cardId) {
+  const c = state.cardMap[cardId];
+  if (!c) return;
+  const desc = [c.description, c.personality, c.scenario].filter(Boolean).join("\n\n");
+  try {
+    const r = await bridge.event({ type: "set_persona", production_id: state.active?.id, name: c.name || "", description: desc });
+    state.active = r.production; state.persona = r.production.persona || { name: c.name || "", description: desc };
+    const i = state.productions.findIndex((p) => p.id === r.production.id);
+    if (i >= 0) state.productions[i] = r.production;
+    closeModal(); renderPanel(); toast(t("personaSave"));
+  } catch (e) { toast(t("personaImportFailed", { err: e.message })); }
+}
+
+async function detachCardFromActive(cardId) {
+  if (!state.active || !cardId) return;
+  const card = productionCards(state.active).find((c) => c.id === cardId) || {};
+  const ok = await confirmDialog({
+    title: t("castRemoveTitle", { name: card.name || t("unnamedCard") }),
+    body: t("castRemoveBody"),
+    confirmLabel: t("removeCast"),
+  });
+  if (!ok) return;
+  try {
+    const r = await bridge.event({ type: "detach_card", production_id: state.active.id, card_id: cardId });
+    state.active = r.production; state.activeId = r.production.id;
+    const i = state.productions.findIndex((p) => p.id === r.production.id);
+    if (i >= 0) state.productions[i] = r.production;
+    await loadAll();
+    toast(t("castRemoved"));
+  } catch (e) { toast(t("castRemoveFailed", { err: e.message })); }
+}
+
+function openEditCastSheet(cardId) {
+  const character = productionCards(state.active).find((c) => c.id === cardId);
+  if (!character) return;
+  const card = el("div", "modalCard editEntitySheet");
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("editCastTitle", { name: character.name || t("unnamedCard") }))}</p><p class="newWorldSub">${esc(t("editCastSub"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <div class="editEntityBody">
+      <label class="fieldLabel">${esc(t("castFieldName"))}<input id="castEditName" class="formControl" value="${esc(character.name || "")}" /></label>
+      <label class="fieldLabel">${esc(t("castFieldDescription"))}<textarea id="castEditDescription" class="formControl">${esc(character.description || "")}</textarea></label>
+      <label class="fieldLabel">${esc(t("castFieldPersonality"))}<textarea id="castEditPersonality" class="formControl">${esc(character.personality || "")}</textarea></label>
+      <label class="fieldLabel">${esc(t("castFieldScenario"))}<textarea id="castEditScenario" class="formControl">${esc(character.scenario || "")}</textarea></label>
+      <div class="loreSheetActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("save"))}</button></div>
+    </div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelector(".ghost").onclick = closeModal;
+  card.querySelector(".primary").onclick = async () => {
+    const name = card.querySelector("#castEditName").value.trim();
+    if (!name) { toast(t("castNameRequired")); return; }
+    try {
+      card.classList.add("saving");
+      await bridge.event({ type: "update_cast", production_id: state.active.id, card_id: cardId,
+        name, description: card.querySelector("#castEditDescription").value.trim(),
+        personality: card.querySelector("#castEditPersonality").value.trim(),
+        scenario: card.querySelector("#castEditScenario").value.trim() });
+      closeModal(); await loadAll(); toast(t("castUpdated"));
+    } catch (e) {
+      card.classList.remove("saving");
+      toast(t("castUpdateFailed", { err: e.message }));
+    }
+  };
+  card.querySelector("#castEditName").focus();
 }
 
 async function switchProd(id) {
   closeDrawers();
   try {
-    const r = await bridge.event({ type: "switch_loadout", production_id: id });
-    state.active = r.production; state.activeId = id;
-    renderRail(); renderStage(); renderPanel();
+    await bridge.event({ type: "switch_loadout", production_id: id, locale: I18N.lang });
+    await loadAll();
   } catch (e) { toast(t("switchFailed", { err: e.message })); }
 }
 
-// 发送中按钮变「停止」:点它/回车 = 早停(中途停)。否则 = 发送。
 function submitOrStop() {
-  if (state.busy) { if (state.abort) state.abort.abort(); }
-  else send();
+  if (state.pendingSend) interruptSend();
+  else if (!state.busy) send();
 }
-function setComposerSending(sending) {
+function setComposerSending(sending, interruptible = false) {
   const b = $("#sendBtn");
-  b.classList.toggle("stop", sending);
-  b.innerHTML = sending ? STOP_SVG : SEND_SVG;
-  b.setAttribute("aria-label", sending ? t("ariaStop") : t("ariaSend"));
+  b.disabled = sending && !interruptible;
+  b.classList.toggle("stop", interruptible);
+  b.innerHTML = interruptible ? STOP_SVG : SEND_SVG;
+  b.setAttribute("aria-label", interruptible ? t("ariaStop") : t("ariaSend"));
   if (sending) b.classList.remove("empty");
   else updateSendEmpty();
+}
+
+function generationRequestId() {
+  return (globalThis.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `gen-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function interruptSend() {
+  const op = state.pendingSend;
+  if (!op) return;
+  op.cancelled = true;
+  state.pendingSend = null;
+  state.busy = false;
+  op.rollback();
+  const input = $("#input");
+  input.value = op.text + (input.value.trim() ? `\n${input.value}` : "");
+  autoGrow(input); updateSendEmpty();
+  renderStage(); renderRail();
+  setComposerSending(false);
+  bridge.event({ type: "cancel_generation", request_id: op.requestId }).catch(() => {});
+  op.controller.abort();
+  input.focus();
 }
 // 没东西可发时发送键走静默灰态(发送中=停止键,恒亮)。
 function updateSendEmpty() {
@@ -238,65 +565,125 @@ function updateSendEmpty() {
 async function send() {
   const input = $("#input"); const text = input.value.trim();
   if (!text || state.busy || !state.active) return;
-  const ac = new AbortController(); state.abort = ac;
-  state.busy = true; setComposerSending(true);
-  input.value = ""; autoGrow(input);
-  if (isTouch()) input.blur(); // 移动端:发送即收键盘,别盖住正在生成的回复(反馈 2026-06-30)
-  state.active.story.push({ role: "user", text });
-  renderStage();
-  $(".thread").insertAdjacentHTML("beforeend", `<div class="turn char" id="think"><div class="body thinking">${esc(t("thinking"))}</div></div>`);
-  anchorTurn(lastUserTurn(), true); // 锚到「我刚输入的那条」(新回合,重置 stick)
-  const ev = { type: "send_message", production_id: state.active.id, text };
-  let acc = "";
-  const onDelta = (d) => {
-    acc += d;
-    const b = document.querySelector("#think .body");
-    if (b) { b.classList.remove("thinking"); b.innerHTML = fmt(acc); anchorTurn(lastUserTurn()); } // 跟内容长:短→跟到底,长→钉住我的话
+  const startedAt = Date.now();
+  const storyBefore = state.active.story.slice();
+  const op = {
+    requestId: generationRequestId(),
+    controller: new AbortController(),
+    text,
+    cancelled: false,
+    rollback: () => { state.active.story = storyBefore.slice(); },
   };
+  state.pendingSend = op;
+  state.busy = true; setComposerSending(true, true);
+  input.value = ""; autoGrow(input);
+  if (isTouch()) input.blur();
+  const tempUser = { role: "user", text };
+  const tempChar = { role: "char", text: t("thinking"), _temp: true };
+  state.active.story.push(tempUser, tempChar);
+  renderStage(); anchorTurn(lastUserTurn(), true);
   try {
-    let msg;
-    try {
-      msg = await bridge.eventStream(ev, onDelta, ac.signal);   // 流式逐字
-    } catch (streamErr) {
-      if (ac.signal.aborted) {
-        if (!acc.trim()) {                                       // 早停且还没生成出东西 → 当取消
-          $("#think")?.remove(); state.active.story.pop(); renderStage();
-          input.value = text; autoGrow(input);
-          return;
-        }
-        // 早停:保留已生成的半截(流式断开时 server 没落盘,这里把这一回合补存)
-        msg = (await bridge.event({ type: "append_turn", production_id: state.active.id,
-                                    user_text: text, char_text: acc })).message;
-      } else {
-        msg = (await bridge.event(ev)).message;                 // 传输层不支持流式 → 回退阻塞式
-      }
-    }
-    $("#think")?.remove();
-    state.active.story.push(msg);
-    renderStage();
-    renderRail();  // 新回合落盘 → 本剧组上浮 + 「刚刚」文案即时(聊天列表式)
-    anchorTurn(lastUserTurn()); // 回复就位:沿用锚定(尊重用户生成中途的上滚)
+    const msg = await bridge.generate({ type: "send_message", production_id: state.active.id, text,
+      locale: I18N.lang, request_id: op.requestId }, op.controller.signal);
+    if (op.cancelled) return;
+    const meta = msg._event || {};
+    state.active.story = storyBefore.concat([meta.user_message || tempUser, attachGenMs(msg, startedAt)]);
+    renderStage(); renderRail(); anchorTurn(lastUserTurn());
   } catch (e) {
-    $("#think")?.remove(); toast(t("genFailed", { err: e.message }));
-    state.active.story.pop(); renderStage();
-    input.value = text; autoGrow(input); // 失败不丢已输入文字,可直接重发(§4)
+    if (!op.cancelled) {
+      op.rollback(); renderStage();
+      input.value = text + (input.value.trim() ? `\n${input.value}` : ""); autoGrow(input);
+      if (e.name !== "AbortError") toast(t("genFailed", { err: e.message }));
+    }
   } finally {
-    state.busy = false; state.abort = null; setComposerSending(false);
-    if (!isTouch()) input.focus(); // 桌面续焦点方便接着打;移动不抢焦,留给阅读
+    if (state.pendingSend === op) {
+      state.pendingSend = null;
+      state.busy = false; setComposerSending(false); updateSendEmpty();
+    }
   }
 }
 
-async function regenerate() {
+function setCtlBusy(btn, label) {
+  document.querySelectorAll(".ctl button").forEach((b) => { b.disabled = true; });
+  if (btn) { btn.dataset.oldText = btn.textContent; btn.textContent = label; btn.classList.add("busy"); }
+}
+function clearCtlBusy() {
+  document.querySelectorAll(".ctl button").forEach((b) => { b.disabled = false; if (b.dataset.oldText) { b.textContent = b.dataset.oldText; delete b.dataset.oldText; } b.classList.remove("busy"); });
+}
+
+async function regenerate(btn) {
   if (state.busy || !state.active) return;
-  state.busy = true;
+  const startedAt = Date.now();
+  state.busy = true; setCtlBusy(btn, t("regenBusy")); setComposerSending(true);
+  const lastIdx = state.active.story.length - 1;
+  const oldMsg = state.active.story[lastIdx];
+  if (oldMsg && oldMsg.role === "char") {
+    state.active.story[lastIdx] = { ...oldMsg, text: t("thinking") };
+    renderStage(); anchorTurn(lastUserTurn(), true);
+  }
   try {
-    const r = await bridge.event({ type: "regenerate", production_id: state.active.id });
-    // 非破坏性:整条替换(服务端已把新生成 append 进 alts、active_alt 指向它),保留旧版供 swipe
-    state.active.story[state.active.story.length - 1] = r.message;
+    const msg = await bridge.generate({ type: "regenerate", production_id: state.active.id, locale: I18N.lang });
+    state.active.story[lastIdx] = attachGenMs(msg, startedAt);
+    renderStage(); anchorTurn(lastUserTurn(), true);
+  } catch (e) {
+    if (oldMsg) state.active.story[lastIdx] = oldMsg;
     renderStage();
-    anchorTurn(lastUserTurn(), true); // 重生成:重新锚到我的话,新回复在下方
-  } catch (e) { toast(t("regenFailed", { err: e.message })); }
-  finally { state.busy = false; }
+    toast(t("regenFailed", { err: e.message }));
+  }
+  finally { state.busy = false; clearCtlBusy(); setComposerSending(false); updateSendEmpty(); }
+}
+
+async function doContinue(btn) {
+  if (state.busy || !state.active) return;
+  const startedAt = Date.now();
+  state.busy = true; setCtlBusy(btn, t("contBusy")); setComposerSending(true);
+  const text = I18N.lang === "zh" ? "*剧情继续*" : "*Continue the story.*";
+  const tempUser = { role: "user", text };
+  const tempChar = { role: "char", text: t("thinking"), _temp: true };
+  state.active.story.push(tempUser, tempChar);
+  renderStage(); anchorTurn(lastUserTurn(), true);
+  try {
+    const msg = await bridge.generate({ type: "continue", production_id: state.active.id, text, locale: I18N.lang });
+    const meta = msg._event || {};
+    const base = state.active.story.slice(0, -2);
+    state.active.story = base.concat([meta.user_message || tempUser, attachGenMs(msg, startedAt)]);
+    renderStage(); renderRail(); anchorTurn(lastUserTurn(), true);
+  } catch (e) {
+    state.active.story = state.active.story.slice(0, -2); renderStage();
+    toast(t("genFailed", { err: e.message }));
+  } finally { state.busy = false; clearCtlBusy(); setComposerSending(false); updateSendEmpty(); }
+}
+
+async function doSuggest(btn) {
+  if (state.busy || !state.active) return;
+  state.busy = true; setCtlBusy(btn, t("suggestBusy"));
+  try {
+    const r = await bridge.event({ type: "suggest", production_id: state.active.id, locale: I18N.lang });
+    const items = (r.suggestions || []).map((x) => (x || "").trim()).filter(Boolean);
+    if (!items.length) { toast(t("suggestEmpty")); return; }
+    showSuggestions(items);
+  } catch (e) { toast(t("suggestFailed", { err: e.message })); }
+  finally { state.busy = false; clearCtlBusy(); }
+}
+
+function showSuggestions(items) {
+  const card = el("div", "modalCard suggestCard");
+  card.innerHTML = `<div class="suggestHd"><span class="t">${esc(t("suggestTitle"))}</span>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">✕</button></div>
+    <div class="suggestBody">${items.map((s, i) =>
+      `<button class="suggestItem" data-idx="${i}">${fmt(s)}</button>`).join("")}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll(".suggestItem").forEach((b) => {
+    b.onclick = () => {
+      const input = $("#input");
+      const idx = Number(b.dataset.idx || 0);
+      input.value = items[idx] || b.textContent || "";
+      autoGrow(input); updateSendEmpty();
+      closeModal();
+      input.focus();
+    };
+  });
 }
 
 async function swipe(id, dir) {
@@ -326,18 +713,55 @@ function editMsg(id) {
   ta.className = "editbox"; ta.value = m.text;
   const acts = document.createElement("div");
   acts.className = "editacts";
-  acts.innerHTML = `<button class="save">${esc(t("save"))}</button><button class="cancel">${esc(t("cancel"))}</button>`;
+  acts.innerHTML = `<button class="save">${esc(t("send"))}</button><button class="cancel">${esc(t("cancel"))}</button>`;
   body.style.display = "none"; if (ctl) ctl.style.display = "none";
   turn.appendChild(ta); turn.appendChild(acts);
   growEdit(ta); ta.focus();
   const close = () => { ta.remove(); acts.remove(); body.style.display = ""; if (ctl) ctl.style.display = ""; };
   const save = async () => {
     const v = ta.value;
+    const btn = acts.querySelector(".save");
+    const isUserEdit = m.role === "user";
+    const prevStory = state.active.story.slice();
+    const startedAt = Date.now();
+    if (btn) { btn.disabled = true; btn.textContent = isUserEdit ? t("thinking") : t("send"); }
+    if (isUserEdit) {
+      const idx = state.active.story.findIndex((x) => x.id === id);
+      if (idx >= 0) {
+        const edited = { ...state.active.story[idx], text: v };
+        if (Array.isArray(edited.alts)) edited.alts = edited.alts.slice();
+        if (Array.isArray(edited.alts) && edited.alts.length) edited.alts[edited.active_alt || 0] = v;
+        state.active.story = state.active.story.slice(0, idx).concat([edited, { role: "char", text: t("thinking"), _temp: true }]);
+        renderStage(); renderRail();
+        anchorTurn(document.querySelector(`.turn[data-id="${id}"]`), true);
+      }
+    }
     try {
-      await bridge.event({ type: "edit_message", production_id: state.active.id, message_id: id, text: v });
-      m.text = v; if (Array.isArray(m.alts)) m.alts[m.active_alt || 0] = v;
-      renderStage();
-    } catch (e) { toast(t("editFailed", { err: e.message })); }
+      let r;
+      if (isUserEdit) {
+        const msg = await bridge.generate({ type: "edit_message", production_id: state.active.id, message_id: id, text: v, continue_after: true, locale: I18N.lang });
+        r = msg._event || { message: msg };
+      } else {
+        r = await bridge.event({ type: "edit_message", production_id: state.active.id, message_id: id, text: v, continue_after: false, locale: I18N.lang });
+      }
+      $("#think")?.remove();
+      if (Array.isArray(r.story)) {
+        state.active.story = r.story;
+        if (isUserEdit && state.active.story.length) attachGenMs(state.active.story[state.active.story.length - 1], startedAt);
+      } else if (r.message && isUserEdit) {
+        const idx = state.active.story.findIndex((x) => x._temp);
+        if (idx >= 0) state.active.story[idx] = attachGenMs(r.message, startedAt);
+      } else {
+        m.text = v; if (Array.isArray(m.alts)) m.alts[m.active_alt || 0] = v;
+      }
+      renderStage(); renderRail();
+      anchorTurn(document.querySelector(`.turn[data-id="${id}"]`), true);
+    } catch (e) {
+      $("#think")?.remove();
+      if (isUserEdit) { state.active.story = prevStory; renderStage(); renderRail(); }
+      toast(t("editFailed", { err: e.message }));
+      if (btn) { btn.disabled = false; btn.textContent = t("send"); }
+    }
   };
   ta.oninput = () => growEdit(ta);
   ta.onkeydown = (e) => {
@@ -411,11 +835,321 @@ function wireDropImport() {
   });
 }
 
-function togglePastePanel(show) {
-  const pp = $("#pastePanel");
-  const open = show === undefined ? pp.classList.contains("hidden") : show;
-  pp.classList.toggle("hidden", !open);
-  if (open) $("#pasteBox").focus(); else $("#pasteBox").value = "";
+function cardUsedInNames(cardId) {
+  return state.productions.filter((p) => productionCardIds(p).includes(cardId)).map((p) => p.name || t("blankWorldName"));
+}
+
+function cardLibraryGroups() {
+  const groups = [];
+  const byName = new Map();
+  function group(name) {
+    if (!byName.has(name)) {
+      const g = { name, cards: [] };
+      byName.set(name, g);
+      groups.push(g);
+    }
+    return byName.get(name);
+  }
+  const used = new Set();
+  state.productions.forEach((p) => {
+    const ids = productionCardIds(p);
+    if (!ids.length) return;
+    const g = group(p.name || t("blankWorldName"));
+    ids.forEach((id) => {
+      const c = state.cardMap[id];
+      if (c) { g.cards.push(c); used.add(id); }
+    });
+  });
+  const custom = state.libraryCards.filter((c) => !used.has(c.id));
+  if (custom.length) group(t("customCardFolder")).cards.push(...custom);
+  return groups.filter((g) => g.cards.length);
+}
+
+function cardDetailText(c) {
+  const rows = [];
+  const add = (label, value) => { if (value) rows.push([label, String(value)]); };
+  add(t("cardFieldName"), c.name || t("unnamedCard"));
+  add(t("cardFieldDesc"), c.description);
+  add(t("cardFieldPersona"), c.personality);
+  add(t("cardFieldScenario"), c.scenario);
+  add(t("cardFieldFirstMes"), c.first_mes);
+  add(t("cardFieldCreator"), c.creator);
+  add(t("cardFieldSource"), c.source);
+  if (Array.isArray(c.tags) && c.tags.length) add(t("cardFieldTags"), c.tags.join("、"));
+  if (c.character_book && Array.isArray(c.character_book.entries)) {
+    add(t("cardFieldWorldbook"), c.character_book.entries.map((e) => {
+      const keys = (e.keys || e.key || []).join ? (e.keys || e.key || []).join("、") : String(e.keys || e.key || "");
+      return `${keys ? keys + "：" : ""}${e.content || ""}`;
+    }).filter(Boolean).join("\n\n"));
+  }
+  return rows;
+}
+
+function renderCardLibraryList(card, groups) {
+  const rows = groups.length ? groups.map((g, idx) => `<section class="cardFolder" data-folder="${idx}">
+    <button class="cardFolderHead" type="button" data-folder-toggle="${idx}">
+      <span class="cardFolderTitle">${esc(g.name)}</span>
+      <span class="cardFolderMeta">${esc(t("cardFolderCount", { n: g.cards.length }))}</span>
+      <span class="cardFolderArrow">▼</span>
+    </button>
+    <div class="cardFolderRows">${g.cards.map((c) => {
+      const used = cardUsedInNames(c.id);
+      const meta = [c.description || "", used.length ? t("cardUsedBy", { names: used.join("、") }) : t("cardUnused")]
+        .filter(Boolean).join(" · ");
+      return `<div class="cardManageRow" data-id="${esc(c.id)}">
+        <button class="cardOpen" type="button" data-open="${esc(c.id)}">
+          <span>${esc(c.name || t("unnamedCard"))}</span>${meta ? `<small>${esc(meta)}</small>` : ""}
+        </button>
+      </div>`;
+    }).join("")}</div>
+  </section>`).join("") : `<p class="pmuted">${esc(t("cardLibraryEmpty"))}</p>`;
+  card.innerHTML = `<div class="sheetHd"><div class="t">${CARD_SVG}${esc(t("cardLibrary"))}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody cardPicker open cardLibraryBody">${rows}</div>`;
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll("[data-folder-toggle]").forEach((btn) => {
+    btn.onclick = () => btn.closest(".cardFolder")?.classList.toggle("collapsed");
+  });
+  card.querySelectorAll("[data-open]").forEach((btn) => {
+    btn.onclick = () => renderCardDetail(card, groups, btn.dataset.open);
+  });
+}
+
+function renderCardDetail(card, groups, cardId) {
+  const c = state.cardMap[cardId];
+  if (!c) return renderCardLibraryList(card, groups);
+  const rows = cardDetailText(c).map(([label, value]) => `<section class="cardDetailBlock"><h4>${esc(label)}</h4><p>${esc(value)}</p></section>`).join("");
+  card.classList.add("cardDetailSheet");
+  card.innerHTML = `<div class="sheetHd"><button class="sheetBack" type="button">‹ ${esc(t("backToCardLibrary"))}</button><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="cardDetailTitle">${CARD_SVG}${esc(c.name || t("unnamedCard"))}</div>
+    <div class="sheetBody cardDetailBody">${rows || `<p class="pmuted">${esc(t("cardNoDetail"))}</p>`}</div>`;
+  card.querySelector(".sheetBack").onclick = () => { card.classList.remove("cardDetailSheet"); renderCardLibraryList(card, groups); };
+  card.querySelector(".sheetClose").onclick = closeModal;
+}
+
+function worldbookDetailText(w) {
+  const rows = [];
+  const nl = String.fromCharCode(10);
+  const add = (label, value) => { if (value) rows.push([label, String(value)]); };
+  add(t("worldbookFieldName"), loc(w, "name") || w.name || t("unnamedWorldbook"));
+  add(t("worldbookFieldDesc"), loc(w, "description") || w.description);
+  if (Array.isArray(w.entries) && w.entries.length) {
+    add(t("worldbookFieldEntries"), w.entries.map((e) => {
+      const rawKeys = e.keys || e.key || [];
+      const keys = Array.isArray(rawKeys) ? rawKeys.join("、") : String(rawKeys || "");
+      const title = e.name || e.comment || keys || t("unnamedLoreEntry");
+      const content = loc(e, "content") || e.content || "";
+      return `${title}${keys && title !== keys ? `（${keys}）` : ""}${nl}${content}`.trim();
+    }).filter(Boolean).join(nl + nl));
+  }
+  return rows;
+}
+
+function renderWorldbookLibraryList(card) {
+  const books = state.libraryWorldbooks || [];
+  const rows = books.length ? books.map((w) => {
+    const count = Array.isArray(w.entries) ? w.entries.length : 0;
+    const meta = [t("worldbookEntryCount", { n: count }), w.description || ""].filter(Boolean).join(" · ");
+    return `<div class="cardManageRow" data-id="${esc(w.id)}">
+      <button class="cardOpen" type="button" data-open="${esc(w.id)}">
+        <span>${esc(w.name || t("unnamedWorldbook"))}</span><small>${esc(meta)}</small>
+      </button>
+    </div>`;
+  }).join("") : `<p class="pmuted">${esc(t("worldbookLibraryEmpty"))}</p>`;
+  card.innerHTML = `<div class="sheetHd"><div class="t">${WORLD_SVG}${esc(t("worldbookLibrary"))}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody cardPicker open cardLibraryBody">${rows}</div>`;
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll("[data-open]").forEach((btn) => {
+    btn.onclick = () => renderWorldbookDetail(card, btn.dataset.open);
+  });
+}
+
+function renderWorldbookDetail(card, worldbookId) {
+  const w = (state.libraryWorldbooks || []).find((x) => x.id === worldbookId);
+  if (!w) return renderWorldbookLibraryList(card);
+  const rows = worldbookDetailText(w).map(([label, value]) => `<section class="cardDetailBlock"><h4>${esc(label)}</h4><p>${esc(value)}</p></section>`).join("");
+  card.classList.add("cardDetailSheet");
+  card.innerHTML = `<div class="sheetHd"><button class="sheetBack" type="button">‹ ${esc(t("backToWorldbookLibrary"))}</button><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="cardDetailTitle">${WORLD_SVG}${esc(w.name || t("unnamedWorldbook"))}</div>
+    <div class="sheetBody cardDetailBody">${rows || `<p class="pmuted">${esc(t("worldbookNoDetail"))}</p>`}</div>`;
+  card.querySelector(".sheetBack").onclick = () => { card.classList.remove("cardDetailSheet"); renderWorldbookLibraryList(card); };
+  card.querySelector(".sheetClose").onclick = closeModal;
+}
+
+function openWorldbookLibraryManageSheet() {
+  const card = el("div", "modalCard sheetCard cardLibrarySheet");
+  openModal(card);
+  renderWorldbookLibraryList(card);
+}
+
+function openCardLibraryManageSheet() {
+  const card = el("div", "modalCard sheetCard cardLibrarySheet");
+  openModal(card);
+  renderCardLibraryList(card, cardLibraryGroups());
+}
+
+function openPasteJsonSheet() {
+  const card = el("div", "modalCard newWorldSheet pasteJsonSheet");
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("startFromJson"))}</p><p class="newWorldSub">${esc(t("startFromJsonMeta"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <textarea id="pasteBox" class="newWorldText" placeholder="${esc(t("pastePlaceholder"))}"></textarea>
+    <div class="newWorldActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("pasteImport"))}</button></div>`;
+  openModal(card);
+  const close = () => closeModal();
+  const box = card.querySelector("#pasteBox");
+  card.querySelector(".sheetClose").onclick = close;
+  card.querySelector(".ghost").onclick = close;
+  card.querySelector(".primary").onclick = () => { const v = box.value.trim(); if (v) { closeModal(); importCardJson(v); } };
+  box.focus();
+}
+
+async function attachCardToActive(cardId) {
+  if (!state.active) return;
+  try {
+    const r = await bridge.event({ type: "attach_card", production_id: state.active.id, card_id: cardId });
+    state.active = r.production;
+    state.activeId = r.production.id;
+    const i = state.productions.findIndex((p) => p.id === r.production.id);
+    if (i >= 0) state.productions[i] = r.production;
+    closeModal();
+    renderRail(); renderStage(); renderPanel();
+    toast(t("castAdded"));
+  } catch (e) { toast(t("castAddFailed", { err: e.message })); }
+}
+
+async function createCastForActive(form) {
+  if (!state.active) return;
+  const name = (form.querySelector("#newCastName").value || "").trim();
+  const description = (form.querySelector("#newCastDesc").value || "").trim();
+  const personality = (form.querySelector("#newCastPersona").value || "").trim();
+  const scenario = (form.querySelector("#newCastScenario").value || "").trim();
+  if (!name) { toast(t("createCastNeedName")); return; }
+  try {
+    const r = await bridge.event({ type: "create_card", name, description, personality, scenario });
+    state.cards.push(r.card);
+    state.cardMap[r.card.id] = r.card;
+    await attachCardToActive(r.card.id);
+    toast(t("castCreated"));
+  } catch (e) { toast(t("castCreateFailed", { err: e.message })); }
+}
+
+function openCastLibrarySheet() {
+  if (!state.active) return;
+  const used = new Set(productionCardIds(state.active));
+  const choices = state.libraryCards.filter((c) => !used.has(c.id));
+  if (!choices.length) { toast(t("noCastToAdd")); return; }
+  const card = el("div", "modalCard sheetCard");
+  card.innerHTML = `<div class="sheetHd"><div class="t">${CARD_SVG}${esc(t("castFromLibrary"))}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody cardPicker open">${choices.map((c) => `<div class="cardPick" data-id="${esc(c.id)}">${esc(c.name)}</div>`).join("")}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll(".cardPick").forEach((d) => d.onclick = () => attachCardToActive(d.dataset.id));
+}
+
+function openCreateCastSheet() {
+  if (!state.active) return;
+  const card = el("div", "modalCard newWorldSheet");
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("createCastTitle"))}</p><p class="newWorldSub">${esc(t("createCastSub"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <input id="newCastName" class="newWorldInput" placeholder="${esc(t("createCastName"))}" />
+    <textarea id="newCastDesc" class="newWorldText" placeholder="${esc(t("createCastDesc"))}"></textarea>
+    <textarea id="newCastPersona" class="newWorldText" placeholder="${esc(t("createCastPersona"))}"></textarea>
+    <textarea id="newCastScenario" class="newWorldText" placeholder="${esc(t("createCastScenario"))}"></textarea>
+    <div class="newWorldActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("createCastSave"))}</button></div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelector(".ghost").onclick = closeModal;
+  card.querySelector(".primary").onclick = () => createCastForActive(card);
+  card.querySelector("#newCastName").focus();
+}
+
+function openAddCastSheet() {
+  if (!state.active) return;
+  const card = el("div", "modalCard newWorldSheet");
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("addCastTitle"))}</p><p class="newWorldSub">${esc(t("addCastSub"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <div class="newWorldChoices">
+      <button class="newWorldChoice" data-id="create"><span>${esc(t("createCast"))}</span><small>${esc(t("createCastMeta"))}</small></button>
+      <button class="newWorldChoice" data-id="library"><span>${esc(t("castFromLibrary"))}</span><small>${esc(t("castFromLibraryMeta"))}</small></button>
+    </div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelector('[data-id="create"]').onclick = () => { closeModal(); openCreateCastSheet(); };
+  card.querySelector('[data-id="library"]').onclick = () => { closeModal(); openCastLibrarySheet(); };
+}
+
+function loreEntryFromRef(ref) {
+  if (!state.active || !ref) return null;
+  const wb = (state.active.worldbooks || []).find((w) => String(w.id) === String(ref.worldbookId));
+  if (!wb) return null;
+  const entries = wb.entries || [];
+  return entries.find((e) => ref.entryId && String(e.id) === String(ref.entryId))
+    || entries[Number(ref.entryIndex)] || null;
+}
+
+function splitLoreKeys(value) {
+  return String(value || "").split(/[,，、]/).map((x) => x.trim()).filter(Boolean);
+}
+
+function openAddLoreSheet() { openLoreSheet(null); }
+function openEditLoreSheet(ref) { openLoreSheet(ref); }
+
+function openLoreSheet(ref) {
+  if (!state.active) return;
+  const entry = loreEntryFromRef(ref);
+  if (ref && !entry) { toast(t("loreNotFound")); return; }
+  let mode = entry && !entry.constant && Array.isArray(entry.keys) && entry.keys.length ? "trigger" : "constant";
+  const card = el("div", "modalCard loreSheet");
+  card.innerHTML = `<div class="loreSheetHd">
+      <div><p class="loreSheetTitle">${esc(entry ? t("editLoreTitle") : t("addLoreTitle"))}</p><p class="loreSheetSub">${esc(t("loreEditorSub"))}</p></div>
+      <button id="loreCancel" class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <div class="loreSheetBody">
+      <div class="fieldLabel">${esc(t("loreModeLabel"))}<div class="modeSwitch" role="group" aria-label="${esc(t("loreModeLabel"))}">
+        <button type="button" data-mode="constant">${esc(t("pAlwaysOn"))}</button>
+        <button type="button" data-mode="trigger">${esc(t("loreTriggerMode"))}</button>
+      </div></div>
+      <label id="loreKeysWrap" class="fieldLabel">${esc(t("loreKeysLabel"))}<input id="loreKeys" class="formControl" placeholder="${esc(t("loreKeysPlaceholder"))}" value="${esc(entry && Array.isArray(entry.keys) ? entry.keys.join("、") : "")}" /></label>
+      <label class="fieldLabel">${esc(t("loreContentLabel"))}<textarea id="loreText" class="loreText" placeholder="${esc(t("addLorePlaceholder"))}">${esc(entry ? (loc(entry, "content") || entry.content || "") : "")}</textarea></label>
+      <div class="loreSheetActs">
+        <button id="loreCancel2">${esc(t("cancel"))}</button>
+        <button id="loreSave" class="primary">${esc(t("save"))}</button>
+      </div>
+    </div>`;
+  openModal(card);
+  const box = card.querySelector("#loreText");
+  const keyWrap = card.querySelector("#loreKeysWrap");
+  const syncMode = () => {
+    card.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+    keyWrap.classList.toggle("hidden", mode !== "trigger");
+  };
+  card.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => { mode = b.dataset.mode; syncMode(); });
+  syncMode(); box.focus();
+  card.querySelector("#loreCancel").onclick = closeModal;
+  card.querySelector("#loreCancel2").onclick = closeModal;
+  card.querySelector("#loreSave").onclick = async () => {
+    const content = box.value.trim();
+    const keys = splitLoreKeys(card.querySelector("#loreKeys").value);
+    if (!content) { toast(t("addLoreEmpty")); return; }
+    if (mode === "trigger" && !keys.length) { toast(t("loreKeysRequired")); return; }
+    try {
+      card.classList.add("saving");
+      const payload = { type: entry ? "update_lore" : "add_lore", production_id: state.active.id,
+        content, constant: mode === "constant", keys };
+      if (entry) Object.assign(payload, { worldbook_id: ref.worldbookId,
+        entry_id: ref.entryId, entry_index: ref.entryIndex });
+      await bridge.event(payload);
+      closeModal(); await loadAll(); toast(t(entry ? "loreUpdated" : "loreAdded"));
+    } catch (e) {
+      card.classList.remove("saving");
+      toast(t(entry ? "loreUpdateFailed" : "loreAddFailed", { err: e.message }));
+    }
+  };
 }
 
 async function newProductionFrom(cardId) {
@@ -423,17 +1157,103 @@ async function newProductionFrom(cardId) {
   const wbId = "wb_" + cardId;
   const wbs = state.worldbooks[wbId] ? [wbId] : [];
   try {
-    const r = await bridge.event({ type: "create_production", card_id: cardId, worldbook_ids: wbs, name: card.name });
+    const r = await bridge.event({ type: "create_production", card_id: cardId, worldbook_ids: wbs, name: card.name, locale: I18N.lang });
     await loadAll(); switchProd(r.production.id);
   } catch (e) { toast(t("createProdFailed", { err: e.message })); }
 }
 
-function showCardPicker() {
-  const box = $("#cardPicker");
+function openCardLibrarySheet() {
   if (!state.cards.length) { toast(t("importFirst")); return; }
-  box.innerHTML = state.cards.map((c) => `<div class="cardPick" data-id="${c.id}">${esc(c.name)}</div>`).join("");
-  box.classList.toggle("hidden");
-  box.querySelectorAll(".cardPick").forEach((d) => d.onclick = () => { box.classList.add("hidden"); newProductionFrom(d.dataset.id); });
+  const card = el("div", "modalCard sheetCard");
+  card.innerHTML = `<div class="sheetHd"><div class="t">${CARD_SVG}${esc(t("startFromLibrary"))}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody cardPicker open">${state.cards.map((c) => `<div class="cardPick" data-id="${esc(c.id)}">${esc(c.name)}</div>`).join("")}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll(".cardPick").forEach((d) => d.onclick = () => { closeModal(); newProductionFrom(d.dataset.id); });
+}
+
+async function createWorldFromWorldbook(wid) {
+  const wb = state.worldbooks[wid];
+  if (!wb) return;
+  try {
+    const r = await bridge.event({ type: "create_blank_production", name: loc(wb, "name") || wb.name || t("blankWorldName"), worldbook_ids: [wid], locale: I18N.lang });
+    closeModal();
+    await loadAll();
+    switchProd(r.production.id);
+    toast(t("blankWorldCreated"));
+  } catch (e) { toast(t("blankWorldFailed", { err: e.message })); }
+}
+
+function importableWorldbooks() {
+  return (state.libraryWorldbooks || []).filter((w) => Array.isArray(w.entries) && w.entries.length > 0);
+}
+
+function openImportWorldSheet() {
+  const wbs = importableWorldbooks();
+  if (!wbs.length) { toast(t("worldbookLibraryEmpty")); return; }
+  const card = el("div", "modalCard sheetCard");
+  const rows = wbs.map((w) => {
+    const count = Array.isArray(w.entries) ? w.entries.length : 0;
+    return `<div class="cardPick cardManageRow" data-id="${esc(w.id)}">
+      <button class="cardOpen" type="button" data-open="${esc(w.id)}">
+        <span>${esc(loc(w, "name") || w.name || t("unnamedWorldbook"))}</span><small>${esc(t("worldbookEntryCount", { n: count }))}</small>
+      </button>
+    </div>`;
+  }).join("");
+  card.innerHTML = `<div class="sheetHd"><div class="t">${CARD_SVG}${esc(t("importWorld"))}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody cardPicker open">${rows}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => createWorldFromWorldbook(b.dataset.open));
+}
+
+function openBlankWorldSheet() {
+  const card = el("div", "modalCard newWorldSheet");
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("startBlankWorld"))}</p><p class="newWorldSub">${esc(t("startBlankWorldMeta"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <input id="blankWorldName" class="newWorldInput" placeholder="${esc(t("blankWorldPrompt"))}" />
+    <div class="newWorldActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("createWorld"))}</button></div>`;
+  openModal(card);
+  const close = () => closeModal();
+  const input = card.querySelector("#blankWorldName");
+  const save = async () => {
+    const name = input.value.trim() || t("blankWorldName");
+    try {
+      const r = await bridge.event({ type: "create_blank_production", name, locale: I18N.lang });
+      closeModal();
+      await loadAll();
+      switchProd(r.production.id);
+      toast(t("blankWorldCreated"));
+    } catch (e) { toast(t("blankWorldFailed", { err: e.message })); }
+  };
+  card.querySelector(".sheetClose").onclick = close;
+  card.querySelector(".ghost").onclick = close;
+  card.querySelector(".primary").onclick = save;
+  input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } };
+  input.focus();
+}
+
+function openNewWorldSheet() {
+  const card = el("div", "modalCard newWorldSheet");
+  const rows = [
+    ["blank", t("selfBuildWorld"), t("selfBuildWorldMeta")],
+    ["import", t("importWorld"), t("importWorldMeta")],
+  ];
+  card.innerHTML = `<div class="newWorldHd">
+      <div><p class="modalTitle">${esc(t("newWorldTitle"))}</p><p class="newWorldSub">${esc(t("newWorldSub"))}</p></div>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
+    </div>
+    <p class="newWorldHint">${esc(t("newWorldHint"))}</p>
+    <div class="newWorldChoices">${rows.map(([id, title, meta]) => `<button class="newWorldChoice" data-id="${id}"><span>${esc(title)}</span><small>${esc(meta)}</small></button>`).join("")}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelectorAll(".newWorldChoice").forEach((b) => b.onclick = () => {
+    const id = b.dataset.id;
+    if (id === "blank") openBlankWorldSheet();
+    else if (id === "import") openImportWorldSheet();
+  });
 }
 
 // composer 自撑高;只有内容真超过 max(140px)才开滚——否则保持 hidden,
@@ -479,6 +1299,118 @@ function wrapAction() {
 
 // 触屏(移动)= 无 hover。用于「发送后不自动弹键盘」等只在移动端做的事(反馈 2026-06-30)。
 const isTouch = () => window.matchMedia("(hover: none)").matches;
+
+const historyNavigator = (() => {
+  const compactQuery = window.matchMedia("(max-width:640px) and (min-aspect-ratio:1/2)");
+  let anchor = null;
+  let resizePending = false;
+  let restoring = false;
+  let dragging = false;
+  let pointerOffset = 0;
+  let observer = null;
+
+  const elements = () => ({
+    convo: $("#convo"),
+    bar: $("#historyScrollbar"),
+    thumb: $("#historyScrollThumb"),
+  });
+
+  function sync() {
+    const { convo, bar, thumb } = elements();
+    if (!convo || !bar || !thumb) return;
+    const maxScroll = Math.max(0, convo.scrollHeight - convo.clientHeight);
+    const hasHistory = maxScroll > 24;
+    document.body.classList.toggle("has-history-scroll", hasHistory);
+    if (!hasHistory || !compactQuery.matches || bar.clientHeight <= 0) return;
+    const thumbHeight = Math.max(44, Math.round(bar.clientHeight * convo.clientHeight / convo.scrollHeight));
+    const travel = Math.max(0, bar.clientHeight - thumbHeight);
+    const top = maxScroll ? Math.round(travel * convo.scrollTop / maxScroll) : 0;
+    thumb.style.height = `${thumbHeight}px`;
+    thumb.style.transform = `translateY(${top}px)`;
+  }
+
+  function capture() {
+    if (restoring) return;
+    const { convo } = elements();
+    if (!convo) return;
+    const turns = Array.from(convo.querySelectorAll(".turn"));
+    if (!turns.length) { anchor = null; return; }
+    const convoTop = convo.getBoundingClientRect().top;
+    const found = turns.findIndex((turn) => turn.getBoundingClientRect().bottom > convoTop + 8);
+    const index = found < 0 ? turns.length - 1 : found;
+    anchor = { index, offset: turns[index].getBoundingClientRect().top - convoTop };
+  }
+
+  function restore() {
+    const { convo } = elements();
+    if (!anchor || !convo) return;
+    const turn = convo.querySelectorAll(".turn")[anchor.index];
+    if (!turn) return;
+    const currentOffset = turn.getBoundingClientRect().top - convo.getBoundingClientRect().top;
+    convo.scrollTop += currentOffset - anchor.offset;
+  }
+
+  function layoutChanged() {
+    if (resizePending) return;
+    resizePending = true;
+    restoring = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      restore();
+      sync();
+      restoring = false;
+      resizePending = false;
+      capture();
+    }));
+  }
+
+  function init() {
+    const { convo, bar, thumb } = elements();
+    if (!convo || !bar || !thumb) return;
+    const seek = (clientY) => {
+      const track = bar.getBoundingClientRect();
+      const travel = Math.max(1, track.height - thumb.offsetHeight);
+      const ratio = Math.max(0, Math.min(1, (clientY - track.top - pointerOffset) / travel));
+      convo.scrollTop = ratio * Math.max(0, convo.scrollHeight - convo.clientHeight);
+    };
+    bar.addEventListener("pointerdown", (event) => {
+      if (!compactQuery.matches || !document.body.classList.contains("has-history-scroll")) return;
+      pointerOffset = event.target === thumb
+        ? event.clientY - thumb.getBoundingClientRect().top
+        : thumb.offsetHeight / 2;
+      dragging = true;
+      bar.classList.add("dragging");
+      bar.setPointerCapture?.(event.pointerId);
+      seek(event.clientY);
+      event.preventDefault();
+    });
+    bar.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      seek(event.clientY);
+      event.preventDefault();
+    });
+    const stop = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      bar.classList.remove("dragging");
+      bar.releasePointerCapture?.(event.pointerId);
+    };
+    bar.addEventListener("pointerup", stop);
+    bar.addEventListener("pointercancel", stop);
+    if (compactQuery.addEventListener) compactQuery.addEventListener("change", layoutChanged);
+    else compactQuery.addListener?.(layoutChanged);
+    window.addEventListener("resize", layoutChanged);
+    window.visualViewport?.addEventListener("resize", layoutChanged);
+    if (window.ResizeObserver) {
+      observer?.disconnect();
+      observer = new ResizeObserver(layoutChanged);
+      observer.observe(convo);
+    }
+    capture();
+    sync();
+  }
+
+  return { init, sync, capture, layoutChanged };
+})();
 // scrim 用 .show(opacity 过渡)而非 .hidden(display 切换吃不了 transition)——抽屉开合背板渐显。
 function openDrawer(id) { $(id).classList.add("open"); $("#scrim").classList.add("show"); }
 function closeDrawers() { $("#rail").classList.remove("open"); $("#panel").classList.remove("open"); $("#scrim").classList.remove("show"); }
@@ -529,13 +1461,21 @@ async function askDeleteProduction(id) {
   });
   if (!ok) return;
   try {
-    await bridge.event({ type: "delete_production", production_id: id });
+    const prepared = await bridge.event({
+      type: "prepare_delete_production",
+      production_id: id,
+    });
+    await bridge.event({
+      type: "delete_production",
+      production_id: id,
+      confirmation_token: prepared.confirmation_token,
+    });
     await loadAll();   // server 已切好 active,loadAll 重渲染
     toast(t("prodDeleted"));
   } catch (e) { toast(t("prodDeleteFailed", { err: e.message })); }
 }
 
-// ---- 大模型配置管理(model-config.md):tap 行=切换、trash=删;添加只走「对墨说」----
+// ---- 大模型配置管理(model-config.md):tap 行=切换、trash=删;添加只走「对若棠说」----
 async function refreshModels() {
   try {
     const mr = await bridge.get("/api/models");
@@ -561,7 +1501,7 @@ function renderModelSheet() {
   const ms = state.models || { configs: [], active: "builtin" };
   const rows = ms.configs.map((c) => {
     const meta = c.builtin
-      ? t("modelBuiltinMeta", { model: c.model || "" })
+      ? t("modelClawlingMeta", { model: c.model || "" })
       : t("modelKeyMeta", { model: c.model, mask: c.key_masked || "**" });
     const del = c.builtin ? ""
       : `<button class="mcDel" data-del="${c.id}" aria-label="${esc(t("ariaDeleteConfig"))}" title="${esc(t("ariaDeleteConfig"))}">${TRASH_SVG}</button>`;
@@ -569,7 +1509,7 @@ function renderModelSheet() {
       <div class="mcInfo"><div class="mcName">${esc(modelDisplayName(c))}</div><div class="mcMeta">${esc(meta)}</div></div>
       <span class="mcCheck">✓</span>${del}</div>`;
   }).join("");
-  // 教育文案即「添加入口」:没有表单,配置由墨代办(实测通过才落盘)——chat 即管理。
+  // 教育文案即「添加入口」:没有表单,配置由若棠代办(实测通过才落盘)——chat 即管理。
   box.innerHTML = rows + `<p class="mcHint">${t("modelHint")}</p>`;
   box.querySelectorAll("[data-use]").forEach((d) => d.onclick = () => useModel(d.dataset.use));
   box.querySelectorAll("[data-del]").forEach((b) =>
@@ -648,22 +1588,27 @@ function wire() {
     }
   };
   $("#actBtn").onclick = () => wrapAction();
-  $("#cardFile").onchange = (e) => importCard(e.target.files[0]);
-  $("#pasteCardBtn").onclick = () => togglePastePanel();
-  $("#pasteCancel").onclick = () => togglePastePanel(false);
-  $("#pasteImport").onclick = () => { const v = $("#pasteBox").value.trim(); if (v) { togglePastePanel(false); importCardJson(v); } };
-  $("#newProdBtn").onclick = showCardPicker;
+  $("#cardFile").onchange = (e) => { importCard(e.target.files[0]); e.target.value = ""; };
+  $("#newWorldBtn").onclick = openNewWorldSheet;
   wireDropImport();
-  $("#railToggle").onclick = () => openDrawer("#rail");
-  $("#panelToggle").onclick = () => openDrawer("#panel");
+  const railToggle = $("#railToggle");
+  if (railToggle) railToggle.onclick = () => openDrawer("#rail");
+  const panelToggle = $("#panelToggle");
+  if (panelToggle) panelToggle.onclick = () => openDrawer("#panel");
   $("#scrim").onclick = closeDrawers;
   // 生成中用户主动上滚(回看历史)→ 停止自动锚定,别跟用户抢;下一回合 force 重置。
   $("#convo").addEventListener("scroll", () => {
     if (state.busy && state._anchor != null && state._anchor - $("#convo").scrollTop > 24) state.stick = false;
+    historyNavigator.sync();
+    historyNavigator.capture();
   }, { passive: true });
+  historyNavigator.init();
   setComposerSending(false);   // 初始 SVG 发送图标 + 空态
 }
 
 keyboardInset();
-wire();
-loadAll().catch((e) => toast(t("loadFailed", { err: e.message })));
+loadIdentity()
+  .finally(() => {
+    wire();
+    loadAll().catch((e) => toast(t("loadFailed", { err: e.message })));
+  });

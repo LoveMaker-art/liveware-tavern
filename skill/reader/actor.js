@@ -1,9 +1,16 @@
-// actor.js — 演员卡 reader。取 /api/actor_card 聚合数据 → 渲染墨的生涯/亲密度/口味/年表。
+// actor.js — 故事档案 reader。取 /api/actor_card 聚合数据 → 渲染若棠的生涯/亲密度/口味/年表。
 // 展示 surface，无渐进披露、无原生手势（liveware-frontend §1）。词汇：戏路≠搭档，口味≠年表。
 // 文案走 i18n.js(locale contract);亲密度级名/blurb 是 server 下发的 UI 标签,
 // 由 /api/actor_card?lang= 按语言给(server 端 INTIMACY_*_EN)。
 'use strict';
 const t = I18N.t;
+
+async function loadIdentity() {
+  try {
+    const r = await fetch('/api/identity');
+    I18N.setIdentity(await r.json());
+  } catch (_) {}
+}
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -77,8 +84,7 @@ function render(d) {
     <div class="acStats">${stats}</div>
     ${intimacy}
     ${knowsBlock}
-    ${timelineBlock}
-    <div class="acFoot"><span class="mark">✦</span> ${esc(t('acFoot', { v: d.version || '' }))}</div>`;
+    ${timelineBlock}`;
 }
 
 async function load() {
@@ -92,11 +98,20 @@ async function load() {
   }
 }
 
-// 从酒馆页内跳来(?from=console)才显返回——独立打开演员卡活件时无处可返(liveware-frontend §3)。
+// 从酒馆页内跳来(?from=console)才显返回——独立打开故事档案活件时无处可返(liveware-frontend §3)。
 if (new URLSearchParams(location.search).get('from') === 'console') {
   const b = document.getElementById('acBack');
-  b.classList.remove('hidden');
-  b.onclick = () => history.back();
+  if (b) {
+    b.classList.remove('hidden');
+    b.onclick = () => {
+      const ret = new URLSearchParams(location.search).get('return');
+      if (ret) location.href = ret;
+      else if (history.length > 1) history.back();
+      else location.href = '/';
+    };
+  }
 }
-I18N.applyStatic();
-load();
+loadIdentity().finally(() => {
+  I18N.applyStatic();
+  load();
+});
