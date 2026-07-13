@@ -12,18 +12,20 @@ Use the bundled updater; do not improvise `git pull`, overwrite state, or execut
 ```sh
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py check
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py review
+python3 /opt/data/skills/system/tavern-updater/scripts/update.py report --plan <PLAN_ID>
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py rollback --confirm
 ```
 
 ## Workflow
 
-1. Run `check` and report installed and latest versions.
-2. Run `review`. Summarize backend and updater changes; name locally modified and automatically merged files; list every conflict.
-3. Never apply a plan with conflicts. Resolve the source changes and run `review` again.
-4. Before `apply`, state the reviewed plan ID and that code will restart briefly while `/opt/data/tavern-state` and credentials remain untouched.
-5. Run `apply --plan <PLAN_ID> --confirm` only after explicit approval. A plan is rejected if installed or staged files changed after review.
-6. Report version, plan ID, and health result. Apply failures automatically restore the full pre-update backup.
+1. Treat an initial request such as "update Tavern" as permission for inspection only. It does not authorize installation.
+2. Run `check` and report installed and latest versions.
+3. Run `review`, then `report --plan <PLAN_ID>`. Report the exact backend/updater files, statuses, installed and release hashes, conflicts, baseline warning, and excluded paths.
+4. Stop and wait for a new user reply after the report. Do not infer approval from the user's original update request.
+5. Never apply a plan with conflicts. Resolve the source changes and run `review` again.
+6. Only after the user explicitly approves the reported plan or target version, run `apply --plan <PLAN_ID> --confirm`. The updater rejects plans that were not reported or changed afterward.
+7. Report version, plan ID, and health result. Apply failures automatically restore the full pre-update backup.
 
 ## Boundaries
 
@@ -34,4 +36,5 @@ python3 /opt/data/skills/system/tavern-updater/scripts/update.py rollback --conf
 - Preserve local edits with a three-way merge against the last installed baseline. Never guess through a merge conflict.
 - Update only backend runtime files and this updater; update the updater last.
 - Never manage `runtime/web`, `runtime/assets`, fixtures, starter cards, `/opt/data/tavern-state`, or `/opt/data/skills/creative/tavern`.
+- Never combine inspection, reporting, and installation into one unattended action. A user interaction boundary is mandatory between `report` and `apply`.
 - Read `references/release-format.md` only when preparing or diagnosing a release.

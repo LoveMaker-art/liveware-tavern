@@ -229,7 +229,14 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
             conflicts.append(f"{area}/{name}")
         elif status != "merged" and source:
             copy_file(source, output_root / name)
-        report.append({"path": f"{area}/{name}", "category": category(area, name), "status": status})
+        report.append({
+            "path": f"{area}/{name}",
+            "category": category(area, name),
+            "status": status,
+            "base_sha256": bh,
+            "installed_sha256": ch,
+            "release_sha256": nh,
+        })
     return report, conflicts
 
 
@@ -379,6 +386,7 @@ def command_review(_args):
             "current_fingerprint": installation_fingerprint(),
             "staged_hashes": {area: tree_hashes(staged / area) for area in TARGETS},
             "baseline_seeded": baseline_seeded,
+            "reported_at": None,
             "ready": not conflicts,
             "counts": counts,
             "categories": categories,
@@ -389,6 +397,40 @@ def command_review(_args):
     print(json.dumps(plan, ensure_ascii=False))
 
 
+def command_report(args):
+    plan_path = PLANS / args.plan / "plan.json"
+    if not plan_path.is_file():
+        raise RuntimeError("review plan does not exist")
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if installation_fingerprint() != plan.get("current_fingerprint"):
+        raise RuntimeError("installed files changed after review; run review again")
+    changes = [item for item in plan.get("files") or [] if item.get("status") != "unchanged"]
+    plan["reported_at"] = int(time.time())
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report = {
+        "plan_id": plan["plan_id"],
+        "installed": plan["installed"],
+        "target": plan["target"],
+        "scope": "backend-system",
+        "ready": plan["ready"],
+        "baseline_seeded": plan["baseline_seeded"],
+        "counts": plan["counts"],
+        "categories": plan["categories"],
+        "conflicts": plan["conflicts"],
+        "changes": changes,
+        "excluded": [
+            "runtime/web",
+            "runtime/assets",
+            "starter and fixture content",
+            "/opt/data/skills/creative/tavern",
+            "/opt/data/tavern-state",
+            "credentials and model keys",
+        ],
+        "next_step": "Report this result to the user and wait for a new explicit approval before apply.",
+    }
+    print(json.dumps(report, ensure_ascii=False))
+
+
 def load_plan(plan_id):
     plan_path = PLANS / plan_id / "plan.json"
     if not plan_path.is_file():
@@ -397,6 +439,8 @@ def load_plan(plan_id):
     staged = plan_path.parent / "staged"
     if not plan.get("ready"):
         raise RuntimeError("review plan contains merge conflicts")
+    if not plan.get("reported_at"):
+        raise RuntimeError("review plan has not been reported; run report and show it to the user first")
     if installation_fingerprint() != plan.get("current_fingerprint"):
         raise RuntimeError("installed files changed after review; run review again")
     actual = {area: tree_hashes(staged / area) for area in TARGETS}
@@ -456,6 +500,9 @@ def main():
     check.set_defaults(func=command_check)
     review = sub.add_parser("review")
     review.set_defaults(func=command_review)
+    report = sub.add_parser("report")
+    report.add_argument("--plan", required=True)
+    report.set_defaults(func=command_report)
     apply_parser = sub.add_parser("apply")
     apply_parser.add_argument("--plan")
     apply_parser.add_argument("--confirm", action="store_true")

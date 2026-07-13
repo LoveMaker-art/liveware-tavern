@@ -13,7 +13,7 @@ Manifest schema:
 {
   "schema": 3,
   "scope": "backend-system",
-  "version": "1.16.1",
+  "version": "1.16.2",
   "archive": "tavern-release.tar.gz",
   "sha256": "<archive SHA256>",
   "managed_files": ["runtime/server.py"],
