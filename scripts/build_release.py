@@ -13,6 +13,9 @@ UPDATER = ROOT / "updater-skill"
 DIST = ROOT / "dist"
 STAGE = DIST / "release"
 ARCHIVE = DIST / "tavern-release.tar.gz"
+SKILL_STAGE = DIST / "skill-release"
+SKILL_ARCHIVE = DIST / "tavern-skill.tar.gz"
+SKILL_MANIFEST = DIST / "skill-manifest.json"
 BOOTSTRAP_SOURCE = ROOT / "bootstrap/tavern_updater_bootstrap.py"
 BOOTSTRAP_ASSET = DIST / "tavern-updater-bootstrap.py"
 BOOTSTRAP_LAUNCHER_SOURCE = ROOT / "bootstrap/install_tavern_updater.sh"
@@ -27,6 +30,14 @@ FRONTEND_FILES = (
     "console.css",
     "i18n.js",
     "index.html",
+)
+SKILL_SCRIPT_FILES = (
+    "bringup.sh",
+    "install.sh",
+    "make_test_card.py",
+    "provision.sh",
+    "smoke.py",
+    "tavern_cli.py",
 )
 
 
@@ -72,6 +83,32 @@ def main():
         "files": files,
     }
     (DIST / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    (SKILL_STAGE / "skill").mkdir(parents=True)
+    copy(SOURCE / "SKILL.md", SKILL_STAGE / "skill/SKILL.md")
+    copy(SOURCE / "references", SKILL_STAGE / "skill/references")
+    for name in SKILL_SCRIPT_FILES:
+        copy(SOURCE / "tools" / name, SKILL_STAGE / "skill/scripts" / name)
+    skill_files = {
+        path.relative_to(SKILL_STAGE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(SKILL_STAGE.rglob("*"))
+        if path.is_file()
+    }
+    with tarfile.open(SKILL_ARCHIVE, "w:gz", format=tarfile.PAX_FORMAT) as package:
+        package.add(SKILL_STAGE / "skill", arcname="skill")
+    skill_manifest = {
+        "schema": 1,
+        "scope": "tavern-creative-skill",
+        "version": version,
+        "archive": SKILL_ARCHIVE.name,
+        "sha256": hashlib.sha256(SKILL_ARCHIVE.read_bytes()).hexdigest(),
+        "managed_files": sorted(skill_files),
+        "files": skill_files,
+    }
+    SKILL_MANIFEST.write_text(
+        json.dumps(skill_manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     copy(BOOTSTRAP_SOURCE, BOOTSTRAP_ASSET)
     copy(BOOTSTRAP_LAUNCHER_SOURCE, BOOTSTRAP_LAUNCHER_ASSET)
     bootstrap_files = {
@@ -91,7 +128,8 @@ def main():
         encoding="utf-8",
     )
     shutil.rmtree(STAGE)
-    print(json.dumps({"release": manifest, "bootstrap": bootstrap_manifest}, ensure_ascii=False))
+    shutil.rmtree(SKILL_STAGE)
+    print(json.dumps({"release": manifest, "skill": skill_manifest, "bootstrap": bootstrap_manifest}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

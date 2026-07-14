@@ -6,6 +6,8 @@ Required assets:
 
 - `manifest.json`
 - `tavern-release.tar.gz`
+- `skill-manifest.json`
+- `tavern-skill.tar.gz`
 
 Legacy-instance bootstrap assets:
 
@@ -32,7 +34,7 @@ Manifest schema:
 }
 ```
 
-The archive contains only backend application code and the updater itself:
+The runtime archive contains backend application code and the updater itself:
 
 ```text
 runtime/
@@ -55,4 +57,13 @@ updater/
   agents/
 ```
 
-Only the seven listed official frontend code files are release assets. Identity/persona files such as `actor_self.md`, frontend backups, images and other assets, starter/fixture content, the creative Tavern skill, runtime state, and credentials are never release assets. Every regular archive file must appear in both `managed_files` and `files`. Build with `scripts/build_release.py`, then attach both generated files to a stable GitHub Release tagged `v<version>`.
+The separately verified skill archive contains only operational files:
+
+```text
+skill/
+  SKILL.md
+  references/
+  scripts/
+```
+
+Only the seven listed official frontend code files and the allowlisted operational Tavern skill files are release assets. Identity/persona files such as `actor_self.md`, `SOUL.md`, frontend backups, images and other assets, starter/fixture content, runtime state, and credentials are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.

@@ -26,6 +26,8 @@ This creates:
 ```text
 dist/manifest.json
 dist/tavern-release.tar.gz
+dist/skill-manifest.json
+dist/tavern-skill.tar.gz
 dist/tavern-updater-bootstrap.py
 dist/install-tavern-updater.sh
 dist/bootstrap-manifest.json

@@ -24,11 +24,37 @@ RELEASE_API = os.environ.get(
 )
 ASSET_MANIFEST = "manifest.json"
 ASSET_ARCHIVE = "tavern-release.tar.gz"
+SKILL_ASSET_MANIFEST = "skill-manifest.json"
+SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 UPDATER_FILES = (
     "SKILL.md",
     "agents/openai.yaml",
     "references/release-format.md",
     "scripts/update.py",
+)
+SKILL_FILES = (
+    "SKILL.md",
+    "references/actor-memory.md",
+    "references/card-authoring.md",
+    "references/card-localization.md",
+    "references/card-workflow.md",
+    "references/content-modeling.md",
+    "references/diagnostics.md",
+    "references/event-driven-update.md",
+    "references/i18n.md",
+    "references/liveware-ops.md",
+    "references/lore-audit.md",
+    "references/model-config.md",
+    "references/recommendation-planning.md",
+    "references/world-expansion.md",
+    "references/world-rebuild.md",
+    "references/worldbook-authoring.md",
+    "scripts/bringup.sh",
+    "scripts/install.sh",
+    "scripts/make_test_card.py",
+    "scripts/provision.sh",
+    "scripts/smoke.py",
+    "scripts/tavern_cli.py",
 )
 AGENTS_START = "<!-- tavern-updater:start -->"
 AGENTS_END = "<!-- tavern-updater:end -->"
@@ -55,12 +81,12 @@ approval. Only after that approval run:
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
 ```
 
-The updater may manage only its allowlisted Tavern backend files, seven
-official frontend files, release marker, and updater files. Never update or
-migrate identity/persona files, runtime assets, starter content,
-`/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, logs,
-or `/opt/data/skills/creative/tavern`. A failed application update must restore
-the previous managed files automatically.
+The updater manages its allowlisted Tavern backend, official frontend,
+operational Tavern skill, release marker, and updater files as one release.
+Do not ask separately whether the Tavern skill should be synchronized. Never
+update identity/persona files, runtime or skill assets, starter content,
+`/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, or
+logs. A failed application update must restore the previous managed files.
 {AGENTS_END}"""
 
 
@@ -102,30 +128,41 @@ def fetch_release(work, release_dir=None):
         release_dir = Path(release_dir)
         manifest_path = release_dir / ASSET_MANIFEST
         archive_path = release_dir / ASSET_ARCHIVE
-        if not manifest_path.is_file() or not archive_path.is_file():
+        skill_manifest_path = release_dir / SKILL_ASSET_MANIFEST
+        skill_archive_path = release_dir / SKILL_ASSET_ARCHIVE
+        if not all(path.is_file() for path in (
+                manifest_path, archive_path, skill_manifest_path, skill_archive_path)):
             raise RuntimeError("local release directory is missing required assets")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return {"tag": "v" + str(manifest.get("version") or ""), "url": str(release_dir)}, manifest, archive_path
+        skill_manifest = json.loads(skill_manifest_path.read_text(encoding="utf-8"))
+        return ({"tag": "v" + str(manifest.get("version") or ""), "url": str(release_dir)},
+                manifest, archive_path, skill_manifest, skill_archive_path)
 
     release = request_json(RELEASE_API)
     if release.get("draft") or release.get("prerelease"):
         raise RuntimeError("latest GitHub release is not stable")
     assets = {item.get("name"): item.get("browser_download_url") for item in release.get("assets") or []}
-    missing = [name for name in (ASSET_MANIFEST, ASSET_ARCHIVE) if not assets.get(name)]
+    required_assets = (ASSET_MANIFEST, ASSET_ARCHIVE, SKILL_ASSET_MANIFEST, SKILL_ASSET_ARCHIVE)
+    missing = [name for name in required_assets if not assets.get(name)]
     if missing:
         raise RuntimeError("release is missing required assets: " + ", ".join(missing))
     manifest_path = work / ASSET_MANIFEST
     archive_path = work / ASSET_ARCHIVE
+    skill_manifest_path = work / SKILL_ASSET_MANIFEST
+    skill_archive_path = work / SKILL_ASSET_ARCHIVE
     download(assets[ASSET_MANIFEST], manifest_path)
     download(assets[ASSET_ARCHIVE], archive_path)
+    download(assets[SKILL_ASSET_MANIFEST], skill_manifest_path)
+    download(assets[SKILL_ASSET_ARCHIVE], skill_archive_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    skill_manifest = json.loads(skill_manifest_path.read_text(encoding="utf-8"))
     return {
         "tag": release.get("tag_name"),
         "url": release.get("html_url"),
-    }, manifest, archive_path
+    }, manifest, archive_path, skill_manifest, skill_archive_path
 
 
-def validate_release(release, manifest, archive_path):
+def validate_release(release, manifest, archive_path, skill_manifest, skill_archive_path):
     if (manifest.get("schema") != 4 or manifest.get("scope") != "tavern-system"
             or manifest.get("archive") != ASSET_ARCHIVE):
         raise RuntimeError("unsupported release manifest")
@@ -139,6 +176,19 @@ def validate_release(release, manifest, archive_path):
     required = {"updater/" + name for name in UPDATER_FILES}
     if not required.issubset(managed) or not required.issubset(hashes):
         raise RuntimeError("release does not contain the complete updater skill")
+    if (skill_manifest.get("schema") != 1
+            or skill_manifest.get("scope") != "tavern-creative-skill"
+            or skill_manifest.get("archive") != SKILL_ASSET_ARCHIVE):
+        raise RuntimeError("unsupported Tavern skill manifest")
+    if str(skill_manifest.get("version") or "") != version:
+        raise RuntimeError("runtime and Tavern skill release versions do not match")
+    if sha256_file(skill_archive_path) != skill_manifest.get("sha256"):
+        raise RuntimeError("Tavern skill archive SHA256 mismatch")
+    skill_managed = set(skill_manifest.get("managed_files") or [])
+    skill_hashes = skill_manifest.get("files") or {}
+    allowed = {"skill/" + name for name in SKILL_FILES}
+    if skill_managed != allowed or set(skill_hashes) != allowed:
+        raise RuntimeError("Tavern skill release does not match the safe allowlist")
 
 
 def extract_updater(archive_path, manifest, destination):
@@ -226,6 +276,7 @@ def sync_agents(path):
         updated = legacy.sub(AGENTS_BLOCK + "\n\n", current, count=1)
     else:
         updated = current.rstrip() + "\n\n" + AGENTS_BLOCK + "\n"
+    updated = re.sub(r"(?m)^Current deployed skill version:.*\n?", "", updated)
     if updated != current:
         atomic_write(path, updated)
         return True
@@ -284,23 +335,24 @@ def main():
     agents_path = data_root / "AGENTS.md"
     with tempfile.TemporaryDirectory(prefix="tavern-updater-bootstrap-") as temp:
         work = Path(temp)
-        release, manifest, archive_path = fetch_release(work, args.release_dir)
-        validate_release(release, manifest, archive_path)
-        staged = work / "updater"
-        extract_updater(archive_path, manifest, staged)
+        release, manifest, archive_path, skill_manifest, skill_archive_path = fetch_release(work, args.release_dir)
+        validate_release(release, manifest, archive_path, skill_manifest, skill_archive_path)
+        staged_updater = work / "updater"
+        extract_updater(archive_path, manifest, staged_updater)
         backup = backup_existing(data_root, updater_target, agents_path)
-        install_updater(staged, updater_target)
+        install_updater(staged_updater, updater_target)
         agents_changed = sync_agents(agents_path)
 
     result = {
         "ok": True,
         "bootstrap_schema": 1,
         "updater_installed": True,
+        "tavern_skill_included": True,
         "release": release["url"],
         "release_version": manifest["version"],
         "agents_updated": agents_changed,
         "backup": backup,
-        "next_step": "Show the update report and wait for a new explicit user approval before apply.",
+        "next_step": "Show one update report and wait for approval. The operational Tavern skill is included in that plan and must not be offered as a separate follow-up.",
     }
     if not args.skip_report:
         result.update(generate_report(updater_target / "scripts/update.py", data_root))

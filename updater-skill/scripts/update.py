@@ -24,6 +24,7 @@ HEALTH_URL = os.environ.get("TAVERN_HEALTH_URL", "http://127.0.0.1:8799/api/heal
 SKIP_SERVICE = os.environ.get("TAVERN_SKIP_SERVICE") == "1"
 TARGETS = {
     "runtime": DATA / "apps/tavern-runtime",
+    "skill": DATA / "skills/creative/tavern",
     "updater": DATA / "skills/system/tavern-updater",
 }
 UPDATE_ROOT = DATA / "tavern-updates"
@@ -33,6 +34,8 @@ BASELINE = UPDATE_ROOT / "baseline"
 STATE = UPDATE_ROOT / "state.json"
 ASSET_MANIFEST = "manifest.json"
 ASSET_ARCHIVE = "tavern-release.tar.gz"
+SKILL_ASSET_MANIFEST = "skill-manifest.json"
+SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 VERSION_RE = re.compile(r"^version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
 IGNORED = ("__pycache__", "*.pyc", "*.log", "*.bak*", "*.before-*", ".DS_Store")
 PROTECTED = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "sessions", "credentials", "backups")
@@ -55,6 +58,30 @@ ALLOWED_MANAGED = {
         "agents/openai.yaml",
         "references/release-format.md",
         "scripts/update.py",
+    },
+    "skill": {
+        "SKILL.md",
+        "references/actor-memory.md",
+        "references/card-authoring.md",
+        "references/card-localization.md",
+        "references/card-workflow.md",
+        "references/content-modeling.md",
+        "references/diagnostics.md",
+        "references/event-driven-update.md",
+        "references/i18n.md",
+        "references/liveware-ops.md",
+        "references/lore-audit.md",
+        "references/model-config.md",
+        "references/recommendation-planning.md",
+        "references/world-expansion.md",
+        "references/world-rebuild.md",
+        "references/worldbook-authoring.md",
+        "scripts/bringup.sh",
+        "scripts/install.sh",
+        "scripts/make_test_card.py",
+        "scripts/provision.sh",
+        "scripts/smoke.py",
+        "scripts/tavern_cli.py",
     },
 }
 
@@ -101,12 +128,21 @@ def local_version():
         return "0.0.0"
 
 
+def local_skill_version():
+    try:
+        match = VERSION_RE.search((TARGETS["skill"] / "SKILL.md").read_text(encoding="utf-8"))
+        return match.group(1) if match else "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
 def latest_release():
     release = request_json(API)
     if release.get("draft") or release.get("prerelease"):
         raise RuntimeError("latest GitHub release is not stable")
     assets = {item.get("name"): item.get("browser_download_url") for item in release.get("assets") or []}
-    missing = [name for name in (ASSET_MANIFEST, ASSET_ARCHIVE) if not assets.get(name)]
+    required = (ASSET_MANIFEST, ASSET_ARCHIVE, SKILL_ASSET_MANIFEST, SKILL_ASSET_ARCHIVE)
+    missing = [name for name in required if not assets.get(name)]
     if missing:
         raise RuntimeError("release is missing required assets: " + ", ".join(missing))
     return {"tag": release.get("tag_name"), "assets": assets, "url": release.get("html_url")}
@@ -116,9 +152,14 @@ def release_material(work):
     release = latest_release()
     manifest_path = work / ASSET_MANIFEST
     archive_path = work / ASSET_ARCHIVE
+    skill_manifest_path = work / SKILL_ASSET_MANIFEST
+    skill_archive_path = work / SKILL_ASSET_ARCHIVE
     download(release["assets"][ASSET_MANIFEST], manifest_path)
     download(release["assets"][ASSET_ARCHIVE], archive_path)
+    download(release["assets"][SKILL_ASSET_MANIFEST], skill_manifest_path)
+    download(release["assets"][SKILL_ASSET_ARCHIVE], skill_archive_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    skill_manifest = json.loads(skill_manifest_path.read_text(encoding="utf-8"))
     if (manifest.get("schema") != 4 or manifest.get("scope") != "tavern-system"
             or manifest.get("archive") != ASSET_ARCHIVE):
         raise RuntimeError("unsupported release manifest")
@@ -147,7 +188,21 @@ def release_material(work):
     }
     if not required_runtime.issubset(set(managed)):
         raise RuntimeError("release is missing required Tavern system files")
-    return release, manifest, archive_path
+    if (skill_manifest.get("schema") != 1 or skill_manifest.get("scope") != "tavern-creative-skill"
+            or skill_manifest.get("archive") != SKILL_ASSET_ARCHIVE):
+        raise RuntimeError("unsupported Tavern skill manifest")
+    if str(skill_manifest.get("version") or "") != version:
+        raise RuntimeError("runtime and Tavern skill release versions do not match")
+    if sha256_file(skill_archive_path) != skill_manifest.get("sha256"):
+        raise RuntimeError("Tavern skill archive SHA256 mismatch")
+    skill_managed = skill_manifest.get("managed_files") or []
+    for path in skill_managed:
+        area, separator, name = str(path).partition("/")
+        if area != "skill" or not separator or name not in ALLOWED_MANAGED["skill"]:
+            raise RuntimeError(f"Tavern skill release attempts to manage a forbidden path: {path}")
+    if "skill/SKILL.md" not in skill_managed:
+        raise RuntimeError("Tavern skill release is missing SKILL.md")
+    return release, manifest, archive_path, skill_manifest, skill_archive_path
 
 
 def safe_extract(archive, destination, manifest):
@@ -174,6 +229,26 @@ def safe_extract(archive, destination, manifest):
     actual = tree_hashes(destination)
     if actual != expected or sorted(expected) != sorted(managed):
         raise RuntimeError("release file manifest mismatch")
+
+
+def safe_extract_skill(archive, destination, manifest):
+    destination = destination.resolve()
+    with tarfile.open(archive, "r:gz") as package:
+        for member in package.getmembers():
+            parts = Path(member.name).parts
+            if not parts or parts[0] != "skill":
+                raise RuntimeError("Tavern skill archive contains an unmanaged top-level path")
+            target = (destination / member.name).resolve()
+            if destination not in target.parents and target != destination:
+                raise RuntimeError("Tavern skill archive contains an unsafe path")
+            if member.issym() or member.islnk() or member.isdev():
+                raise RuntimeError("Tavern skill archive contains an unsupported link or device")
+        package.extractall(destination)
+    expected = manifest.get("files") or {}
+    managed = manifest.get("managed_files") or []
+    actual = {f"skill/{name}": digest for name, digest in tree_hashes(destination / "skill").items()}
+    if actual != expected or sorted(expected) != sorted(managed):
+        raise RuntimeError("Tavern skill file manifest mismatch")
 
 
 def ignored(path):
@@ -430,8 +505,14 @@ def write_baseline(staged, managed_files):
 
 def command_check(_args):
     with tempfile.TemporaryDirectory(prefix="tavern-update-check-") as temp:
-        release, manifest, _archive = release_material(Path(temp))
-    print(json.dumps({"installed": local_version(), "latest": manifest["version"], "release": release["url"]}, ensure_ascii=False))
+        release, manifest, _archive, skill_manifest, _skill_archive = release_material(Path(temp))
+    print(json.dumps({
+        "installed": local_version(),
+        "latest": manifest["version"],
+        "skill_installed": local_skill_version(),
+        "skill_latest": skill_manifest["version"],
+        "release": release["url"],
+    }, ensure_ascii=False))
 
 
 def command_review(_args):
@@ -440,14 +521,15 @@ def command_review(_args):
     installed = local_version()
     with tempfile.TemporaryDirectory(prefix="tavern-update-review-") as temp:
         work = Path(temp)
-        release, manifest, archive = release_material(work)
-        managed_files = manifest["managed_files"]
+        release, manifest, archive, skill_manifest, skill_archive = release_material(work)
+        managed_files = sorted(set(manifest["managed_files"] + skill_manifest["managed_files"]))
         baseline_seeded = seed_baseline(managed_files)
         if version_key(manifest["version"]) < version_key(installed):
             raise RuntimeError("latest release is older than the installed version")
         unpacked = work / "unpacked"
         unpacked.mkdir()
         safe_extract(archive, unpacked, manifest)
+        safe_extract_skill(skill_archive, unpacked, skill_manifest)
         run([PYTHON, "-m", "py_compile", str(unpacked / "runtime/server.py"), str(unpacked / "runtime/actor.py")])
         plan_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
         plan_dir = PLANS / plan_id
@@ -474,6 +556,7 @@ def command_review(_args):
             "target": manifest["version"],
             "release": release["url"],
             "archive_sha256": manifest["sha256"],
+            "skill_archive_sha256": skill_manifest["sha256"],
             "created_at": int(time.time()),
             "managed_files": managed_files,
             "current_fingerprint": managed_fingerprint(managed_files),
@@ -516,11 +599,11 @@ def command_report(args):
             "runtime/assets",
             "runtime/actor_self.md and all identity/persona files",
             "starter and fixture content",
-            "/opt/data/skills/creative/tavern",
+            "creative Tavern skill identity files, assets, fixtures, and every file outside the explicit allowlist",
             "/opt/data/tavern-state",
             "credentials and model keys",
         ],
-        "next_step": "Report this result to the user and wait for a new explicit approval before apply.",
+        "next_step": "Report once and wait for approval to apply the complete runtime plus Tavern skill update. Never ask separately whether the Tavern skill should be synchronized.",
     }
     print(json.dumps(report, ensure_ascii=False))
 
@@ -556,7 +639,7 @@ def command_apply(args):
     backup = backup_current(installed, managed_files)
     try:
         stop_server()
-        install_managed(staged, managed_files, areas={"runtime"})
+        install_managed(staged, managed_files, areas={"runtime", "skill"})
         start_server()
         ok, report = health()
         if not ok:
