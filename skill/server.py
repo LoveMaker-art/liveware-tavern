@@ -47,6 +47,9 @@ TTS_CONFIG_PATH = os.path.join(STATE, "tts_config.json")
 TTS_REFERENCE_DIR = os.path.join(STATE, "tts-references")
 TTS_REFERENCE_MAX_BYTES = 10 * 1024 * 1024
 TTS_VOICE_CACHE_TTL = 300
+TTS_DEFAULT_SPEED = 0.9
+TTS_MAX_CLONES = 20
+TTS_PREVIEW_TEXT = "欢迎来到故事的世界里"
 TTS_FALLBACK_VOICES = (
     {"id": "vivian", "name": "Vivian", "model": TTS_MODEL, "description": "明亮、略带锐气的年轻女声。", "language": "chinese"},
     {"id": "serena", "name": "Serena", "model": TTS_MODEL, "description": "温暖柔和的年轻女声。", "language": "chinese"},
@@ -102,7 +105,7 @@ DEFAULT_IDENTITY = {
     "tavern_name": "酒馆",
     "actor_name": "故事档案",
     "persona_name_en": "Curator",
-    "tavern_name_en": "Tavern",
+    "tavern_name_en": "Tarven",
     "actor_name_en": "Story Profile",
 }
 
@@ -140,17 +143,10 @@ def app_identity():
     profile = _clawchat_agent_profile()
     nick = (profile.get("agent_nickname") or "").strip()
     if nick:
-        possessive = f"{nick}'" if nick.lower().endswith("s") else f"{nick}'s"
         data["persona_name"] = nick
-        data["tavern_name"] = f"{nick}的酒馆"
-        data["actor_name"] = f"{nick}的故事档案"
         data["persona_name_en"] = nick
-        data["tavern_name_en"] = f"{possessive} Tavern"
-        data["actor_name_en"] = f"{possessive} Story Profile"
-    else:
-        data["persona_name_en"] = (data.get("persona_name_en") or "Curator").strip() or "Curator"
-        data["tavern_name_en"] = (data.get("tavern_name_en") or "Tavern").strip()
-        data["actor_name_en"] = (data.get("actor_name_en") or "Story Profile").strip()
+    data["tavern_name_en"] = "Tarven"
+    data["actor_name_en"] = "Story Profile"
     return data
 
 
@@ -221,6 +217,62 @@ def _tts_config():
     return saved if isinstance(saved, dict) else {}
 
 
+def _normalize_tts_speed(value):
+    try:
+        speed = float(value)
+    except (TypeError, ValueError):
+        speed = TTS_DEFAULT_SPEED
+    if not 0.25 <= speed <= 4:
+        raise ValueError("speech speed must be between 0.25 and 4")
+    return round(speed, 2)
+
+
+def _normalize_tts_instructions(value):
+    instructions = str(value or "").strip()
+    if len(instructions) > 1000:
+        raise ValueError("speech tone instructions are too long")
+    return instructions
+
+
+def _tts_clones(saved):
+    raw = saved.get("clones")
+    if isinstance(raw, list):
+        return [dict(item) for item in raw if isinstance(item, dict)]
+    legacy = saved.get("clone")
+    if isinstance(legacy, dict) and legacy:
+        clone = dict(legacy)
+        clone["id"] = str(clone.get("id") or clone.get("token") or "")
+        clone["speed"] = _normalize_tts_speed(clone.get("speed"))
+        clone.pop("tone", None)
+        return [clone]
+    return []
+
+
+def _tts_clone_ready(clone):
+    path = _tts_clone_file(clone)
+    return bool(path and os.path.isfile(path) and str((clone or {}).get("ref_text") or "").strip())
+
+
+def _active_tts_clone(saved):
+    clones = _tts_clones(saved)
+    active_id = str(saved.get("active_clone_id") or "")
+    for clone in clones:
+        clone_id = str(clone.get("id") or clone.get("token") or "")
+        if clone_id == active_id and _tts_clone_ready(clone):
+            return clone
+    return None
+
+
+def _preset_tts_setting(saved, voice):
+    settings = saved.get("preset_settings")
+    setting = settings.get(voice) if isinstance(settings, dict) else None
+    setting = setting if isinstance(setting, dict) else {}
+    return {
+        "speed": _normalize_tts_speed(setting.get("speed")),
+        "instructions": _normalize_tts_instructions(setting.get("instructions")),
+    }
+
+
 def _tts_clone_file(clone):
     token = str((clone or {}).get("token") or "")
     ext = str((clone or {}).get("ext") or "")
@@ -258,21 +310,32 @@ def _tts_settings():
     voice = str(saved.get("voice") or default_voice).strip().lower()
     if voice not in voice_ids:
         voice = default_voice
-    clone = saved.get("clone") if isinstance(saved.get("clone"), dict) else {}
-    clone_ready = bool(_tts_clone_file(clone) and os.path.isfile(_tts_clone_file(clone))
-                       and str(clone.get("ref_text") or "").strip())
-    mode = "clone" if saved.get("mode") == "clone" and clone_ready else "preset"
+    clones = [clone for clone in _tts_clones(saved) if _tts_clone_ready(clone)]
+    active_clone = _active_tts_clone(saved)
+    mode = "clone" if saved.get("mode") == "clone" and active_clone else "preset"
+
+    def public_clone(clone):
+        return {
+            "id": str(clone.get("id") or clone.get("token") or ""),
+            "configured": True,
+            "name": str(clone.get("name") or "").strip(),
+            "ref_text": str(clone.get("ref_text") or "").strip(),
+            "speed": _normalize_tts_speed(clone.get("speed")),
+        }
+
+    public_clones = [public_clone(clone) for clone in clones]
+    public_active = public_clone(active_clone) if active_clone else {}
     return {
         "model": TTS_MODEL,
         "model_name": TTS_MODEL_NAME,
         "active_voice": voice,
+        "active_clone_id": public_active.get("id", ""),
         "mode": mode,
         "voices": voices,
-        "clone": {
-            "configured": clone_ready,
-            "name": str(clone.get("name") or "").strip(),
-            "ref_text": str(clone.get("ref_text") or "").strip(),
-        },
+        "preset_settings": {item["id"]: _preset_tts_setting(saved, item["id"])
+                            for item in voices},
+        "clones": public_clones,
+        "clone": public_active,
     }
 
 
@@ -288,13 +351,30 @@ def _save_tts_voice(voice):
     return voice
 
 
-def _save_tts_clone(audio_data, ref_text, name):
+def _save_tts_preset_settings(voice, speed=None, instructions=None):
+    saved = _tts_config()
+    voice = str(voice or "").strip().lower()
+    if voice not in {item["id"] for item in _tts_voices()}:
+        raise ValueError("unsupported voice")
+    settings = saved.get("preset_settings")
+    settings = dict(settings) if isinstance(settings, dict) else {}
+    settings[voice] = {
+        "speed": _normalize_tts_speed(speed),
+        "instructions": _normalize_tts_instructions(instructions),
+    }
+    saved["preset_settings"] = settings
+    _write(TTS_CONFIG_PATH, saved)
+    return _tts_settings()
+
+
+def _save_tts_clone(audio_data, ref_text, name, speed=None):
     ref_text = str(ref_text or "").strip()
     name = str(name or "").strip()[:40] or "My Voice"
     if not ref_text:
         raise ValueError("reference transcript is required")
     if len(ref_text) > 4096:
         raise ValueError("reference transcript is too long")
+    speed = _normalize_tts_speed(speed)
     match = re.fullmatch(r"data:(audio/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)",
                          str(audio_data or ""), re.DOTALL)
     if not match:
@@ -316,42 +396,80 @@ def _save_tts_clone(audio_data, ref_text, name):
         raise ValueError("reference audio must be between 1 byte and 10 MB")
 
     saved = _tts_config()
-    old_clone = saved.get("clone") if isinstance(saved.get("clone"), dict) else {}
+    clones = _tts_clones(saved)
+    if len(clones) >= TTS_MAX_CLONES:
+        raise ValueError(f"no more than {TTS_MAX_CLONES} cloned voices are allowed")
     token = secrets.token_urlsafe(32)
     path = os.path.join(TTS_REFERENCE_DIR, token + ext)
     with open(path, "wb") as file:
         file.write(audio)
-    clone = {"token": token, "ext": ext, "mime": mime, "name": name, "ref_text": ref_text}
-    saved.update({"mode": "clone", "clone": clone})
+    clone = {"id": token, "token": token, "ext": ext, "mime": mime, "name": name,
+             "ref_text": ref_text, "speed": speed}
+    clones.append(clone)
+    saved.update({"mode": "clone", "clones": clones, "active_clone_id": token})
+    saved.pop("clone", None)
     saved.pop("model", None)
-    _write(TTS_CONFIG_PATH, saved)
-    _remove_tts_clone_file(old_clone)
-    return _tts_settings()
-
-
-def _use_tts_clone():
-    saved = _tts_config()
-    clone = saved.get("clone") if isinstance(saved.get("clone"), dict) else {}
-    if not _tts_clone_file(clone) or not os.path.isfile(_tts_clone_file(clone)):
-        raise ValueError("cloned voice is not configured")
-    saved["mode"] = "clone"
-    _write(TTS_CONFIG_PATH, saved)
-    return _tts_settings()
-
-
-def _delete_tts_clone():
-    saved = _tts_config()
-    clone = saved.pop("clone", None)
-    saved["mode"] = "preset"
-    _write(TTS_CONFIG_PATH, saved)
-    if isinstance(clone, dict):
+    try:
+        _write(TTS_CONFIG_PATH, saved)
+    except Exception:
         _remove_tts_clone_file(clone)
+        raise
+    return _tts_settings()
+
+
+def _use_tts_clone(clone_id):
+    saved = _tts_config()
+    clone_id = str(clone_id or "")
+    clone = next((item for item in _tts_clones(saved)
+                  if str(item.get("id") or item.get("token") or "") == clone_id), None)
+    if not clone or not _tts_clone_ready(clone):
+        raise ValueError("cloned voice is not configured")
+    saved.update({"mode": "clone", "active_clone_id": clone_id})
+    _write(TTS_CONFIG_PATH, saved)
+    return _tts_settings()
+
+
+def _delete_tts_clone(clone_id):
+    saved = _tts_config()
+    clone_id = str(clone_id or "")
+    clones = _tts_clones(saved)
+    clone = next((item for item in clones
+                  if str(item.get("id") or item.get("token") or "") == clone_id), None)
+    if not clone:
+        raise ValueError("cloned voice is not configured")
+    saved["clones"] = [item for item in clones if item is not clone]
+    saved.pop("clone", None)
+    if str(saved.get("active_clone_id") or "") == clone_id:
+        saved.pop("active_clone_id", None)
+        saved["mode"] = "preset"
+    _write(TTS_CONFIG_PATH, saved)
+    _remove_tts_clone_file(clone)
     return _tts_settings()
 
 
 def _migrate_tts_config():
     saved = _tts_config()
     changed = saved.pop("model", None) is not None
+    legacy = saved.pop("clone", None)
+    clones = _tts_clones({"clones": saved.get("clones")})
+    if isinstance(legacy, dict) and legacy:
+        migrated = dict(legacy)
+        migrated["id"] = str(migrated.get("id") or migrated.get("token") or "")
+        migrated["speed"] = _normalize_tts_speed(migrated.get("speed"))
+        migrated.pop("tone", None)
+        clones.append(migrated)
+        saved["active_clone_id"] = migrated["id"]
+        changed = True
+    normalized_clones = []
+    for clone in clones:
+        clone["id"] = str(clone.get("id") or clone.get("token") or "")
+        clone["speed"] = _normalize_tts_speed(clone.get("speed"))
+        if clone.pop("tone", None) is not None:
+            changed = True
+        normalized_clones.append(clone)
+    if normalized_clones != saved.get("clones"):
+        saved["clones"] = normalized_clones
+        changed = True
     voice_ids = {item["id"] for item in TTS_FALLBACK_VOICES}
     if saved.get("voice") not in voice_ids:
         saved["voice"] = TTS_DEFAULT_VOICE if TTS_DEFAULT_VOICE in voice_ids else "vivian"
@@ -370,7 +488,7 @@ def _speech_text(text):
     return text.replace("*", "").strip()
 
 
-def _generate_speech(text, voice=None):
+def _generate_speech(text, voice=None, speed=None, instructions=None, force_preset=False):
     text = _speech_text(text)
     if not text:
         raise ValueError("speech text is empty")
@@ -387,11 +505,19 @@ def _generate_speech(text, voice=None):
         raise ValueError("TTS service endpoint is missing")
 
     saved = _tts_config()
-    clone = saved.get("clone") if settings["mode"] == "clone" else None
+    clone = _active_tts_clone(saved) if settings["mode"] == "clone" and not force_preset else None
     clone_token = str((clone or {}).get("token") or "")
+    if clone:
+        speed = _normalize_tts_speed(clone.get("speed"))
+        instructions = ""
+    else:
+        preset = _preset_tts_setting(saved, voice)
+        speed = _normalize_tts_speed(speed if speed is not None else preset["speed"])
+        instructions = _normalize_tts_instructions(
+            instructions if instructions is not None else preset["instructions"])
     request_voice = "custom" if clone else voice
     cache_key = hashlib.sha256(
-        f"{TTS_MODEL}\0{request_voice}\0{clone_token}\0{text}".encode("utf-8")
+        f"{TTS_MODEL}\0{request_voice}\0{clone_token}\0{speed}\0{instructions}\0{text}".encode("utf-8")
     ).hexdigest()
     with _tts_cache_lock:
         cached = _tts_cache.get(cache_key)
@@ -403,10 +529,13 @@ def _generate_speech(text, voice=None):
         "voice": request_voice,
         "input": text,
         "response_format": "mp3",
+        "speed": speed,
     }
     if clone:
         request_data["ref_audio"] = _tts_clone_data_url(clone)
         request_data["ref_text"] = clone["ref_text"]
+    elif instructions:
+        request_data["instructions"] = instructions
     payload = json.dumps(request_data, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         f"{TTS_BASE}/audio/speech",
@@ -2849,12 +2978,17 @@ def ev_tts_voice_use(ev):
     return {"voice": voice, "tts": _tts_settings()}
 
 
-def ev_tts_clone_use(_ev):
-    return {"tts": _use_tts_clone()}
+def ev_tts_preset_settings(ev):
+    return {"tts": _save_tts_preset_settings(
+        ev.get("voice"), ev.get("speed"), ev.get("instructions"))}
 
 
-def ev_tts_clone_delete(_ev):
-    return {"tts": _delete_tts_clone()}
+def ev_tts_clone_use(ev):
+    return {"tts": _use_tts_clone(ev.get("clone_id"))}
+
+
+def ev_tts_clone_delete(ev):
+    return {"tts": _delete_tts_clone(ev.get("clone_id"))}
 
 
 EVENTS = {
@@ -2877,6 +3011,7 @@ EVENTS = {
     "model_add": ev_model_add, "model_use": ev_model_use,
     "model_delete": ev_model_delete, "model_test": ev_model_test,
     "tts_voice_use": ev_tts_voice_use,
+    "tts_preset_settings": ev_tts_preset_settings,
     "tts_clone_use": ev_tts_clone_use, "tts_clone_delete": ev_tts_clone_delete,
 }
 
@@ -2904,9 +3039,10 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _tts_reference(self, token):
-        clone = _tts_config().get("clone")
-        if not isinstance(clone, dict) or not secrets.compare_digest(
-                str(clone.get("token") or ""), str(token or "")):
+        clone = next((item for item in _tts_clones(_tts_config())
+                      if secrets.compare_digest(str(item.get("token") or ""),
+                                                str(token or ""))), None)
+        if not clone:
             return self._json(404, {"error": "not found"})
         path = _tts_clone_file(clone)
         if not path or not os.path.isfile(path):
@@ -3109,10 +3245,22 @@ class H(BaseHTTPRequestHandler):
                 return self._audio(_generate_speech(ev.get("text")))
             except Exception as e:
                 return self._json(502, {"ok": False, "error": str(e)})
+        if path == "/api/tts/preview":
+            try:
+                ev = json.loads(self._read_body() or b"{}")
+                audio = _generate_speech(
+                    TTS_PREVIEW_TEXT, voice=ev.get("voice"), speed=ev.get("speed"),
+                    instructions=ev.get("instructions"), force_preset=True)
+                return self._audio(audio)
+            except ValueError as e:
+                return self._json(400, {"ok": False, "error": str(e)})
+            except Exception as e:
+                return self._json(502, {"ok": False, "error": str(e)})
         if path == "/api/tts/clone":
             try:
                 ev = json.loads(self._read_body() or b"{}")
-                settings = _save_tts_clone(ev.get("audio"), ev.get("ref_text"), ev.get("name"))
+                settings = _save_tts_clone(ev.get("audio"), ev.get("ref_text"), ev.get("name"),
+                                           ev.get("speed"))
                 return self._json(200, {"ok": True, "tts": settings})
             except ValueError as e:
                 return self._json(400, {"ok": False, "error": str(e)})

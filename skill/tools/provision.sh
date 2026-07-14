@@ -8,8 +8,8 @@
 # 也能从 list 恢复），**缺才 `app create`**。per-owner 配额 ~3、且无 app delete，所以
 # 复用优先是硬要求——重跑本脚本不会重复建 app。
 #
-# Liveware 底层 app 使用稳定名称 Tavern / Story Profile；ClawChat 展示名
-# 从当前 agent_nickname 派生。这样改昵称时只需刷新注册，不会重建 app 或消耗配额。
+# Liveware 底层 app 使用稳定名称 Tavern / Story Profile；ClawChat 展示名固定为
+# Tarven / Story Profile，不随主理人昵称变化，也不会重建 app 或消耗配额。
 #
 # 前置：容器已激活（hermes clawchat activate）+ 装了 clawchat 插件（带 liveware 二进制）。
 # 跑：sh /opt/data/skills/creative/tavern/scripts/provision.sh（通常由 install.sh 调）
@@ -47,41 +47,10 @@ if [ ! -f "$IDENTITY" ]; then
 }
 JSON
 fi
-NICK="$($PY - <<'PY'
-from pathlib import Path
-
-path = Path("/opt/data/memories/owner.md")
-nickname = ""
-try:
-    in_meta = False
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if line == "<!-- clawchat:metadata:start -->":
-            in_meta = True
-            continue
-        if line == "<!-- clawchat:metadata:end -->":
-            break
-        if in_meta and raw.startswith("agent_nickname:"):
-            nickname = raw.split(":", 1)[1].strip()
-            break
-except OSError:
-    pass
-print(nickname)
-PY
-)"
 CONSOLE_APP_NAME="${TAVERN_CONSOLE_APP_NAME:-Tavern}"
 ACTOR_APP_NAME="${TAVERN_ACTOR_APP_NAME:-Story Profile}"
-if [ -n "$NICK" ]; then
-  case "$NICK" in
-    *s|*S) POSSESSIVE="${NICK}'" ;;
-    *) POSSESSIVE="${NICK}'s" ;;
-  esac
-  CONSOLE_NAME="$POSSESSIVE Tavern"
-  ACTOR_NAME="$POSSESSIVE Story Profile"
-else
-  CONSOLE_NAME="Tavern"
-  ACTOR_NAME="Story Profile"
-fi
+CONSOLE_NAME="Tarven"
+ACTOR_NAME="Story Profile"
 
 # 1. liveware 登录（token 从 plugin profile config 解析；env CLAWCHAT_TOKEN 是空壳别直接传）
 echo "== login =="

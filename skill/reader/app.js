@@ -111,7 +111,7 @@ async function loadAll() {
   state.models = (mr && mr.configs) ? mr
     : { configs: [{ id: "builtin", builtin: true }], active: "builtin" };
   state.tts = (tr && Array.isArray(tr.voices)) ? tr
-    : { model: "clawling/qwen-tts", model_name: "Qwen TTS", active_voice: "vivian", mode: "preset", voices: [], clone: {} };
+    : { model: "clawling/qwen-tts", model_name: "Qwen TTS", active_voice: "vivian", active_clone_id: "", mode: "preset", voices: [], preset_settings: {}, clones: [], clone: {} };
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
   state.active = state.productions.find((p) => p.id === state.activeId) || null;
   state.persona = (state.active && state.active.persona) || {};
@@ -1669,6 +1669,7 @@ async function askDeleteModel(id) {
 }
 
 function openVoiceSheet() {
+  stopSpeech();
   closeDrawers();
   const card = el("div", "modalCard sheetCard");
   card.innerHTML = `<div class="sheetHd"><span class="t">${esc(t("voiceSheetTitle"))}</span>
@@ -1679,37 +1680,79 @@ function openVoiceSheet() {
   renderVoiceSheet();
 }
 
+function speedStepperHtml(id, value = 0.9) {
+  const speed = Math.min(4, Math.max(0.25, Number(value) || 0.9));
+  return `<div class="speedStepper" data-speed-stepper="${esc(id)}">
+    <button type="button" data-speed-delta="-0.05" aria-label="${esc(t("voiceSpeedSlower"))}">−</button>
+    <output>${speed.toFixed(2)}×</output>
+    <button type="button" data-speed-delta="0.05" aria-label="${esc(t("voiceSpeedFaster"))}">+</button>
+    <input type="hidden" value="${speed.toFixed(2)}">
+  </div>`;
+}
+
+function bindSpeedStepper(root, id) {
+  const stepper = root.querySelector(`[data-speed-stepper="${id}"]`);
+  if (!stepper) return { value: () => 0.9 };
+  const input = stepper.querySelector("input");
+  const output = stepper.querySelector("output");
+  const update = (next) => {
+    const value = Math.min(4, Math.max(0.25, Math.round(next * 20) / 20));
+    input.value = value.toFixed(2);
+    output.textContent = `${value.toFixed(2)}×`;
+  };
+  stepper.querySelectorAll("[data-speed-delta]").forEach((button) => {
+    button.onclick = () => update(Number(input.value) + Number(button.dataset.speedDelta));
+  });
+  return { value: () => Number(input.value) };
+}
+
 function renderVoiceSheet() {
   const box = document.getElementById("voiceBody");
   if (!box) return;
-  const cfg = state.tts || { voices: [], active_voice: "vivian", mode: "preset", clone: {} };
-  const clone = cfg.clone || {};
+  const cfg = state.tts || { voices: [], active_voice: "vivian", active_clone_id: "", mode: "preset", clones: [], clone: {} };
+  const clones = Array.isArray(cfg.clones) ? cfg.clones : (cfg.clone?.configured ? [cfg.clone] : []);
   box.innerHTML = `<div class="voiceSheetModel"><span>${esc(cfg.model_name || "Qwen TTS")}</span>
-      <button class="actorMore" id="voiceCloneCreate">${PENCIL_SVG}${esc(clone.configured ? t("voiceCloneReplace") : t("voiceCloneCreate"))}</button></div>`
-    + (clone.configured ? `<div class="mcItem ${cfg.mode === "clone" ? "active" : ""}" data-clone-voice>
-        <div class="mcInfo"><div class="mcName">${esc(clone.name || t("voiceCloneDefaultName"))}</div><div class="mcMeta">${esc(t("voiceCloneMeta"))}</div></div>
-        <span class="mcCheck">✓</span><button class="mcDel" data-clone-delete aria-label="${esc(t("voiceCloneDelete"))}">${TRASH_SVG}</button></div>` : "")
+      <button class="actorMore" id="voiceCloneCreate">${PENCIL_SVG}${esc(t("voiceCloneCreate"))}</button></div>`
+    + (clones.length ? `<p class="voiceModelName voiceListLabel">${esc(t("voiceCloneListLabel"))}</p>` : "")
+    + clones.map((clone) => `<div class="mcItem ${cfg.mode === "clone" && clone.id === cfg.active_clone_id ? "active" : ""}" data-clone-id="${esc(clone.id)}">
+        <div class="mcInfo"><div class="mcName">${esc(clone.name || t("voiceCloneDefaultName"))}</div><div class="mcMeta">${esc(t("voiceCloneMeta", { speed: Number(clone.speed || 0.9).toFixed(2) }))}</div></div>
+        <span class="mcCheck">✓</span><button class="mcDel" data-clone-delete="${esc(clone.id)}" aria-label="${esc(t("voiceCloneDelete"))}">${TRASH_SVG}</button></div>`).join("")
     + `<p class="voiceModelName voiceListLabel">${esc(t("voicePresetLabel"))}</p>`
     + (cfg.voices || []).map((voice) => {
       const description = I18N.lang === "zh" ? voice.description : "";
-      const meta = description || t(`voiceLang_${voice.language || "chinese"}`);
+      const setting = cfg.preset_settings?.[voice.id] || { speed: 0.9, instructions: "" };
+      const detail = setting.instructions || description || t(`voiceLang_${voice.language || "chinese"}`);
+      const meta = `${Number(setting.speed || 0.9).toFixed(2)}× · ${detail}`;
       return `<div class="mcItem ${cfg.mode === "preset" && voice.id === cfg.active_voice ? "active" : ""}" data-voice="${esc(voice.id)}">
         <div class="mcInfo"><div class="mcName">${esc(voice.name || voiceDisplayName(voice))}</div><div class="mcMeta">${esc(meta)}</div></div>
+        <div class="mcTools"><button class="mcIcon" data-voice-preview="${esc(voice.id)}" aria-label="${esc(t("voicePreview"))}" title="${esc(t("voicePreview"))}">${SPEAKER_SVG}</button>
+        <button class="mcIcon" data-voice-settings="${esc(voice.id)}" aria-label="${esc(t("voiceSettings"))}" title="${esc(t("voiceSettings"))}">${SLIDERS_SVG}</button></div>
         <span class="mcCheck">✓</span></div>`;
     }).join("");
   const create = document.getElementById("voiceCloneCreate");
   if (create) create.onclick = openVoiceCloneSheet;
-  const cloneRow = box.querySelector("[data-clone-voice]");
-  if (cloneRow) cloneRow.onclick = useCloneVoice;
-  const cloneDelete = box.querySelector("[data-clone-delete]");
-  if (cloneDelete) cloneDelete.onclick = (event) => { event.stopPropagation(); deleteCloneVoice(); };
+  box.querySelectorAll("[data-clone-id]").forEach((row) => row.onclick = () => useCloneVoice(row.dataset.cloneId));
+  box.querySelectorAll("[data-clone-delete]").forEach((button) => {
+    button.onclick = (event) => { event.stopPropagation(); deleteCloneVoice(button.dataset.cloneDelete); };
+  });
   box.querySelectorAll("[data-voice]").forEach((row) => row.onclick = () => useVoice(row.dataset.voice));
+  box.querySelectorAll("[data-voice-preview]").forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      const voice = button.dataset.voicePreview;
+      const setting = cfg.preset_settings?.[voice] || { speed: 0.9, instructions: "" };
+      previewPresetVoice(button, { voice, ...setting });
+    };
+  });
+  box.querySelectorAll("[data-voice-settings]").forEach((button) => {
+    button.onclick = (event) => { event.stopPropagation(); openPresetVoiceSettings(button.dataset.voiceSettings); };
+  });
 }
 
-async function useCloneVoice() {
-  if (!state.tts?.clone?.configured || state.tts.mode === "clone") return;
+async function useCloneVoice(cloneId) {
+  if (!cloneId || (state.tts?.mode === "clone" && state.tts?.active_clone_id === cloneId)) return;
   try {
-    const result = await bridge.event({ type: "tts_clone_use" });
+    const result = await bridge.event({ type: "tts_clone_use", clone_id: cloneId });
     state.tts = result.tts;
     renderVoiceSheet(); renderPanel();
     toast(t("voiceCloneSelected"));
@@ -1738,6 +1781,75 @@ async function useVoice(voice) {
   }
 }
 
+async function previewPresetVoice(button, payload) {
+  if (speechState.button === button && speechState.audio) {
+    return toggleSpeech(button);
+  }
+  stopSpeech();
+  const controller = new AbortController();
+  speechState.button = button;
+  speechState.controller = controller;
+  button.disabled = true;
+  button.classList.add("busy");
+  button.setAttribute("aria-label", t("voiceLoading"));
+  try {
+    const blob = await bridge.speechPreview(payload, controller.signal);
+    if (speechState.controller !== controller) return;
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    speechState.audio = audio;
+    speechState.url = url;
+    speechState.controller = null;
+    button.disabled = false;
+    button.classList.remove("busy");
+    button.innerHTML = PAUSE_SVG;
+    button.classList.add("playing");
+    audio.onended = stopSpeech;
+    audio.onerror = () => { stopSpeech(); toast(t("voiceFailed", { err: "audio playback" })); };
+    await audio.play();
+  } catch (e) {
+    if (e.name !== "AbortError") toast(t("voiceFailed", { err: e.message }));
+    stopSpeech();
+  }
+}
+
+function openPresetVoiceSettings(voiceId) {
+  stopSpeech();
+  const cfg = state.tts || {};
+  const voice = (cfg.voices || []).find((item) => item.id === voiceId);
+  if (!voice) return;
+  const setting = cfg.preset_settings?.[voiceId] || { speed: 0.9, instructions: "" };
+  const card = el("div", "modalCard sheetCard voiceSettingsSheet");
+  card.innerHTML = `<div class="sheetHd"><span class="t">${esc(voice.name || voiceDisplayName(voice))}</span>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">✕</button></div>
+    <div class="sheetBody voiceSettingsForm">
+      <label class="fieldLabel"><span>${esc(t("voiceSpeed"))}</span>${speedStepperHtml("presetSpeed", setting.speed)}</label>
+      <label class="fieldLabel">${esc(t("voiceInstructions"))}<textarea class="formControl voiceInstructions" id="voiceInstructions" maxlength="1000" placeholder="${esc(t("voiceInstructionsPlaceholder"))}">${esc(setting.instructions || "")}</textarea></label>
+    </div>
+    <div class="sheetActions voiceSettingsActions"><button class="btn ghost previewIconBtn" id="voicePreview" aria-label="${esc(t("voicePreview"))}" title="${esc(t("voicePreview"))}">${SPEAKER_SVG}</button><button class="btn" id="voiceSettingsSave">${esc(t("save"))}</button></div>`;
+  openModal(card);
+  const speed = bindSpeedStepper(card, "presetSpeed");
+  const instructions = card.querySelector("#voiceInstructions");
+  card.querySelector(".sheetClose").onclick = openVoiceSheet;
+  card.querySelector("#voicePreview").onclick = (event) => previewPresetVoice(event.currentTarget, {
+    voice: voiceId, speed: speed.value(), instructions: instructions.value.trim(),
+  });
+  card.querySelector("#voiceSettingsSave").onclick = async (event) => {
+    const save = event.currentTarget;
+    save.disabled = true;
+    try {
+      const result = await bridge.event({ type: "tts_preset_settings", voice: voiceId,
+        speed: speed.value(), instructions: instructions.value.trim() });
+      state.tts = result.tts;
+      openVoiceSheet(); renderPanel();
+      toast(t("voiceSettingsSaved"));
+    } catch (e) {
+      save.disabled = false;
+      toast(t("voiceSettingsSaveFailed", { err: e.message }));
+    }
+  };
+}
+
 function readFileDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1748,19 +1860,19 @@ function readFileDataUrl(file) {
 }
 
 function openVoiceCloneSheet() {
-  const current = state.tts?.clone || {};
   const card = el("div", "modalCard sheetCard cloneSheet");
   card.innerHTML = `<div class="sheetHd"><span class="t">${esc(t("voiceCloneTitle"))}</span>
       <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">✕</button></div>
     <div class="sheetBody cloneForm">
       <label class="fieldLabel">${esc(t("voiceCloneName"))}<input class="formControl" id="cloneName" maxlength="40"></label>
-      <label class="fieldLabel">${esc(t("voiceCloneAudio"))}<input class="formControl cloneFile" id="cloneAudio" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/flac"><small>MP3 / WAV / M4A · 10–20s · ≤10MB</small></label>
+      <label class="fieldLabel">${esc(t("voiceCloneAudio"))}<input class="formControl cloneFile" id="cloneAudio" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/flac"><small>${esc(t("voiceCloneAudioHint"))}</small></label>
       <label class="fieldLabel">${esc(t("voiceCloneTranscript"))}<textarea class="formControl cloneTranscript" id="cloneTranscript" maxlength="4096" placeholder="${esc(t("voiceCloneTranscriptPlaceholder"))}"></textarea></label>
+      <label class="fieldLabel"><span>${esc(t("voiceSpeed"))}</span>${speedStepperHtml("cloneSpeed", 0.9)}</label>
     </div>
     <div class="sheetActions"><button class="btn ghost" id="cloneCancel">${esc(t("cancel"))}</button><button class="btn" id="cloneSave">${esc(t("save"))}</button></div>`;
   openModal(card);
-  card.querySelector("#cloneName").value = current.name || t("voiceCloneDefaultName");
-  card.querySelector("#cloneTranscript").value = current.ref_text || "";
+  card.querySelector("#cloneName").value = t("voiceCloneDefaultName");
+  const speed = bindSpeedStepper(card, "cloneSpeed");
   card.querySelector(".sheetClose").onclick = openVoiceSheet;
   card.querySelector("#cloneCancel").onclick = openVoiceSheet;
   card.querySelector("#cloneSave").onclick = async () => {
@@ -1775,7 +1887,7 @@ function openVoiceCloneSheet() {
     save.textContent = t("saving");
     try {
       const audio = await readFileDataUrl(file);
-      const result = await bridge.saveVoiceClone({ audio, ref_text: refText, name });
+      const result = await bridge.saveVoiceClone({ audio, ref_text: refText, name, speed: speed.value() });
       state.tts = result.tts;
       openVoiceSheet(); renderPanel();
       toast(t("voiceCloneSaved"));
@@ -1787,11 +1899,12 @@ function openVoiceCloneSheet() {
   };
 }
 
-async function deleteCloneVoice() {
+async function deleteCloneVoice(cloneId) {
+  if (!cloneId) return;
   const ok = await confirmDialog({ title: t("voiceCloneDeleteTitle"), body: t("voiceCloneDeleteBody") });
   if (!ok) return openVoiceSheet();
   try {
-    const result = await bridge.event({ type: "tts_clone_delete" });
+    const result = await bridge.event({ type: "tts_clone_delete", clone_id: cloneId });
     state.tts = result.tts;
     openVoiceSheet(); renderPanel();
     toast(t("voiceCloneDeleted"));

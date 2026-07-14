@@ -1,9 +1,4 @@
-/* bridge.js — 控制台 ↔ 演员运行时的同源桥（占位，复刻 digest reader/bridge.js）。
- *
- * 页面只跟自己的 agent server 同源说话：所有写回都过 bridge.event(ev) → POST /api/event。
- * 模型 creds 在 server 端，页面永不见。真 ClawChat 容器桥到位时只换这一处：
- *   event() → window.clawchat.sendFragment(event)。其余 UI 不知道反馈怎么走。
- */
+/* bridge.js — Tavern frontend to same-origin runtime bridge. */
 (function (global) {
   "use strict";
   async function event(ev) {
@@ -43,11 +38,11 @@
       throw err;
     }
   }
-  async function speech(text, signal) {
-    const r = await fetch("/api/tts", {
+  async function audioRequest(path, payload, signal) {
+    const r = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
       signal,
     });
     if (!r.ok) {
@@ -55,6 +50,12 @@
       throw new Error(data.error || ("HTTP " + r.status));
     }
     return r.blob();
+  }
+  async function speech(text, signal) {
+    return audioRequest("/api/tts", { text }, signal);
+  }
+  async function speechPreview(payload, signal) {
+    return audioRequest("/api/tts/preview", payload, signal);
   }
   async function saveVoiceClone(payload) {
     const r = await fetch("/api/tts/clone", {
@@ -66,5 +67,5 @@
     if (!r.ok || data.ok === false) throw new Error(data.error || ("HTTP " + r.status));
     return data;
   }
-  global.bridge = { event, get, generate, speech, saveVoiceClone };
+  global.bridge = { event, get, generate, speech, speechPreview, saveVoiceClone };
 })(window);
