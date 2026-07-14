@@ -74,8 +74,8 @@ python3 /opt/data/skills/system/tavern-updater/scripts/update.py report --plan <
 ```
 
 After `report`, show the installed and target versions, exact changed files,
-conflicts, hashes, and excluded paths. Stop and wait for a new explicit user
-approval. Only after that approval run:
+conflicts, hashes, trusted-baseline status, validation results, and excluded
+paths. Stop and wait for a new explicit user approval. Only after that approval run:
 
 ```sh
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
@@ -87,6 +87,10 @@ Do not ask separately whether the Tavern skill should be synchronized. Never
 update identity/persona files, runtime or skill assets, starter content,
 `/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, or
 logs. A failed application update must restore the previous managed files.
+Never use current instance files as an official merge baseline. If the installed
+version has no verified Release or cached baseline, differing files are conflicts
+and must not be overwritten. Validate backend, frontend, and read-only API surfaces
+before committing an update.
 {AGENTS_END}"""
 
 

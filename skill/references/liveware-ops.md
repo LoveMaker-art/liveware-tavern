@@ -83,7 +83,7 @@ Verify key is loaded and both URLs work:
 
 ```sh
 curl -fsS http://127.0.0.1:8799/api/health
-curl -fsS https://app-7e523a668a44fff8.apps.clawling.io/api/health
+curl -fsS https://<app-domain>/api/health
 ```
 
 The Hermes terminal tool forbids `&` backgrounding in foreground mode — use `terminal(background=true)` for the restart command.

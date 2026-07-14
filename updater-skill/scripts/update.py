@@ -2,7 +2,10 @@
 """Reviewable, merge-aware, state-preserving Tavern release updater."""
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import fnmatch
+from functools import wraps
 import hashlib
 import json
 import os
@@ -18,6 +21,10 @@ import uuid
 
 REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/liveware-tavern")
 API = os.environ.get("TAVERN_UPDATE_API", f"https://api.github.com/repos/{REPO}/releases/latest")
+TAG_API = os.environ.get(
+    "TAVERN_UPDATE_TAG_API",
+    f"https://api.github.com/repos/{REPO}/releases/tags/v{{version}}",
+)
 DATA = Path(os.environ.get("TAVERN_DATA_ROOT", "/opt/data"))
 PYTHON = os.environ.get("TAVERN_PYTHON", "/opt/hermes/.venv/bin/python")
 HEALTH_URL = os.environ.get("TAVERN_HEALTH_URL", "http://127.0.0.1:8799/api/health")
@@ -32,6 +39,8 @@ BACKUPS = UPDATE_ROOT / "backups"
 PLANS = UPDATE_ROOT / "plans"
 BASELINE = UPDATE_ROOT / "baseline"
 STATE = UPDATE_ROOT / "state.json"
+LOCK = UPDATE_ROOT / "update.lock"
+BASELINE_META = ".baseline.json"
 ASSET_MANIFEST = "manifest.json"
 ASSET_ARCHIVE = "tavern-release.tar.gz"
 SKILL_ASSET_MANIFEST = "skill-manifest.json"
@@ -137,8 +146,8 @@ def local_skill_version():
         return "0.0.0"
 
 
-def latest_release():
-    release = request_json(API)
+def release_from_api(url):
+    release = request_json(url)
     if release.get("draft") or release.get("prerelease"):
         raise RuntimeError("latest GitHub release is not stable")
     assets = {item.get("name"): item.get("browser_download_url") for item in release.get("assets") or []}
@@ -149,8 +158,17 @@ def latest_release():
     return {"tag": release.get("tag_name"), "assets": assets, "url": release.get("html_url")}
 
 
-def release_material(work):
-    release = latest_release()
+def latest_release():
+    return release_from_api(API)
+
+
+def tagged_release(version):
+    return release_from_api(TAG_API.format(version=version))
+
+
+def release_material(work, release=None):
+    work.mkdir(parents=True, exist_ok=True)
+    release = release or latest_release()
     manifest_path = work / ASSET_MANIFEST
     archive_path = work / ASSET_ARCHIVE
     skill_manifest_path = work / SKILL_ASSET_MANIFEST
@@ -314,6 +332,19 @@ def copy_file(source, destination):
     shutil.copy2(source, destination)
 
 
+def atomic_write_text(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.parent / ("." + path.name + ".next-" + uuid.uuid4().hex[:8])
+    try:
+        pending.write_text(content, encoding="utf-8")
+        os.replace(pending, path)
+    finally:
+        try:
+            pending.unlink()
+        except OSError:
+            pass
+
+
 def merge_file(base, current, incoming, output):
     output.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
@@ -375,12 +406,85 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, text=True, **kwargs)
 
 
+@contextmanager
+def update_lock():
+    UPDATE_ROOT.mkdir(parents=True, exist_ok=True)
+    with LOCK.open("a+", encoding="utf-8") as stream:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("another Tavern update operation is already running") from exc
+        stream.seek(0)
+        stream.truncate()
+        stream.write(json.dumps({"pid": os.getpid(), "started_at": int(time.time())}) + "\n")
+        stream.flush()
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def exclusive(command):
+    @wraps(command)
+    def wrapped(*args, **kwargs):
+        with update_lock():
+            return command(*args, **kwargs)
+    return wrapped
+
+
+def request_bytes(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": "tavern-updater/2"})
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return response.read(), response.getcode(), response.headers.get_content_type()
+
+
+def validate_release_code(unpacked, managed_files):
+    grouped = split_managed(managed_files)
+    python_files, shell_files, javascript_files = [], [], []
+    for area, names in grouped.items():
+        for name in sorted(names):
+            path = unpacked / area / name
+            if path.suffix == ".py":
+                python_files.append(path)
+            elif path.suffix == ".sh":
+                shell_files.append(path)
+            elif path.suffix == ".js":
+                javascript_files.append(path)
+    if python_files:
+        run([PYTHON, "-m", "py_compile", *map(str, python_files)])
+    for path in shell_files:
+        run(["sh", "-n", str(path)])
+    node = shutil.which("node")
+    if javascript_files and not node:
+        raise RuntimeError("Node.js is required to validate managed frontend JavaScript")
+    for path in javascript_files:
+        run([node, "--check", str(path)], stdout=subprocess.DEVNULL)
+    return {
+        "python": len(python_files),
+        "shell": len(shell_files),
+        "javascript": len(javascript_files),
+    }
+
+
 def health():
     if SKIP_SERVICE:
         return True, {"ok": True, "skipped": True}
     try:
+        base = HEALTH_URL.rsplit("/api/health", 1)[0]
         data = request_json(HEALTH_URL)
-        return bool(data.get("ok") and data.get("key_set")), data
+        checks = {"health": bool(data.get("ok") and data.get("key_set"))}
+        for name, path in (
+            ("identity", "/api/identity"),
+            ("actor_card", "/api/actor_card?lang=zh"),
+            ("productions", "/api/productions"),
+            ("models", "/api/models"),
+        ):
+            payload = request_json(base + path)
+            checks[name] = payload is not None
+        for name, path in (("console", "/"), ("actor", "/actor")):
+            body, status, content_type = request_bytes(base + path)
+            checks[name] = status == 200 and bool(body) and content_type in ("text/html", "application/xhtml+xml")
+        return all(checks.values()), {**data, "checks": checks}
     except Exception as exc:
         return False, {"error": str(exc)}
 
@@ -420,10 +524,9 @@ def install_managed(source_root, managed_files, areas=None):
 
 def backup_current(version, managed_files):
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = BACKUPS / f"{version}-{stamp}"
+    backup = BACKUPS / f"{version}-{stamp}-{uuid.uuid4().hex[:8]}"
     backup.mkdir(parents=True, exist_ok=False)
     missing = []
-    baseline_missing = []
     for area, names in split_managed(managed_files).items():
         for name in sorted(names):
             current = TARGETS[area] / name
@@ -431,15 +534,12 @@ def backup_current(version, managed_files):
                 copy_file(current, backup / "installed" / area / name)
             else:
                 missing.append(f"{area}/{name}")
-            baseline = BASELINE / area / name
-            if baseline.is_file():
-                copy_file(baseline, backup / "baseline" / area / name)
-            else:
-                baseline_missing.append(f"{area}/{name}")
+    if BASELINE.is_dir():
+        shutil.copytree(BASELINE, backup / "baseline")
     metadata = {
         "managed_files": sorted(managed_files),
         "missing": missing,
-        "baseline_missing": baseline_missing,
+        "baseline_present": BASELINE.is_dir(),
     }
     (backup / "backup.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return backup
@@ -477,33 +577,53 @@ def restore(backup):
             else:
                 copy_file(backup / "installed" / area / name, target)
     shutil.rmtree(BASELINE, ignore_errors=True)
-    copy_managed(backup / "baseline", BASELINE, managed_files)
+    if metadata.get("baseline_present") and (backup / "baseline").is_dir():
+        shutil.copytree(backup / "baseline", BASELINE)
     start_server()
 
 
-def seed_baseline(managed_files):
-    seeded = False
-    for area, names in split_managed(managed_files).items():
-        for name in sorted(names):
-            baseline = BASELINE / area / name
-            current = TARGETS[area] / name
-            if not baseline.exists() and current.is_file():
-                copy_file(current, baseline)
-                seeded = True
-    return seeded
-
-
-def write_baseline(staged, managed_files):
+def write_baseline(upstream, managed_files, version):
     pending = UPDATE_ROOT / ".baseline.next"
     shutil.rmtree(pending, ignore_errors=True)
     pending.mkdir(parents=True)
-    copy_managed(staged, pending, managed_files)
+    copy_managed(upstream, pending, managed_files)
+    metadata = {
+        "schema": 1,
+        "version": version,
+        "managed_files": sorted(managed_files),
+        "hashes": {
+            area: tree_hashes(pending / area)
+            for area in TARGETS
+        },
+    }
+    (pending / BASELINE_META).write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     old = UPDATE_ROOT / ".baseline.old"
     shutil.rmtree(old, ignore_errors=True)
     if BASELINE.exists():
         BASELINE.rename(old)
     pending.rename(BASELINE)
     shutil.rmtree(old, ignore_errors=True)
+
+
+def cached_baseline(version, managed_files):
+    metadata_path = BASELINE / BASELINE_META
+    if not metadata_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if metadata.get("schema") != 1 or metadata.get("version") != version:
+        return None
+    if sorted(metadata.get("managed_files") or []) != sorted(managed_files):
+        return None
+    actual = {area: tree_hashes(BASELINE / area) for area in TARGETS}
+    if actual != metadata.get("hashes"):
+        return None
+    return BASELINE
 
 
 def command_check(_args):
@@ -518,32 +638,70 @@ def command_check(_args):
     }, ensure_ascii=False))
 
 
+@exclusive
 def command_review(_args):
     UPDATE_ROOT.mkdir(parents=True, exist_ok=True)
     PLANS.mkdir(parents=True, exist_ok=True)
     installed = local_version()
     with tempfile.TemporaryDirectory(prefix="tavern-update-review-") as temp:
         work = Path(temp)
-        release, manifest, archive, skill_manifest, skill_archive = release_material(work)
+        target_work = work / "target"
+        release, manifest, archive, skill_manifest, skill_archive = release_material(target_work)
         managed_files = sorted(set(manifest["managed_files"] + skill_manifest["managed_files"]))
-        baseline_seeded = seed_baseline(managed_files)
         if version_key(manifest["version"]) < version_key(installed):
             raise RuntimeError("latest release is older than the installed version")
-        unpacked = work / "unpacked"
+        unpacked = target_work / "unpacked"
         unpacked.mkdir()
         safe_extract(archive, unpacked, manifest)
         safe_extract_skill(skill_archive, unpacked, skill_manifest)
-        run([PYTHON, "-m", "py_compile", str(unpacked / "runtime/server.py"), str(unpacked / "runtime/actor.py")])
+        validation = validate_release_code(unpacked, managed_files)
+
+        baseline_trusted = True
+        baseline_source = "target-release" if manifest["version"] == installed else "installed-release"
+        baseline_warning = ""
+        base_root = unpacked
+        if manifest["version"] != installed:
+            cached = cached_baseline(installed, managed_files)
+            if cached:
+                base_root = cached
+                baseline_source = "verified-cache"
+            else:
+                try:
+                    base_work = work / "base"
+                    base_release = tagged_release(installed)
+                    (_old_release, old_manifest, old_archive,
+                     old_skill_manifest, old_skill_archive) = release_material(base_work, base_release)
+                    if old_manifest["version"] != installed:
+                        raise RuntimeError("installed release version does not match its manifest")
+                    base_root = base_work / "unpacked"
+                    base_root.mkdir()
+                    safe_extract(old_archive, base_root, old_manifest)
+                    safe_extract_skill(old_skill_archive, base_root, old_skill_manifest)
+                except Exception as exc:
+                    baseline_trusted = False
+                    baseline_source = "unavailable"
+                    baseline_warning = (
+                        "No verified official baseline is available for installed version "
+                        f"{installed}: {exc}. Existing files that differ from the target "
+                        "are treated as conflicts and will not be overwritten."
+                    )
+                    base_root = work / "untrusted-empty-base"
+                    for area in TARGETS:
+                        (base_root / area).mkdir(parents=True, exist_ok=True)
+
         plan_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
         plan_dir = PLANS / plan_id
         staged = plan_dir / "staged"
+        upstream = plan_dir / "upstream"
         staged.mkdir(parents=True)
+        upstream.mkdir(parents=True)
+        copy_managed(unpacked, upstream, managed_files)
         files, conflicts = [], []
         managed_by_area = split_managed(managed_files)
         for area, target in TARGETS.items():
             incoming = unpacked / area
             area_files, area_conflicts = merge_area(
-                area, BASELINE / area, target, incoming, staged / area, managed_by_area[area])
+                area, base_root / area, target, incoming, staged / area, managed_by_area[area])
             files.extend(area_files)
             conflicts.extend(area_conflicts)
         counts = {}
@@ -564,7 +722,11 @@ def command_review(_args):
             "managed_files": managed_files,
             "current_fingerprint": managed_fingerprint(managed_files),
             "staged_hashes": {area: tree_hashes(staged / area) for area in TARGETS},
-            "baseline_seeded": baseline_seeded,
+            "upstream_hashes": {area: tree_hashes(upstream / area) for area in TARGETS},
+            "baseline_trusted": baseline_trusted,
+            "baseline_source": baseline_source,
+            "baseline_warning": baseline_warning,
+            "validation": validation,
             "reported_at": None,
             "ready": not conflicts,
             "counts": counts,
@@ -572,10 +734,14 @@ def command_review(_args):
             "conflicts": conflicts,
             "files": files,
         }
-        (plan_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(
+            plan_dir / "plan.json",
+            json.dumps(plan, ensure_ascii=False, indent=2) + "\n",
+        )
     print(json.dumps(plan, ensure_ascii=False))
 
 
+@exclusive
 def command_report(args):
     plan_path = PLANS / args.plan / "plan.json"
     if not plan_path.is_file():
@@ -585,14 +751,17 @@ def command_report(args):
         raise RuntimeError("installed files changed after review; run review again")
     changes = [item for item in plan.get("files") or [] if item.get("status") != "unchanged"]
     plan["reported_at"] = int(time.time())
-    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(plan_path, json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
     report = {
         "plan_id": plan["plan_id"],
         "installed": plan["installed"],
         "target": plan["target"],
         "scope": "tavern-system",
         "ready": plan["ready"],
-        "baseline_seeded": plan["baseline_seeded"],
+        "baseline_trusted": plan["baseline_trusted"],
+        "baseline_source": plan["baseline_source"],
+        "baseline_warning": plan["baseline_warning"],
+        "validation": plan["validation"],
         "counts": plan["counts"],
         "categories": plan["categories"],
         "conflicts": plan["conflicts"],
@@ -617,6 +786,7 @@ def load_plan(plan_id):
         raise RuntimeError("review plan does not exist")
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     staged = plan_path.parent / "staged"
+    upstream = plan_path.parent / "upstream"
     if not plan.get("ready"):
         raise RuntimeError("review plan contains merge conflicts")
     if not plan.get("reported_at"):
@@ -627,16 +797,20 @@ def load_plan(plan_id):
     actual = {area: tree_hashes(staged / area) for area in TARGETS}
     if actual != plan.get("staged_hashes"):
         raise RuntimeError("reviewed staging files changed after review")
-    return plan, staged
+    actual_upstream = {area: tree_hashes(upstream / area) for area in TARGETS}
+    if actual_upstream != plan.get("upstream_hashes"):
+        raise RuntimeError("verified upstream files changed after review")
+    return plan, staged, upstream
 
 
+@exclusive
 def command_apply(args):
     if not args.confirm:
         raise RuntimeError("apply requires --confirm")
     if not args.plan:
         raise RuntimeError("apply requires --plan from a successful review")
     BACKUPS.mkdir(parents=True, exist_ok=True)
-    plan, staged = load_plan(args.plan)
+    plan, staged, upstream = load_plan(args.plan)
     managed_files = plan.get("managed_files") or []
     installed = local_version()
     backup = backup_current(installed, managed_files)
@@ -649,15 +823,29 @@ def command_apply(args):
             raise RuntimeError("health check failed: " + json.dumps(report, ensure_ascii=False))
         # Self-update last so a failed application update keeps the known-good updater.
         install_managed(staged, managed_files, areas={"updater"})
-        write_baseline(staged, managed_files)
-    except Exception:
+        write_baseline(upstream, managed_files, plan["target"])
+        state = {
+            "installed": plan["target"],
+            "previous": installed,
+            "backup": str(backup),
+            "release": plan["release"],
+            "plan_id": args.plan,
+            "updated_at": int(time.time()),
+        }
+        atomic_write_text(STATE, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+    except Exception as error:
         restore(backup)
+        rollback_ok, rollback_report = health()
+        if not rollback_ok:
+            raise RuntimeError(
+                "update failed and the restored service did not pass validation: "
+                + json.dumps(rollback_report, ensure_ascii=False)
+            ) from error
         raise
-    state = {"installed": plan["target"], "previous": installed, "backup": str(backup), "release": plan["release"], "plan_id": args.plan, "updated_at": int(time.time())}
-    STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"updated": True, "from": installed, "to": plan["target"], "plan_id": args.plan, "health": report}, ensure_ascii=False))
 
 
+@exclusive
 def command_rollback(args):
     if not args.confirm:
         raise RuntimeError("rollback requires --confirm")
@@ -672,6 +860,7 @@ def command_rollback(args):
     ok, report = health()
     if not ok:
         raise RuntimeError("rollback completed but health check failed: " + json.dumps(report, ensure_ascii=False))
+    STATE.unlink()
     print(json.dumps({"rolled_back": True, "from": current, "to": local_version(), "health": report}, ensure_ascii=False))
 
 

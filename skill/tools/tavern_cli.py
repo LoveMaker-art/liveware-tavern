@@ -9,7 +9,7 @@
 到手搓 PNG。导入直打本地控制台同源事件 API（默认 http://127.0.0.1:8799，env TAVERN_CONSOLE 覆盖）。
 
 命令：
-  search <query> [--n N] [--nsfw]          搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）；Chub 连不上→列 starter
+  search <query> [--n N]                   搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）；Chub 连不上→列 starter
   add <fullPath|Chub链接> [--name NAME]     下载 Chub 真卡 → 导入 → 开启世界（**优先用这条**）；连不上→提示 starter
   starter [<序号|名字>] [--name NAME]        列出/导入随仓内置 starter 真卡（离线兜底 + 写原创卡的样板）
   add-original <jsonfile|->                 原创/自造卡 JSON → 导入 → 开启世界（仅在明确「原创」时用）
@@ -176,7 +176,6 @@ def _degrade_to_starter(reason):
 def cmd_search(a):
     q = urllib.parse.urlencode({
         "search": a.query, "first": a.n,
-        "nsfw": "true" if a.nsfw else "false",
         "sort": "star_count", "asc": "false",
     })
     try:
@@ -718,7 +717,6 @@ def cmd_recommend(a):
         qtext = want or " ".join(specs[:3]) or "roleplay"
         print("\n外部卡库候选：")
         q = urllib.parse.urlencode({"search": qtext, "first": min(max(a.n, 1), 8),
-                                    "nsfw": "true" if getattr(a, "nsfw", False) else "false",
                                     "sort": "star_count", "asc": "false"})
         try:
             raw = _chub_get(f"{CHUB_SEARCH}?{q}", timeout=20)
@@ -1295,7 +1293,6 @@ def main():
     s = sub.add_parser("search", help="搜 Chub 角色卡")
     s.add_argument("query")
     s.add_argument("--n", type=int, default=8)
-    s.add_argument("--nsfw", action="store_true")
     s.set_defaults(fn=cmd_search)
 
     s = sub.add_parser("add", help="下载 Chub 真卡 → 导入 → 开启世界")
@@ -1345,7 +1342,6 @@ def main():
     s.add_argument("want", nargs="?", default="", help="用户想玩的方向；可为空，按故事档案推荐")
     s.add_argument("--external", action="store_true", help="同时搜索外部 Chub 候选；不可用时提示 starter")
     s.add_argument("--n", type=int, default=5, help="外部候选数量")
-    s.add_argument("--nsfw", action="store_true", help="外部搜索允许 NSFW")
     s.set_defaults(fn=cmd_recommend)
 
     s = sub.add_parser("plan-world", help="从一句想法拆出世界、角色、设定、开场与落地命令（只规划，不创建）")
