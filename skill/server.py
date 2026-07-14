@@ -2373,41 +2373,43 @@ def _world_turns(story):
     return sum(1 for m in story or [] if m.get("role") == "user")
 
 
-STORY_STATE_CHUNK_TOKENS = int(os.environ.get("TAVERN_STORY_STATE_CHUNK_TOKENS", "7000"))
-STORY_STATE_OVERLAP_TOKENS = int(os.environ.get("TAVERN_STORY_STATE_OVERLAP_TOKENS", "800"))
+STORY_STATE_BATCH_TURNS = int(os.environ.get("TAVERN_STORY_STATE_BATCH_TURNS", "15"))
 
 
-def _story_lines_for_state(p, from_tokens=0, to_tokens=None,
-                           max_items=140, max_chars=42000):
-    """Return one bounded story chunk for story_state merging.
+def _story_messages_through_turn(story, end_turn):
+    """Return complete messages from the opening through one user-turn boundary."""
+    selected = []
+    seen_turns = 0
+    for message in story or []:
+        if message.get("role") == "user":
+            seen_turns += 1
+            if seen_turns > end_turn:
+                break
+        selected.append(message)
+    return selected
 
-    The original story is never modified. The chunk boundaries are token-estimate
-    based, with a caller-provided overlap handled outside this function.
-    """
+
+def _story_lines_for_turns(p, start_turn, end_turn):
+    """Render complete story messages for an inclusive user-turn batch."""
     cards, _, _, _ = _loadout(p)
     cname = "/".join(c.get("name", "角色") for c in cards[:4]) or "角色"
-    start_at = max(0, int(from_tokens or 0))
-    stop_at = int(to_tokens) if to_tokens is not None else None
     lines = []
-    total_chars = 0
-    seen_tokens = 0
-    for m in (p.get("story") or []):
-        text = (m.get("text") or "").strip().replace("\r\n", "\n")
-        msg_tokens = _estimate_text_tokens(text)
-        next_tokens = seen_tokens + msg_tokens
-        if next_tokens <= start_at:
-            seen_tokens = next_tokens
+    seen_turns = 0
+    for message in p.get("story") or []:
+        if message.get("role") == "user":
+            seen_turns += 1
+        if seen_turns < start_turn:
+            if start_turn == 1 and seen_turns == 0:
+                pass
+            else:
+                continue
+        if seen_turns > end_turn:
+            break
+        text = (message.get("text") or "").strip().replace("\r\n", "\n")
+        if not text:
             continue
-        if stop_at is not None and seen_tokens >= stop_at:
-            break
-        if text:
-            who = "用户" if m.get("role") == "user" else cname
-            line = f"{who}: {text[:1400]}"
-            lines.append(line)
-            total_chars += len(line)
-        seen_tokens = next_tokens
-        if len(lines) >= max_items or total_chars >= max_chars:
-            break
+        who = "用户" if message.get("role") == "user" else cname
+        lines.append(f"{who}: {text}")
     return "\n".join(lines)
 
 
@@ -2532,19 +2534,21 @@ def _story_state_has_memory(state):
     ))
 
 
-def _merge_story_state_chunk(prev, chunk, turns, from_tokens, to_tokens, response_language="zh"):
+def _merge_story_state_batch(prev, batch, start_turn, end_turn,
+                             source_tokens, response_language="zh"):
     language = _locale_code(response_language)
     if language == "en":
         sys_prompt = (
-            "You are the high-fidelity continuity recorder for an interactive story. Merge previous_state and new_story_chunk into an updated story ledger. "
+            "You are the high-fidelity continuity recorder for an interactive story. Merge previous_state and the complete new_story_batch into an updated story ledger. "
             "Write every textual value in English, translating older ledger values when necessary while preserving names and facts. Record only facts, relationships, secrets, objects, open threads, and style information that affect future continuation. "
             "Do not add literary commentary or infer events that did not happen. Output strict JSON using only timeline, facts, open_threads, relationships, character_state, user_state, scene_anchor, objects, secrets, and style_notes. "
             "Keep entries short, concrete, unique, and non-prose. Keep at most 6 entries per array and at most 4 characters in character_state. Keep timeline/facts under 20 words and relationships/open_threads under 28 words. "
-            "If new_story_chunk is non-empty, never return an entirely empty JSON object."
+            "The batch contains complete conversational turns and must be treated as one continuous semantic unit. "
+            "If new_story_batch is non-empty, never return an entirely empty JSON object."
         )
     else:
         sys_prompt = (
-            "你是互动故事的高保真场记。把 previous_state 与 new_story_chunk 合并成新的剧情账本，所有文本值使用简体中文；必要时翻译旧账本内容，同时保留姓名与事实。"
+            "你是互动故事的高保真场记。把 previous_state 与完整的 new_story_batch 合并成新的剧情账本，所有文本值使用简体中文；必要时翻译旧账本内容，同时保留姓名与事实。"
             "只记录会影响后续续写的事实、关系、秘密、物件、伏笔和风格；不要文学点评，不猜测未发生内容。"
             "输出严格 JSON，对象字段只能是 timeline、facts、open_threads、relationships、character_state、"
             "user_state、scene_anchor、objects、secrets、style_notes。"
@@ -2552,16 +2556,16 @@ def _merge_story_state_chunk(prev, chunk, turns, from_tokens, to_tokens, respons
             "每个数组最多保留 6 条；character_state 最多 4 个角色。"
             "timeline/facts 每条不超过 60 个汉字；relationships/open_threads 每条不超过 80 个汉字；"
             "character_state 每个角色最多 6 条，每条不超过 80 个汉字。"
-            "如果 new_story_chunk 非空，严禁返回全空 JSON。"
+            "这一批包含完整连续的对话轮次，必须作为一个语义整体理解，不得在事件中间切断。"
+            "如果 new_story_batch 非空，严禁返回全空 JSON。"
         )
     user = json.dumps({
         "previous_state": prev or {},
-        "new_story_chunk": chunk,
+        "new_story_batch": batch,
         "response_language": language,
         "range": {
-            "from_tokens": from_tokens,
-            "to_tokens": to_tokens,
-            "turns": turns,
+            "start_turn": start_turn,
+            "end_turn": end_turn,
         },
     }, ensure_ascii=False)
     out = ""
@@ -2576,9 +2580,9 @@ def _merge_story_state_chunk(prev, chunk, turns, from_tokens, to_tokens, respons
                 break
         except Exception as e:
             last_error = e
-            print("story_state chunk model failed with %s:" % mem_model.get("model"), repr(e), file=__import__("sys").stderr, flush=True)
+            print("story_state batch model failed with %s:" % mem_model.get("model"), repr(e), file=sys.stderr, flush=True)
     if not out:
-        print("story_state chunk model failed:", repr(last_error), file=__import__("sys").stderr, flush=True)
+        print("story_state batch model failed:", repr(last_error), file=sys.stderr, flush=True)
         return None
 
     try:
@@ -2603,45 +2607,103 @@ def _merge_story_state_chunk(prev, chunk, turns, from_tokens, to_tokens, respons
                 break
             except Exception as e:
                 last_error = e
-                print("story_state chunk parse repair failed with %s:" % mem_model.get("model"), repr(e), file=__import__("sys").stderr, flush=True)
+                print("story_state batch parse repair failed with %s:" % mem_model.get("model"), repr(e), file=sys.stderr, flush=True)
         if raw is None:
-            print("story_state chunk parse failed:", repr(last_error), file=__import__("sys").stderr, flush=True)
+            print("story_state batch parse failed:", repr(last_error), file=sys.stderr, flush=True)
             return None
-    state = _normalize_story_state(raw, turns, to_tokens)
+    state = _normalize_story_state(raw, end_turn, source_tokens)
     state["response_language"] = language
     if not _story_state_has_memory(state):
-        print("story_state chunk empty; keeping previous memory", file=__import__("sys").stderr, flush=True)
+        print("story_state batch empty; keeping previous memory", file=sys.stderr, flush=True)
         return None
     return state
 
 
+_STORY_STATE_RUN_LOCKS = {}
+_STORY_STATE_RUN_LOCKS_GUARD = threading.Lock()
+_STORY_STATE_JOBS = set()
+_STORY_STATE_JOBS_LOCK = threading.Lock()
+
+
+def _story_state_run_lock(pid):
+    with _STORY_STATE_RUN_LOCKS_GUARD:
+        return _STORY_STATE_RUN_LOCKS.setdefault(pid, threading.Lock())
+
+
+def _story_prefix_signature(story, end_turn):
+    messages = _story_messages_through_turn(story, end_turn)
+    payload = [(m.get("id"), m.get("role"), m.get("text") or "") for m in messages]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _commit_story_state_batch(pid, state, end_turn, expected_signature):
+    """Atomically publish one complete 15-turn ledger batch."""
+    with _production_lock(pid):
+        current = load_production(pid)
+        if not current:
+            return None
+        if _story_prefix_signature(current.get("story") or [], end_turn) != expected_signature:
+            return None
+        current["story_state"] = state
+        runtime = dict(current.get("runtime") or {})
+        runtime.pop("state_stale_reason", None)
+        runtime.pop("story_state_error", None)
+        current["runtime"] = runtime
+        record = dict(current)
+        record.pop("worldbooks", None)
+        _write(os.path.join(STATE, "productions", pid + ".json"), record)
+        return current
+
+
+def _record_story_state_error(pid, error):
+    with _production_lock(pid):
+        current = load_production(pid)
+        if not current:
+            return
+        runtime = dict(current.get("runtime") or {})
+        runtime["story_state_error"] = str(error)[:500]
+        current["runtime"] = runtime
+        record = dict(current)
+        record.pop("worldbooks", None)
+        _write(os.path.join(STATE, "productions", pid + ".json"), record)
+
+
 def _summarize_story_state(p, force_full=False):
-    story = p.get("story") or []
-    turns = _world_turns(story)
-    source_tokens = _story_token_estimate(story)
-    prev = p.get("story_state") or {}
-    language = _ensure_world_language(p)
-    done = 0 if force_full else int(prev.get("source_tokens") or 0)
-    if done >= source_tokens:
-        return prev
+    """Compress complete 15-turn batches and publish each batch only on success."""
+    pid = p["id"]
+    with _story_state_run_lock(pid):
+        snapshot = load_production(pid) or p
+        story = snapshot.get("story") or []
+        total_turns = _world_turns(story)
+        previous = snapshot.get("story_state") or {}
+        rebuild = force_full
+        state = {} if rebuild else dict(previous)
+        covered_turns = 0 if rebuild else int(previous.get("turns") or 0)
+        language = _ensure_world_language(snapshot)
 
-    state = {} if force_full else dict(prev)
-    cursor = done
-    while cursor < source_tokens:
-        chunk_from = 0 if cursor == 0 else max(0, cursor - STORY_STATE_OVERLAP_TOKENS)
-        chunk_to = min(source_tokens, max(cursor + STORY_STATE_CHUNK_TOKENS, STORY_STATE_CHUNK_TOKENS))
-        chunk = _story_lines_for_state(p, from_tokens=chunk_from, to_tokens=chunk_to)
-        if not chunk.strip():
-            break
-        merged = _merge_story_state_chunk(state, chunk, turns, chunk_from, chunk_to, language)
-        if not merged:
-            break
-        state = merged
-        cursor = chunk_to
-        p["story_state"] = state
-        _merge_production_fields(p["id"], story_state=state)
+        while total_turns - covered_turns >= STORY_STATE_BATCH_TURNS:
+            start_turn = covered_turns + 1
+            end_turn = covered_turns + STORY_STATE_BATCH_TURNS
+            batch = _story_lines_for_turns(snapshot, start_turn, end_turn)
+            if not batch.strip():
+                _record_story_state_error(pid, "empty story batch")
+                break
+            prefix = _story_messages_through_turn(story, end_turn)
+            source_tokens = _story_token_estimate(prefix)
+            signature = _story_prefix_signature(story, end_turn)
+            merged = _merge_story_state_batch(
+                state, batch, start_turn, end_turn, source_tokens, language)
+            if not merged:
+                _record_story_state_error(pid, f"compression failed for turns {start_turn}-{end_turn}")
+                break
+            committed = _commit_story_state_batch(pid, merged, end_turn, signature)
+            if not committed:
+                _record_story_state_error(pid, f"story changed while compressing turns {start_turn}-{end_turn}")
+                break
+            state = merged
+            covered_turns = end_turn
 
-    return state if _story_state_has_memory(state) else (prev if prev else {})
+        return state if _story_state_has_memory(state) else (previous if previous else {})
 
 def ev_story_state(ev):
     p = load_production(ev["production_id"])
@@ -2652,32 +2714,55 @@ def ev_story_state(ev):
     return {"story_state": p.get("story_state") or {}, "production_id": p["id"]}
 
 
-STORY_STATE_TRIGGER_TURNS = int(os.environ.get("TAVERN_STORY_STATE_TRIGER_TURNS", "15"))
-STORY_STATE_DELTA_TURNS = int(os.environ.get("TAVERN_STORY_STATE_DELTA_TURNS", "15"))
-
-
 def _maybe_auto_story_state(pid):
-    p = load_production(pid)
-    if not p:
-        return
-    story = p.get("story") or []
-    turns = _world_turns(story)
-    prev = p.get("story_state") or {}
-    done_turns = int(prev.get("turns") or 0)
+    while True:
+        p = load_production(pid)
+        if not p:
+            return
+        story = p.get("story") or []
+        turns = _world_turns(story)
+        prev = p.get("story_state") or {}
+        done_turns = int(prev.get("turns") or 0)
+        if turns - done_turns < STORY_STATE_BATCH_TURNS:
+            return
+        try:
+            _summarize_story_state(p)
+        except Exception as error:
+            _record_story_state_error(pid, error)
+            return
+        latest = load_production(pid) or {}
+        latest_state = latest.get("story_state") or {}
+        latest_done = int(latest_state.get("turns") or 0)
+        if latest_done <= done_turns:
+            return
 
-    turn_due = turns >= STORY_STATE_TRIGGER_TURNS and (
-        not done_turns or turns - done_turns >= STORY_STATE_DELTA_TURNS
-    )
-    if not turn_due:
-        return
+
+def _story_state_job(pid):
     try:
-        _summarize_story_state(p)
-    except Exception:
-        pass
+        _maybe_auto_story_state(pid)
+    finally:
+        with _STORY_STATE_JOBS_LOCK:
+            _STORY_STATE_JOBS.discard(pid)
 
 
 def _schedule_story_state(pid):
-    threading.Thread(target=_maybe_auto_story_state, args=(pid,), daemon=True).start()
+    with _STORY_STATE_JOBS_LOCK:
+        if pid in _STORY_STATE_JOBS:
+            return False
+        _STORY_STATE_JOBS.add(pid)
+    threading.Thread(target=_story_state_job, args=(pid,), daemon=True).start()
+    return True
+
+
+def _schedule_story_state_backlog():
+    directory = os.path.join(STATE, "productions")
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith("prod_") and name.endswith(".json"):
+            _schedule_story_state(name[:-5])
 
 
 def _reflect_production(p):
@@ -3294,6 +3379,7 @@ def main():
         print(f"worldbook storage migrated: {migrated} production(s)", flush=True)
     print("酒馆演员运行时 → http://%s:%d  (model=%s, key=%s)" % (
         host, port, actor.MODEL_NAME, "set" if actor.MODEL_KEY else "MISSING"))
+    _schedule_story_state_backlog()
     ThreadingHTTPServer((host, port), H).serve_forever()
 
 

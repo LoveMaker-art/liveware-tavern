@@ -42,15 +42,12 @@ MODEL_BASE = _load_model_base()
 MODEL_NAME = os.environ.get("TAVERN_MODEL", "deepseek-v4-flash")
 MODEL_TEMP = float(os.environ.get("TAVERN_MODEL_TEMP", "0.85"))
 ACTOR_MAX_TOKENS = int(os.environ.get('TAVERN_ACTOR_MAX_TOKENS', '2000'))
-# 上下文预算(字符):长局只喂最新尾巴+开场,别每回合发整条 story 撞模型上限。
-CTX_BUDGET_CHARS = int(os.environ.get("TAVERN_CTX_CHARS", "24000"))
 # 世界书扫描深度(往回看几条命中关键词)。
 LORE_LOOKBACK = int(os.environ.get("TAVERN_LORE_LOOKBACK", "6"))
 # 世界书注入预算(字符):防止大型 lorebook 把角色卡/剧情挤出上下文。
 LORE_BUDGET_CHARS = int(os.environ.get("TAVERN_LORE_BUDGET_CHARS", "6000"))
 # 递归扫描最多轮数:仅当 worldbook/entry 显式 recursive=true 时启用。
 LORE_RECURSIVE_PASSES = int(os.environ.get("TAVERN_LORE_RECURSIVE_PASSES", "2"))
-STORY_RECENT_RAW_TOKENS = int(os.environ.get("TAVERN_STORY_RECENT_RAW_TOKENS", "20000"))
 
 # 日志文件
 _LOG_PATH = os.environ.get("TAVERN_LOG", "/tmp/tavern.log")
@@ -236,67 +233,27 @@ def select_lore(worldbooks: list, story: list, lookback: int = None, extra_text:
     return picked
 
 
-def _estimate_history_tokens(text: str) -> int:
-    cjk = 0
-    other = 0
-    for ch in text or "":
-        if "一" <= ch <= "鿿" or "぀" <= ch <= "ヿ" or "가" <= ch <= "힯":
-            cjk += 1
-        elif not ch.isspace():
-            other += 1
-    return cjk + max(1, (other + 3) // 4) if (cjk or other) else 0
-
-
-def _fit_history(story: list, budget_chars: int, covered_tokens: int = 0,
-                 overlap_tokens: int = None, covered_turns: int = 0,
-                 transition_turns: int = 2) -> list:
+def _fit_history(story: list, covered_turns: int = 0) -> list:
     """Return raw story messages to inject into the model context.
 
-    If a story_state ledger has successfully covered N user turns, keep full raw
-    history for two more user turns as a style bridge. Starting from turn N+3,
-    replace covered raw history with the ledger and inject only turns after N.
-    If no valid ledger exists, fall back to the old token-window behavior.
+    A valid story-state ledger replaces every raw message through its covered
+    user turn. Every complete message after that turn remains verbatim. Without
+    a valid ledger, retain the complete story until a 15-turn batch is committed.
+    Context replacement is governed only by covered user turns, never by text
+    length or estimated token offsets.
     """
-    if budget_chars <= 0 or len(story) <= 1:
-        return story
-
     covered_turns = int(covered_turns or 0)
-    total_turns = sum(1 for m in story or [] if m.get("role") == "user")
-    use_ledger_window = covered_turns > 0 and total_turns > covered_turns + int(transition_turns or 0)
+    if covered_turns <= 0:
+        return list(story or [])
 
-    if use_ledger_window:
-        kept = []
-        seen_turns = 0
-        for m in story or []:
-            if m.get("role") == "user":
-                seen_turns += 1
-            if seen_turns > covered_turns:
-                kept.append(m)
-        return kept
-
-    raw_window = STORY_RECENT_RAW_TOKENS if overlap_tokens is None else int(overlap_tokens or STORY_RECENT_RAW_TOKENS)
-    total_story_tokens = sum(_estimate_history_tokens(m.get("text") or "") for m in story[1:])
-    start_tokens = max(0, total_story_tokens - raw_window)
-    opening = story[:1]
-    total = len(opening[0].get("text") or "")
-    tail = []
-    seen = 0
-    for m in story[1:]:
-        text = m.get("text") or ""
-        mt = _estimate_history_tokens(text)
-        next_seen = seen + mt
-        if next_seen > start_tokens:
-            tail.append(m)
-        seen = next_seen
     kept = []
-    for m in reversed(tail):
-        t = len(m.get("text") or "")
-        if total + t > budget_chars and kept:
-            break
-        kept.append(m)
-        total += t
-    kept.reverse()
-    return opening + kept
+    seen_turns = 0
+    for message in story or []:
+        if message.get("role") == "user":
+            seen_turns += 1
+        if seen_turns > covered_turns:
+            kept.append(message)
+    return kept
 
 
 def _language_code(value: str = "zh") -> str:
@@ -409,11 +366,48 @@ def _story_state_block(story_state: dict, response_language: str = "zh") -> str:
         return ""
     en = _language_code(response_language) == "en"
     parts = []
-    labels = (("Established facts", "facts"), ("Open threads", "open_threads"), ("Relationship changes", "relationships")) if en else (("已发生事实", "facts"), ("未解决线索", "open_threads"), ("关系变化", "relationships"))
+
+    labels = (
+        (
+            ("Timeline", "timeline"),
+            ("Established facts", "facts"),
+            ("Open threads", "open_threads"),
+            ("Relationship changes", "relationships"),
+            ("User state", "user_state"),
+            ("Scene anchors", "scene_anchor"),
+            ("Important objects", "objects"),
+            ("Secrets", "secrets"),
+            ("Style continuity", "style_notes"),
+        ) if en else (
+            ("时间线", "timeline"),
+            ("已发生事实", "facts"),
+            ("未解决线索", "open_threads"),
+            ("关系变化", "relationships"),
+            ("用户状态", "user_state"),
+            ("场景锚点", "scene_anchor"),
+            ("关键物品", "objects"),
+            ("秘密信息", "secrets"),
+            ("风格延续", "style_notes"),
+        )
+    )
     for title, key in labels:
         vals = [str(x).strip() for x in (story_state.get(key) or []) if str(x).strip()]
         if vals:
-            parts.append(title + "：\n" + "\n".join("- " + v for v in vals[:12]))
+            parts.append(title + "：\n" + "\n".join("- " + v for v in vals))
+
+    character_state = story_state.get("character_state") or {}
+    if isinstance(character_state, dict) and character_state:
+        rows = []
+        for name, values in character_state.items():
+            if isinstance(values, list):
+                details = [str(x).strip() for x in values if str(x).strip()]
+            else:
+                details = [str(values).strip()] if str(values).strip() else []
+            if details:
+                rows.append(f"### {name}\n" + "\n".join("- " + value for value in details))
+        if rows:
+            parts.append(("Character states" if en else "角色状态") + "：\n" + "\n".join(rows))
+
     if not parts:
         return ""
     turns = story_state.get("turns")
@@ -560,7 +554,10 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
 
     roles_txt = _role_blocks(cards, lang) or ("(No active characters configured)" if en else "（未设置登场角色）")
     scene_state_txt = _scene_state_block(scene_state or {}, lang)
-    effective_story_state = story_state if isinstance(story_state, dict) and story_state.get("source_tokens") else {}
+    effective_story_state = (
+        story_state if isinstance(story_state, dict)
+        and story_state.get("turns") else {}
+    )
     story_state_txt = _story_state_block(effective_story_state or {}, lang)
     turn_plan_txt = _turn_plan_block(turn_plan or {}, lang)
     multi_rule = ""
@@ -574,10 +571,8 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
            _system_prompt_zh(roles_txt, lore_top_txt, persona_txt, scene_state_txt,
                              story_state_txt, turn_plan_txt, multi_rule))
     msgs = [{"role": "system", "content": sys}]
-    covered_tokens = int((effective_story_state or {}).get("source_tokens") or 0)
     covered_turns = int((effective_story_state or {}).get("turns") or 0)
-    for m in _fit_history(story, CTX_BUDGET_CHARS, covered_tokens=covered_tokens,
-                          covered_turns=covered_turns, transition_turns=2):
+    for m in _fit_history(story, covered_turns=covered_turns):
         role = m.get("role")
         text = m.get("text") or ""
         if role == "user":
