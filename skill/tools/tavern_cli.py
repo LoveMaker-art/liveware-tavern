@@ -248,14 +248,22 @@ def cmd_starter(a):
     entry = _resolve_starter(cards, a.which)
     if not entry:
         _die(f"没找到 starter 卡「{a.which}」——`starter` 不带参数看列表（可用序号或名字片段）。")
-    path = os.path.join(STARTER_DIR, entry["file"])
+    card_json = entry.get("card_json")
+    card_file = entry.get("file")
+    path = os.path.join(STARTER_DIR, card_json or card_file or "")
     if not os.path.exists(path):
         _die(f"starter 卡文件缺失：{path}")
-    with open(path, "rb") as f:
-        png = f.read()
     print(f"↓ 导入内置 starter 卡：{entry['name']}（{entry.get('genre', '')}）")
-    card = _event({"type": "import_card",
-                   "png_base64": base64.b64encode(png).decode("ascii")})["card"]
+    if card_json:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        card = _event({"type": "import_card_json", "card": payload,
+                       "source": entry.get("source") or "builtin:starter"})["card"]
+    else:
+        with open(path, "rb") as f:
+            png = f.read()
+        card = _event({"type": "import_card",
+                       "png_base64": base64.b64encode(png).decode("ascii")})["card"]
     _create_production(card, a.name)
 
 

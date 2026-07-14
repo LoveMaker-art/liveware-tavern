@@ -21,7 +21,7 @@ BOOTSTRAP_ASSET = DIST / "tavern-updater-bootstrap.py"
 BOOTSTRAP_LAUNCHER_SOURCE = ROOT / "bootstrap/install_tavern_updater.sh"
 BOOTSTRAP_LAUNCHER_ASSET = DIST / "install-tavern-updater.sh"
 BOOTSTRAP_MANIFEST = DIST / "bootstrap-manifest.json"
-BACKEND_FILES = ("actor.py", "server.py", "card_import.py")
+BACKEND_FILES = ("actor.py", "actor_self.md", "server.py", "card_import.py")
 FRONTEND_FILES = (
     "actor.html",
     "actor.js",

@@ -42,7 +42,7 @@ Conflicts still stop the update and failures still roll back automatically.
 - Preserve local edits with a three-way merge against the last installed baseline. Never guess through a merge conflict.
 - Update only allowlisted backend files, the seven official `runtime/web` code files, the Tavern skill's `SKILL.md`/references/scripts, and this updater; update the updater last.
 - Preserve instance-local edits to managed frontend and backend files with the same three-way review and conflict rules.
-- Never manage, stage, back up, merge, or overwrite `runtime/actor_self.md`, `skill/SOUL.md`, `skill/actor_self.md`, identity/persona files, runtime or skill assets, frontend backup files, fixtures, starter cards, or `/opt/data/tavern-state`.
+- Manage `runtime/actor_self.md` only as the neutral, state-free seed template. Never manage, stage, back up, merge, or overwrite `/opt/data/tavern-state/actor_self.md`, `skill/SOUL.md`, `skill/actor_self.md`, other identity/persona files, runtime or skill assets, frontend backup files, fixtures, starter cards, or any other file under `/opt/data/tavern-state`.
 - Apply and roll back individual managed files atomically. Never replace the complete runtime or skill directory.
 - Starting the updated service must not run an automatic migration that rewrites user state. Data migrations require a separate review and explicit approval outside this skill.
 - Never combine inspection, reporting, and installation into one unattended action. A user interaction boundary is mandatory between `report` and `apply`.

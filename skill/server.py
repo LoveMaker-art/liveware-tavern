@@ -140,12 +140,17 @@ def app_identity():
     profile = _clawchat_agent_profile()
     nick = (profile.get("agent_nickname") or "").strip()
     if nick:
+        possessive = f"{nick}'" if nick.lower().endswith("s") else f"{nick}'s"
         data["persona_name"] = nick
         data["tavern_name"] = f"{nick}的酒馆"
         data["actor_name"] = f"{nick}的故事档案"
-    data["persona_name_en"] = (data.get("persona_name_en") or "Curator").strip() or "Curator"
-    data["tavern_name_en"] = (data.get("tavern_name_en") or "Tavern").strip()
-    data["actor_name_en"] = (data.get("actor_name_en") or "Story Profile").strip()
+        data["persona_name_en"] = nick
+        data["tavern_name_en"] = f"{possessive} Tavern"
+        data["actor_name_en"] = f"{possessive} Story Profile"
+    else:
+        data["persona_name_en"] = (data.get("persona_name_en") or "Curator").strip() or "Curator"
+        data["tavern_name_en"] = (data.get("tavern_name_en") or "Tavern").strip()
+        data["actor_name_en"] = (data.get("actor_name_en") or "Story Profile").strip()
     return data
 
 
@@ -442,6 +447,43 @@ def _set_active(pid):
     _write(_state_path(), s)
 
 
+LEGACY_ACTOR_SELF_LINES = {
+    "我叫**若棠**。我是你的故事主理人。",
+    "我叫**诺拉**。我守着酒馆通往不同世界的门，也替你记得每段故事停在哪里。",
+}
+ACTOR_SELF_INTRO = "我是这里的故事主理人。"
+ACTOR_SELF_KNOWS = [
+    "# 我对你的了解（个性化 · 会随相处更新）",
+    "",
+    "- （还不了解你。等我们走过几场故事，我会把你的口味记到这里。）",
+    "",
+]
+ACTOR_SELF_GROWTH = [
+    "# 成长记（append-only，每条带人话理由）",
+    "",
+    "- （空。每次我因为你的反馈调整了主理方式，会在这里记一笔，写清为什么。）",
+]
+
+
+def _migrate_actor_self(md):
+    """Repair legacy structure without replacing learned preferences or growth history."""
+    lines = [ACTOR_SELF_INTRO if line.strip() in LEGACY_ACTOR_SELF_LINES else line
+             for line in md.splitlines()]
+    headings = [line[2:].strip() for line in lines if line.startswith("# ")]
+    has_knows = any("我对你的了解" in heading for heading in headings)
+    has_growth = any("成长记" in heading for heading in headings)
+    if not has_knows:
+        growth_at = next((i for i, line in enumerate(lines)
+                          if line.startswith("# ") and "成长记" in line), len(lines))
+        prefix = [] if growth_at == 0 or (growth_at > 0 and not lines[growth_at - 1].strip()) else [""]
+        lines[growth_at:growth_at] = prefix + ACTOR_SELF_KNOWS
+    if not has_growth:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(ACTOR_SELF_GROWTH)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def actor_self_text():
     rt = os.path.join(STATE, "actor_self.md")
     if not os.path.exists(rt):  # 首次：种子 → 运行时副本(成长改这份，不动种子)
@@ -450,7 +492,18 @@ def actor_self_text():
         with open(rt, "w", encoding="utf-8") as f:
             f.write(seed)
     with open(rt, encoding="utf-8") as f:
-        return f.read()
+        current = f.read()
+    migrated = _migrate_actor_self(current)
+    if migrated != current:
+        tmp = rt + ".tmp." + secrets.token_hex(4)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(migrated)
+            os.replace(tmp, rt)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    return migrated
 
 
 def liveware_version():
@@ -976,6 +1029,10 @@ def _store_card(card, source=""):
     # 信息面板优先显 creator,无 creator 才回落 source(Task 2 角色卡出处)。
     if source:
         card["source"] = source
+    if str(card.get("source") or "").startswith("builtin:"):
+        lang = (((card.get("extensions") or {}).get("tavern") or {}).get("language") or "zh")
+        identity = app_identity()
+        card["creator"] = identity["tavern_name"] if lang == "zh" else identity["tavern_name_en"]
     _write(os.path.join(STATE, "cards", card["id"] + ".json"), card)
     # 卡内嵌世界书 → 落成独立 worldbook
     if card.get("character_book"):

@@ -43,6 +43,7 @@ ALLOWED_MANAGED = {
     "runtime": {
         ".tavern-release-version",
         "actor.py",
+        "actor_self.md",
         "card_import.py",
         "server.py",
         "web/actor.html",
@@ -177,6 +178,7 @@ def release_material(work):
     required_runtime = {
         "runtime/.tavern-release-version",
         "runtime/actor.py",
+        "runtime/actor_self.md",
         "runtime/server.py",
         "runtime/web/actor.html",
         "runtime/web/actor.js",
@@ -220,6 +222,7 @@ def safe_extract(archive, destination, manifest):
                 raise RuntimeError("release archive contains an unsupported link or device")
         package.extractall(destination)
     required = (destination / "runtime/server.py", destination / "runtime/actor.py",
+                destination / "runtime/actor_self.md",
                 destination / "runtime/.tavern-release-version", destination / "updater/SKILL.md")
     for path in required:
         if not path.is_file():
@@ -597,7 +600,7 @@ def command_report(args):
         "excluded": [
             "runtime/web files outside the seven official managed code files",
             "runtime/assets",
-            "runtime/actor_self.md and all identity/persona files",
+            "runtime identity/persona files other than the neutral actor_self.md seed template",
             "starter and fixture content",
             "creative Tavern skill identity files, assets, fixtures, and every file outside the explicit allowlist",
             "/opt/data/tavern-state",

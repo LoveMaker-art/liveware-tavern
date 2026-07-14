@@ -8,8 +8,8 @@
 # 也能从 list 恢复），**缺才 `app create`**。per-owner 配额 ~3、且无 app delete，所以
 # 复用优先是硬要求——重跑本脚本不会重复建 app。
 #
-# app 名可用 env 覆盖（复制给别的搭子时改名）：
-#   TAVERN_CONSOLE_APP_NAME（默认 Tavern）  TAVERN_ACTOR_APP_NAME（默认 Story Profile）
+# Liveware 底层 app 使用稳定名称 Tavern / Story Profile；ClawChat 展示名
+# 从当前 agent_nickname 派生。这样改昵称时只需刷新注册，不会重建 app 或消耗配额。
 #
 # 前置：容器已激活（hermes clawchat activate）+ 装了 clawchat 插件（带 liveware 二进制）。
 # 跑：sh /opt/data/skills/creative/tavern/scripts/provision.sh（通常由 install.sh 调）
@@ -47,8 +47,41 @@ if [ ! -f "$IDENTITY" ]; then
 }
 JSON
 fi
-CONSOLE_NAME="${TAVERN_CONSOLE_APP_NAME:-$($PY -c 'import json; d=json.load(open("'$IDENTITY'",encoding="utf-8")); print((d.get("tavern_name_en") or "Tavern").strip())')}"
-ACTOR_NAME="${TAVERN_ACTOR_APP_NAME:-$($PY -c 'import json; d=json.load(open("'$IDENTITY'",encoding="utf-8")); print((d.get("actor_name_en") or "Story Profile").strip())')}"
+NICK="$($PY - <<'PY'
+from pathlib import Path
+
+path = Path("/opt/data/memories/owner.md")
+nickname = ""
+try:
+    in_meta = False
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line == "<!-- clawchat:metadata:start -->":
+            in_meta = True
+            continue
+        if line == "<!-- clawchat:metadata:end -->":
+            break
+        if in_meta and raw.startswith("agent_nickname:"):
+            nickname = raw.split(":", 1)[1].strip()
+            break
+except OSError:
+    pass
+print(nickname)
+PY
+)"
+CONSOLE_APP_NAME="${TAVERN_CONSOLE_APP_NAME:-Tavern}"
+ACTOR_APP_NAME="${TAVERN_ACTOR_APP_NAME:-Story Profile}"
+if [ -n "$NICK" ]; then
+  case "$NICK" in
+    *s|*S) POSSESSIVE="${NICK}'" ;;
+    *) POSSESSIVE="${NICK}'s" ;;
+  esac
+  CONSOLE_NAME="$POSSESSIVE Tavern"
+  ACTOR_NAME="$POSSESSIVE Story Profile"
+else
+  CONSOLE_NAME="Tavern"
+  ACTOR_NAME="Story Profile"
+fi
 
 # 1. liveware 登录（token 从 plugin profile config 解析；env CLAWCHAT_TOKEN 是空壳别直接传）
 echo "== login =="
@@ -57,9 +90,9 @@ cd "$PLUGIN" && HERMES_HOME=/opt/data "$PY" -c \
 
 # 2. 解析或创建两个 app → 写 apps.json（python 干重活：查 list 复用 / 缺则 create / 取域名）
 echo "== resolve/create apps =="
-HERMES_HOME=/opt/data "$PY" - "$LW" "$APPS" "$CONSOLE_NAME" "$ACTOR_NAME" <<'PY'
+HERMES_HOME=/opt/data "$PY" - "$LW" "$APPS" "$CONSOLE_APP_NAME" "$ACTOR_APP_NAME" "$CONSOLE_NAME" "$ACTOR_NAME" <<'PY'
 import json, subprocess, sys
-lw, apps_path, console_name, actor_name = sys.argv[1:5]
+lw, apps_path, console_app_name, actor_app_name, console_name, actor_name = sys.argv[1:7]
 
 def app_list():
     r = subprocess.run([lw, "app", "list", "--json"], capture_output=True, text=True)
@@ -107,11 +140,13 @@ def ensure(key, name):
     print("  created:", name, a["appId"])
     return a
 
-con = ensure("console", console_name)
-act = ensure("actor", actor_name)
+con = ensure("console", console_app_name)
+act = ensure("actor", actor_app_name)
 data = {
-    "console": {"name": console_name, "app_id": con["appId"], "domain": con["domain"]},
-    "actor":   {"name": actor_name,   "app_id": act["appId"], "domain": act["domain"]},
+    "console": {"name": console_name, "liveware_name": console_app_name,
+                "app_id": con["appId"], "domain": con["domain"]},
+    "actor":   {"name": actor_name, "liveware_name": actor_app_name,
+                "app_id": act["appId"], "domain": act["domain"]},
 }
 json.dump(data, open(apps_path, "w"), ensure_ascii=False, indent=2)
 print("  wrote", apps_path)
