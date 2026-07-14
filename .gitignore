@@ -1,0 +1,19 @@
+# 运行时状态（每个副本本地产物，server.py 启动自建；不入库）
+skill/state/
+/dist/
+*.env
+.env
+*.bak
+*.bak-*
+*.before-*
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# 日志
+*.log
+
+# macOS
+.DS_Store
