@@ -580,7 +580,7 @@ textarea.formControl{min-height:74px;resize:vertical;line-height:1.55}
 
 
 .cardLibraryBody{gap:12px}
-.cardFolder{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:rgba(255,255,255,.018)}
+.cardFolder{flex:0 0 auto;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:rgba(255,255,255,.018)}
 .cardFolderHead{width:100%;display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;padding:12px;border:0;background:rgba(255,255,255,.025);color:var(--text);text-align:left;cursor:pointer}
 .cardFolderTitle{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cardFolderMeta{font-size:12px;color:var(--muted)}
@@ -592,11 +592,6 @@ textarea.formControl{min-height:74px;resize:vertical;line-height:1.55}
   flex-direction:column;
   padding:8px 8px 14px;
   gap:8px;
-  max-height:min(480px,calc(100dvh - 230px));
-  overflow-y:auto;
-  overscroll-behavior:contain;
-  -webkit-overflow-scrolling:touch;
-  touch-action:pan-y;
 }
 .cardManageRow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;min-height:58px}
 .cardOpen{min-width:0;border:1px solid var(--line);border-radius:8px;background:rgba(0,0,0,.12);color:var(--text);padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:4px;cursor:pointer}
