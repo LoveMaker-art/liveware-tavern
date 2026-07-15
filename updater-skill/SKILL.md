@@ -27,11 +27,13 @@ Conflicts still stop the update and failures still roll back automatically.
 
 1. Treat an initial request such as "update Tavern" as permission for inspection only. It does not authorize installation.
 2. Run `check` and report installed and latest versions.
-3. Run `review`, then `report --plan <PLAN_ID>`. Report the exact backend/frontend/Tavern-skill/updater files, statuses, installed and release hashes, conflicts, trusted-baseline source or warning, validation results, and excluded paths.
+3. Run `review` once, then `report --plan <PLAN_ID>` once. Summarize installed/target versions, changed categories, validation, data exclusions, metadata normalization, and real conflicts. Do not print hashes or exhaustive per-file details unless the user asks for them.
 4. Stop and wait for a new user reply after the report. Do not infer approval from the user's original update request.
-5. Never apply a plan with conflicts. Resolve the source changes and run `review` again.
+5. A Tavern Skill version mismatch is informational: the updater normalizes the release-owned `version:` field during three-way merge. Never edit `SKILL.md` merely to align version numbers. If real conflicts remain, report their paths and stop; do not search temporary directories or mutate managed files to force a clean plan.
 6. Only after the user explicitly approves the reported plan or target version, run `apply --plan <PLAN_ID> --confirm`. The updater rejects plans that were not reported or changed afterward.
 7. Report version, plan ID, and health result. The operational Tavern skill is part of the same update and must never be offered as a separate optional follow-up. Apply failures automatically restore the full pre-update backup.
+
+Use `report --details` only when the user explicitly requests file hashes or conflict diagnosis. The default report is intentionally concise.
 
 ## Boundaries
 

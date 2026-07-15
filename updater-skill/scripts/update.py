@@ -46,8 +46,15 @@ ASSET_ARCHIVE = "tavern-release.tar.gz"
 SKILL_ASSET_MANIFEST = "skill-manifest.json"
 SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 VERSION_RE = re.compile(r"^version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
+SKILL_VERSION_LINE_RE = re.compile(r"(?m)^version:[^\r\n]*$")
 IGNORED = ("__pycache__", "*.pyc", "*.log", "*.bak*", "*.before-*", ".DS_Store")
 PROTECTED = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "sessions", "credentials", "backups")
+OBSOLETE_UPDATER_FILES = ("references/conflict-inspection.md",)
+HISTORICAL_SKILL_FILES = {
+    "scripts/install.sh",
+    "scripts/make_test_card.py",
+    "scripts/smoke.py",
+}
 ALLOWED_MANAGED = {
     "runtime": {
         ".tavern-release-version",
@@ -163,7 +170,7 @@ def tagged_release(version):
     return release_from_api(TAG_API.format(version=version))
 
 
-def release_material(work, release=None):
+def release_material(work, release=None, historical=False):
     work.mkdir(parents=True, exist_ok=True)
     release = release or latest_release()
     manifest_path = work / ASSET_MANIFEST
@@ -213,9 +220,10 @@ def release_material(work, release=None):
     if sha256_file(skill_archive_path) != skill_manifest.get("sha256"):
         raise RuntimeError("Tavern skill archive SHA256 mismatch")
     skill_managed = skill_manifest.get("managed_files") or []
+    allowed_skill = ALLOWED_MANAGED["skill"] | (HISTORICAL_SKILL_FILES if historical else set())
     for path in skill_managed:
         area, separator, name = str(path).partition("/")
-        if area != "skill" or not separator or name not in ALLOWED_MANAGED["skill"]:
+        if area != "skill" or not separator or name not in allowed_skill:
             raise RuntimeError(f"Tavern skill release attempts to manage a forbidden path: {path}")
     if "skill/SKILL.md" not in skill_managed:
         raise RuntimeError("Tavern skill release is missing SKILL.md")
@@ -356,6 +364,31 @@ def merge_file(base, current, incoming, output):
     return False
 
 
+def merge_tavern_skill(base, current, incoming, output):
+    """Merge SKILL.md after aligning only its release-owned version field."""
+    try:
+        texts = [path.read_text(encoding="utf-8") for path in (base, current, incoming)]
+    except (OSError, UnicodeError):
+        return None
+    matches = [SKILL_VERSION_LINE_RE.search(text) for text in texts]
+    if not all(matches):
+        return None
+    version_lines = [match.group(0) for match in matches]
+    canonical = matches[2].group(0)
+    normalized = [SKILL_VERSION_LINE_RE.sub(canonical, text, count=1) for text in texts]
+    with tempfile.TemporaryDirectory(prefix="tavern-skill-merge-") as temp:
+        root = Path(temp)
+        paths = []
+        for index, text in enumerate(normalized):
+            path = root / str(index)
+            path.write_text(text, encoding="utf-8")
+            paths.append(path)
+        return (
+            merge_file(paths[0], paths[1], paths[2], output),
+            len(set(version_lines)) > 1,
+        )
+
+
 def merge_area(area, base_root, current_root, incoming_root, output_root, managed_names):
     base = tree_files(base_root)
     current = tree_files(current_root)
@@ -369,6 +402,7 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
         nh = sha256_file(n) if n else None
         status = "unchanged"
         source = None
+        metadata_normalized = False
         if ch == nh:
             source = c
         elif ch == bh:
@@ -378,7 +412,15 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
         elif not b and n and not c:
             source, status = n, "upstream-added"
         elif b and c and n and not any(binary(path) for path in (b, c, n)):
-            if merge_file(b, c, n, output_root / name):
+            merged = None
+            if area == "skill" and name == "SKILL.md":
+                skill_merge = merge_tavern_skill(b, c, n, output_root / name)
+                if skill_merge is not None:
+                    merged, version_drift = skill_merge
+                    metadata_normalized = bool(merged and version_drift)
+            if merged is None:
+                merged = merge_file(b, c, n, output_root / name)
+            if merged:
                 status = "merged"
             else:
                 status = "conflict"
@@ -395,6 +437,7 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
             "base_sha256": bh,
             "installed_sha256": ch,
             "release_sha256": nh,
+            "metadata_normalized": metadata_normalized,
         })
     return report, conflicts
 
@@ -519,6 +562,14 @@ def install_managed(source_root, managed_files, areas=None):
                     pass
 
 
+def remove_obsolete_updater_files():
+    for name in OBSOLETE_UPDATER_FILES:
+        try:
+            (TARGETS["updater"] / name).unlink()
+        except FileNotFoundError:
+            pass
+
+
 def backup_current(version, managed_files):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = BACKUPS / f"{version}-{stamp}-{uuid.uuid4().hex[:8]}"
@@ -533,10 +584,17 @@ def backup_current(version, managed_files):
                 missing.append(f"{area}/{name}")
     if BASELINE.is_dir():
         shutil.copytree(BASELINE, backup / "baseline")
+    obsolete_present = []
+    for name in OBSOLETE_UPDATER_FILES:
+        current = TARGETS["updater"] / name
+        if current.is_file():
+            copy_file(current, backup / "obsolete/updater" / name)
+            obsolete_present.append("updater/" + name)
     metadata = {
         "managed_files": sorted(managed_files),
         "missing": missing,
         "baseline_present": BASELINE.is_dir(),
+        "obsolete_present": obsolete_present,
     }
     (backup / "backup.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return backup
@@ -573,6 +631,17 @@ def restore(backup):
                     pass
             else:
                 copy_file(backup / "installed" / area / name, target)
+    obsolete_present = set(metadata.get("obsolete_present") or [])
+    for name in OBSOLETE_UPDATER_FILES:
+        key = "updater/" + name
+        target = TARGETS["updater"] / name
+        if key in obsolete_present:
+            copy_file(backup / "obsolete/updater" / name, target)
+        else:
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
     shutil.rmtree(BASELINE, ignore_errors=True)
     if metadata.get("baseline_present") and (backup / "baseline").is_dir():
         shutil.copytree(backup / "baseline", BASELINE)
@@ -626,11 +695,14 @@ def cached_baseline(version, managed_files):
 def command_check(_args):
     with tempfile.TemporaryDirectory(prefix="tavern-update-check-") as temp:
         release, manifest, _archive, skill_manifest, _skill_archive = release_material(Path(temp))
+    installed = local_version()
+    skill_installed = local_skill_version()
     print(json.dumps({
-        "installed": local_version(),
+        "installed": installed,
         "latest": manifest["version"],
-        "skill_installed": local_skill_version(),
+        "skill_installed": skill_installed,
         "skill_latest": skill_manifest["version"],
+        "skill_version_drift": bool(skill_installed and skill_installed != installed),
         "release": release["url"],
     }, ensure_ascii=False))
 
@@ -667,7 +739,8 @@ def command_review(_args):
                     base_work = work / "base"
                     base_release = tagged_release(installed)
                     (_old_release, old_manifest, old_archive,
-                     old_skill_manifest, old_skill_archive) = release_material(base_work, base_release)
+                     old_skill_manifest, old_skill_archive) = release_material(
+                        base_work, base_release, historical=True)
                     if old_manifest["version"] != installed:
                         raise RuntimeError("installed release version does not match its manifest")
                     base_root = base_work / "unpacked"
@@ -729,13 +802,29 @@ def command_review(_args):
             "counts": counts,
             "categories": categories,
             "conflicts": conflicts,
+            "metadata_normalized": [
+                item["path"] for item in files if item.get("metadata_normalized")
+            ],
             "files": files,
         }
         atomic_write_text(
             plan_dir / "plan.json",
             json.dumps(plan, ensure_ascii=False, indent=2) + "\n",
         )
-    print(json.dumps(plan, ensure_ascii=False))
+    print(json.dumps({
+        "plan_id": plan["plan_id"],
+        "installed": plan["installed"],
+        "target": plan["target"],
+        "ready": plan["ready"],
+        "baseline_trusted": plan["baseline_trusted"],
+        "baseline_source": plan["baseline_source"],
+        "baseline_warning": plan["baseline_warning"],
+        "validation": plan["validation"],
+        "counts": plan["counts"],
+        "categories": plan["categories"],
+        "conflicts": plan["conflicts"],
+        "metadata_normalized": plan["metadata_normalized"],
+    }, ensure_ascii=False))
 
 
 @exclusive
@@ -762,7 +851,14 @@ def command_report(args):
         "counts": plan["counts"],
         "categories": plan["categories"],
         "conflicts": plan["conflicts"],
-        "changes": changes,
+        "metadata_normalized": plan.get("metadata_normalized") or [],
+        "changes": (
+            changes if args.details else [
+                {key: item[key] for key in ("path", "category", "status")}
+                for item in changes
+            ]
+        ),
+        "details": bool(args.details),
         "excluded": [
             "runtime/web files outside the seven official managed code files",
             "runtime/assets",
@@ -772,7 +868,7 @@ def command_report(args):
             "/opt/data/tavern-state",
             "credentials and model keys",
         ],
-        "next_step": "Report once and wait for approval to apply the complete runtime plus Tavern skill update. Never ask separately whether the Tavern skill should be synchronized.",
+        "next_step": "Report this summary once and wait for approval. Use --details only when the user explicitly requests file hashes or conflict diagnosis.",
     }
     print(json.dumps(report, ensure_ascii=False))
 
@@ -820,6 +916,7 @@ def command_apply(args):
             raise RuntimeError("health check failed: " + json.dumps(report, ensure_ascii=False))
         # Self-update last so a failed application update keeps the known-good updater.
         install_managed(staged, managed_files, areas={"updater"})
+        remove_obsolete_updater_files()
         write_baseline(upstream, managed_files, plan["target"])
         state = {
             "installed": plan["target"],
@@ -870,6 +967,7 @@ def main():
     review.set_defaults(func=command_review)
     report = sub.add_parser("report")
     report.add_argument("--plan", required=True)
+    report.add_argument("--details", action="store_true")
     report.set_defaults(func=command_report)
     apply_parser = sub.add_parser("apply")
     apply_parser.add_argument("--plan")

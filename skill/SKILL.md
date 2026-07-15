@@ -1,7 +1,7 @@
 ---
 name: tavern
 description: "Use when the user wants the Tavern: story worlds, roleplay scenes, SillyTavern character cards, world lore, liveware tavern scenes, story memory/reflection, or tavern model setup."
-version: 1.19.2
+version: 1.19.3
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

@@ -1,9 +1,13 @@
 import importlib.util
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -108,6 +112,103 @@ class UpdaterMergeTests(unittest.TestCase):
 
         (UPDATER.BASELINE / "runtime/server.py").write_text("tampered\n", encoding="utf-8")
         self.assertIsNone(UPDATER.cached_baseline("2.0.0", managed))
+
+    def test_skill_version_only_drift_is_normalized(self):
+        base = self.root / "base/skill"
+        current = self.root / "current/skill"
+        incoming = self.root / "incoming/skill"
+        output = self.root / "output/skill"
+        self.write(base, "SKILL.md", "---\nname: tavern\nversion: 1.18.8\n---\nBody\n")
+        self.write(current, "SKILL.md", "---\nname: tavern\nversion: 1.19.1\n---\nBody\n")
+        self.write(incoming, "SKILL.md", "---\nname: tavern\nversion: 1.19.3\n---\nBody\n")
+
+        report, conflicts = UPDATER.merge_area(
+            "skill", base, current, incoming, output, {"SKILL.md"})
+
+        self.assertFalse(conflicts)
+        self.assertEqual(report[0]["status"], "merged")
+        self.assertTrue(report[0]["metadata_normalized"])
+        self.assertIn("version: 1.19.3", (output / "SKILL.md").read_text())
+
+    def test_skill_metadata_merge_preserves_disjoint_local_content(self):
+        base = self.root / "base/skill"
+        current = self.root / "current/skill"
+        incoming = self.root / "incoming/skill"
+        output = self.root / "output/skill"
+        self.write(base, "SKILL.md", "---\nversion: 1.18.8\n---\nBase\n")
+        self.write(current, "SKILL.md", "---\nversion: 1.19.1\n---\nBase\nLocal note\n")
+        self.write(incoming, "SKILL.md", "---\nversion: 1.19.3\n---\nUpstream\nBase\n")
+
+        report, conflicts = UPDATER.merge_area(
+            "skill", base, current, incoming, output, {"SKILL.md"})
+
+        merged = (output / "SKILL.md").read_text()
+        self.assertFalse(conflicts)
+        self.assertEqual(report[0]["status"], "merged")
+        self.assertIn("version: 1.19.3", merged)
+        self.assertIn("Upstream", merged)
+        self.assertIn("Local note", merged)
+
+    def test_skill_real_content_conflict_still_blocks_update(self):
+        base = self.root / "base/skill"
+        current = self.root / "current/skill"
+        incoming = self.root / "incoming/skill"
+        output = self.root / "output/skill"
+        self.write(base, "SKILL.md", "---\nversion: 1.18.8\n---\nMode: base\n")
+        self.write(current, "SKILL.md", "---\nversion: 1.19.1\n---\nMode: local\n")
+        self.write(incoming, "SKILL.md", "---\nversion: 1.19.3\n---\nMode: upstream\n")
+
+        report, conflicts = UPDATER.merge_area(
+            "skill", base, current, incoming, output, {"SKILL.md"})
+
+        self.assertEqual(conflicts, ["skill/SKILL.md"])
+        self.assertEqual(report[0]["status"], "conflict")
+        self.assertFalse(report[0]["metadata_normalized"])
+
+    def test_default_report_omits_file_hashes(self):
+        managed = ["runtime/server.py"]
+        self.write(UPDATER.TARGETS["runtime"], "server.py", "installed\n")
+        plan_id = "concise-report"
+        plan_dir = UPDATER.PLANS / plan_id
+        plan_dir.mkdir(parents=True)
+        plan = {
+            "plan_id": plan_id,
+            "installed": "1.19.2",
+            "target": "1.19.3",
+            "ready": True,
+            "baseline_trusted": True,
+            "baseline_source": "installed-release",
+            "baseline_warning": "",
+            "validation": {"python": 1, "shell": 0, "javascript": 0},
+            "counts": {"upstream": 1},
+            "categories": {"backend": 1},
+            "conflicts": [],
+            "metadata_normalized": [],
+            "managed_files": managed,
+            "current_fingerprint": UPDATER.managed_fingerprint(managed),
+            "files": [{
+                "path": "runtime/server.py",
+                "category": "backend",
+                "status": "upstream",
+                "base_sha256": "base",
+                "installed_sha256": "installed",
+                "release_sha256": "release",
+                "metadata_normalized": False,
+            }],
+        }
+        (plan_dir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            UPDATER.command_report.__wrapped__(SimpleNamespace(plan=plan_id, details=False))
+        report = json.loads(output.getvalue())
+
+        self.assertFalse(report["details"])
+        self.assertEqual(
+            report["changes"],
+            [{"path": "runtime/server.py", "category": "backend", "status": "upstream"}],
+        )
+        self.assertNotIn("installed_sha256", output.getvalue())
 
 
 class RuntimeStateBoundaryTests(unittest.TestCase):

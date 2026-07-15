@@ -1,4 +1,4 @@
 interface:
   display_name: "Tavern Updater"
   short_description: "Update Tavern runtime and its operational skill together"
-  default_prompt: "Check the latest Tavern release, review its code differences and merge safety, then wait for approval before applying it."
+  default_prompt: "Check and review the latest Tavern release once, give a concise safety summary, then wait for approval before applying it."

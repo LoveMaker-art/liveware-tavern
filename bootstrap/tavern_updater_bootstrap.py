@@ -32,6 +32,7 @@ UPDATER_FILES = (
     "references/release-format.md",
     "scripts/update.py",
 )
+OBSOLETE_UPDATER_FILES = ("references/conflict-inspection.md",)
 SKILL_FILES = (
     "SKILL.md",
     "references/actor-memory.md",
@@ -70,9 +71,10 @@ python3 /opt/data/skills/system/tavern-updater/scripts/update.py review
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py report --plan <PLAN_ID>
 ```
 
-After `report`, show the installed and target versions, exact changed files,
-conflicts, hashes, trusted-baseline status, validation results, and excluded
-paths. Stop and wait for a new explicit user approval. Only after that approval run:
+After `report`, show one concise summary: installed and target versions, changed
+categories, validation, protected data boundaries, metadata normalization, and
+real conflicts. Do not print hashes or exhaustive file details unless the user
+asks. Stop and wait for a new explicit user approval. Only after that approval run:
 
 ```sh
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
@@ -88,6 +90,11 @@ Never use current instance files as an official merge baseline. If the installed
 version has no verified Release or cached baseline, differing files are conflicts
 and must not be overwritten. Validate backend, frontend, and read-only API surfaces
 before committing an update.
+
+Treat a Tavern Skill version mismatch as informational. The updater normalizes
+the release-owned `version:` field during review. Never edit `SKILL.md` only to
+align versions, never search temporary directories for reviewed files, and never
+generate repeated plans unless managed files actually changed.
 {AGENTS_END}"""
 
 
@@ -265,6 +272,11 @@ def install_updater(staged, target):
                 pending.unlink()
             except OSError:
                 pass
+    for name in OBSOLETE_UPDATER_FILES:
+        try:
+            (target / name).unlink()
+        except FileNotFoundError:
+            pass
 
 
 def sync_agents(path):
