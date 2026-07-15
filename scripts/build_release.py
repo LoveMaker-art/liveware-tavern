@@ -33,10 +33,7 @@ FRONTEND_FILES = (
 )
 SKILL_SCRIPT_FILES = (
     "bringup.sh",
-    "install.sh",
-    "make_test_card.py",
     "provision.sh",
-    "smoke.py",
     "tavern_cli.py",
 )
 

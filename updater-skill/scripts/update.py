@@ -87,10 +87,7 @@ ALLOWED_MANAGED = {
         "references/world-rebuild.md",
         "references/worldbook-authoring.md",
         "scripts/bringup.sh",
-        "scripts/install.sh",
-        "scripts/make_test_card.py",
         "scripts/provision.sh",
-        "scripts/smoke.py",
         "scripts/tavern_cli.py",
     },
 }

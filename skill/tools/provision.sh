@@ -1,5 +1,5 @@
 #!/bin/sh
-# provision — 首跑：把这个 agent 的两个活件 app 建好并注册（install.sh 的容器内一半）。
+# provision — 首跑：把这个 agent 的两个 Liveware app 建好并注册。
 #
 # 职责边界：这里管**一次性 install 关注点**——建/复用 app、写 state/apps.json、register
 # 进 member-backend（launcher 瓦片）。起进程 / 重启恢复是 bringup.sh 的事。
@@ -12,7 +12,7 @@
 # Tarven / Story Profile，不随主理人昵称变化，也不会重建 app 或消耗配额。
 #
 # 前置：容器已激活（hermes clawchat activate）+ 装了 clawchat 插件（带 liveware 二进制）。
-# 跑：sh /opt/data/skills/creative/tavern/scripts/provision.sh（通常由 install.sh 调）
+# 跑：sh /opt/data/skills/creative/tavern/scripts/provision.sh
 set -eu
 TAVERN_SKILL=/opt/data/skills/creative/tavern
 TAVERN_APP=/opt/data/apps/tavern-runtime

@@ -64,7 +64,7 @@ def _decode_card_payload(text_chunks: dict) -> dict:
             blob = text_chunks[key].strip()
             # tEXt 按 latin-1 读进来（字节安全的 1:1 映射）、iTXt 已是 utf-8 unicode。
             # 先还原成原始字节，再判断 base64 还是明文 JSON——否则明文 UTF-8 卡会被
-            # 当 latin-1 直接 json.loads，中文全乱码（「鹿念念」bug，2026-06-29）。
+            # Treating UTF-8 metadata as latin-1 before json.loads causes CJK mojibake.
             try:
                 raw = blob.encode("latin-1")   # tEXt 路径：还原原始字节
             except UnicodeEncodeError:

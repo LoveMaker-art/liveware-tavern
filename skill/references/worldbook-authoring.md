@@ -47,7 +47,7 @@ Risky broad keys:
 - `任务`
 - `秘密`
 - `教团`
-- `学生` / `老师` / `班主任` / `初中` / `初三` — common setting words in school stories; fire on almost every turn
+- `城市` / `雨天` / `咖啡馆` / `街道` / `傍晚` — common setting words that fire on almost every turn
 - `深圳` / `东京` / `伦敦` — city/country names that appear naturally in setting description
 - Character names (e.g. `苏念清`, `赵明远`, `周小曼`) — using a character name as a trigger key causes the entry to fire whenever that character is mentioned, which in a multi-character world means nearly every turn
 - one-character pronouns or common particles
@@ -59,7 +59,7 @@ Risky broad keys:
 | Before (broken) | After (fixed) |
 |---|---|
 | `苏念清, 赵明远, 周小曼` (character names) | `深圳湾公园, 红树林, 奶茶店, 等公交, 放学路上` (scene signals) |
-| `师生, 禁忌, 学生, 保守, 另一面` (generic) | `苏总, 师生关系, 班主任` (specific relationship states) |
+| `城市, 雨天, 咖啡馆, 往事, 熟人` (generic) | `临江路, 晚潮咖啡馆, 旧相册` (specific places and story objects) |
 | `深圳, 初中, 初三, 海边` (setting words) | `深圳湾, 红树林栈道, 校门口奶茶店` (specific locations) |
 
 When a character name is too broad, use selective triggers:

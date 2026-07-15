@@ -64,9 +64,12 @@ skill/
   SKILL.md
   references/
   scripts/
+    bringup.sh
+    provision.sh
+    tavern_cli.py
 ```
 
-Only the listed runtime files, the seven official frontend code files, and the allowlisted operational Tavern skill files are release assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, and credentials are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
+Only the listed runtime files, the seven official frontend code files, and the three allowlisted operational Tavern skill scripts are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, and credentials are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
 
 Every published version intended to serve as a future merge base must retain these
 verified assets. During review, the updater resolves the installed version's tagged
