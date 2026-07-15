@@ -829,6 +829,53 @@ def save_production(p):
         _write(os.path.join(STATE, "productions", p["id"] + ".json"), record)
 
 
+def _story_content_signature(story):
+    payload = [(m.get("id"), m.get("role"), m.get("text") or "") for m in story or []]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _commit_foreground_story(p, expected_story_signature):
+    """Commit generated story changes without overwriting newer background state."""
+    pid = p["id"]
+    with _production_lock(pid):
+        current = load_production(pid)
+        if not current:
+            raise ValueError("production not found")
+        if _story_content_signature(current.get("story") or []) != expected_story_signature:
+            raise RuntimeError("故事已在另一项操作中更新，请重试。")
+
+        incoming_story = p.get("story") or []
+        current["story"] = incoming_story
+        for key in ("response_language", "language_mode", "language_confidence", "language_source"):
+            if key in p:
+                current[key] = p[key]
+
+        runtime = dict(current.get("runtime") or {})
+        incoming_runtime = dict(p.get("runtime") or {})
+        for key, value in incoming_runtime.items():
+            if key != "story_state_error":
+                runtime[key] = value
+        if "last_prompt_debug" not in incoming_runtime:
+            runtime.pop("last_prompt_debug", None)
+        current["runtime"] = runtime
+
+        current_state = current.get("story_state") or {}
+        incoming_state = p.get("story_state") or {}
+        if _validated_story_state(current_state, incoming_story):
+            current["story_state"] = current_state
+        elif _validated_story_state(incoming_state, incoming_story):
+            current["story_state"] = incoming_state
+        else:
+            current["story_state"] = {}
+
+        record = dict(current)
+        record.pop("worldbooks", None)
+        _write(os.path.join(STATE, "productions", pid + ".json"), record)
+        p.clear()
+        p.update(current)
+        return current
+
+
 def _story_revision(p):
     story = (p or {}).get("story") or []
     return len(story), (story[-1].get("id") if story else None)
@@ -1177,7 +1224,7 @@ def ev_attach_worldbook(ev):
     if runtime_id and runtime_id not in p["worldbook_ids"]:
         p["worldbook_ids"].append(runtime_id)
     _ensure_production_session(p)
-    _mark_story_state_stale(p, "worldbook_changed")
+    _mark_context_state_stale(p, "worldbook_changed")
     save_production(p)
     return {"production": p}
 
@@ -1471,7 +1518,7 @@ def ev_attach_card(ev):
         if runtime_id and runtime_id not in p.get("worldbook_ids", []):
             p.setdefault("worldbook_ids", []).append(runtime_id)
         _ensure_production_session(p)
-    _mark_story_state_stale(p, "loadout_changed")
+    _mark_context_state_stale(p, "loadout_changed")
     save_production(p)
     return {"production": p}
 
@@ -1518,7 +1565,7 @@ def ev_detach_card(ev):
         kept_worldbook_ids.append(wid)
     p["worldbook_ids"] = kept_worldbook_ids
     _ensure_production_session(p)
-    _mark_story_state_stale(p, "loadout_changed")
+    _mark_context_state_stale(p, "loadout_changed")
     save_production(p)
     return {"production": p}
 
@@ -1725,14 +1772,18 @@ def _ensure_production_session(p):
     return p
 
 
-def _mark_story_state_stale(p, reason="history_changed"):
+def _mark_context_state_stale(p, reason="context_changed"):
     p["turn_plan"] = {}
     p.setdefault("runtime", {})["state_stale_reason"] = reason
     p["runtime"].pop("last_prompt_debug", None)
-    if isinstance(p.get("story_state"), dict):
-        p["story_state"]["stale"] = True
     if isinstance(p.get("scene_state"), dict):
         p["scene_state"]["stale"] = True
+
+
+def _mark_story_state_stale(p, reason="history_changed"):
+    _mark_context_state_stale(p, reason)
+    if isinstance(p.get("story_state"), dict):
+        p["story_state"]["stale"] = True
 
 
 def _loadout(p):
@@ -1750,7 +1801,7 @@ def _perform_into(p):
     turn_plan = _prepare_turn_plan(p, cards)
     language = _ensure_world_language(p)
     return actor.perform(cards, wbs, persona, p["story"], note,
-                         model=_active_model(), story_state=p.get("story_state"),
+                         model=_active_model(), story_state=_effective_story_state(p),
                          scene_state=p.get("scene_state"), turn_plan=turn_plan,
                          response_language=language)  # 用户自配大模型;None=内置模型
 
@@ -1759,6 +1810,7 @@ def ev_send_message(ev):
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
+    expected_story_signature = _story_content_signature(p.get("story") or [])
     _observe_user_language(p, ev["text"], ev.get("locale"))
     user_msg = _msg("user", ev["text"])
     p["story"].append(user_msg)
@@ -1767,7 +1819,7 @@ def ev_send_message(ev):
     _raise_if_generation_cancelled(ev)
     m = _msg("char", reply)
     p["story"].append(m)
-    save_production(p)
+    _commit_foreground_story(p, expected_story_signature)
     _schedule_story_state(p["id"])
     _schedule_scene_state(p["id"])
     return {"reply": reply, "message": m, "user_message": user_msg, "production_id": p["id"]}
@@ -1777,6 +1829,7 @@ def ev_regenerate(ev):
     p = load_production(ev["production_id"])
     if not p or not p["story"]:
         raise ValueError("nothing to regenerate")
+    expected_story_signature = _story_content_signature(p.get("story") or [])
     _ensure_world_language(p, ev.get("locale"))
     # 砍掉最后一条 char，重演（保留为 alt）
     last = p["story"][-1]
@@ -1785,7 +1838,7 @@ def ev_regenerate(ev):
     trimmed = p["story"][:-1]
     saved_story = p["story"]
     p["story"] = trimmed
-    _mark_story_state_stale(p, "regenerate")
+    _mark_context_state_stale(p, "regenerate")
     cards, wbs, persona, note = _loadout(p)
     reply = _ensure_actor_reply(p, cards, wbs, persona, note, _perform_into(p))
     _raise_if_generation_cancelled(ev)
@@ -1793,7 +1846,7 @@ def ev_regenerate(ev):
     last["active_alt"] = len(last["alts"]) - 1
     last["text"] = reply
     p["story"] = saved_story
-    save_production(p)
+    _commit_foreground_story(p, expected_story_signature)
     _schedule_story_state(p["id"])
     _schedule_scene_state(p["id"])
     return {"message": last, "production_id": p["id"]}
@@ -1863,7 +1916,7 @@ def _ensure_actor_reply(p, cards, wbs, persona, note, text):
     retry_note = (note + "\n" if note else "") + retry_instruction
     try:
         text = _normalize_actor_reply(actor.perform(cards, wbs, persona, p["story"], retry_note,
-                                                    model=_active_model(), story_state=p.get("story_state"),
+                                                    model=_active_model(), story_state=_effective_story_state(p),
                                                     scene_state=p.get("scene_state"), turn_plan=_prepare_turn_plan(p, cards),
                                                     response_language=language))
     except Exception as e:
@@ -1879,6 +1932,7 @@ def ev_continue(ev):
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
+    expected_story_signature = _story_content_signature(p.get("story") or [])
     language = _ensure_world_language(p, ev.get("locale"))
     user_msg = _msg("user", ev.get("text") or ("*Continue the story.*" if language == "en" else "*剧情继续*"))
     p["story"].append(user_msg)
@@ -1886,14 +1940,14 @@ def ev_continue(ev):
     turn_plan = _prepare_turn_plan(p, cards)
     continue_note = _continue_note(note, language)
     reply = actor.perform(cards, wbs, persona, p["story"], continue_note,
-                          model=_active_model(), story_state=p.get("story_state"),
+                          model=_active_model(), story_state=_effective_story_state(p),
                           scene_state=p.get("scene_state"), turn_plan=turn_plan,
                           response_language=language)
     reply = _ensure_actor_reply(p, cards, wbs, persona, continue_note, reply)
     _raise_if_generation_cancelled(ev)
     m = _msg("char", reply)
     p["story"].append(m)
-    save_production(p)
+    _commit_foreground_story(p, expected_story_signature)
     _schedule_story_state(p["id"])
     _schedule_scene_state(p["id"])
     return {"reply": reply, "user_message": user_msg, "message": m, "production_id": p["id"]}
@@ -2051,29 +2105,37 @@ def ev_swipe(ev):
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
-    for m in p["story"]:
+    expected_story_signature = _story_content_signature(p.get("story") or [])
+    latest = p["story"][-1] if p.get("story") else None
+    if not latest or latest.get("role") != "char" or latest.get("id") != ev.get("message_id"):
+        raise ValueError("only the latest reply can switch alternatives")
+    for m in (latest,):
         if m["id"] == ev["message_id"]:
             alts = m.get("alts") or [m.get("text", "")]
             cur = m.get("active_alt", 0)
             nxt = max(0, min(len(alts) - 1, cur + int(ev.get("dir", 0))))
             m["active_alt"] = nxt
             m["text"] = alts[nxt]
-            save_production(p)
+            _mark_context_state_stale(p, "swipe")
+            _commit_foreground_story(p, expected_story_signature)
             return {"message": m}
     raise ValueError("message not found")
 
 
 def ev_edit_message(ev):
-    """Edit a turn and branch from that point: later turns are discarded.
-
-    Editing in RP is a rewind, not an in-place typo fix. Once a user/char turn changes,
-    every later turn was generated from the old text and must be removed so the next
-    send/continue starts from the edited position.
-    """
+    """Edit only the latest visible turn; confirmed compressed history is immutable."""
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
     story = p.get("story") or []
+    if not story:
+        raise ValueError("message not found")
+    expected_story_signature = _story_content_signature(story)
+    editable_ids = {story[-1].get("id")}
+    if story[-1].get("role") == "char" and len(story) >= 2 and story[-2].get("role") == "user":
+        editable_ids.add(story[-2].get("id"))
+    if ev.get("message_id") not in editable_ids:
+        raise ValueError("only the latest turn can be edited")
     for i, m in enumerate(story):
         if m.get("id") == ev["message_id"]:
             text = ev.get("text", "")
@@ -2090,7 +2152,7 @@ def ev_edit_message(ev):
             p["story"] = story[:i + 1]
             if m.get("role") == "user" and text.strip():
                 _observe_user_language(p, text, ev.get("locale"))
-            _mark_story_state_stale(p, "edit_message")
+            _mark_context_state_stale(p, "edit_message")
             reply_msg = None
             if ev.get("continue_after") and m.get("role") == "user" and text.strip():
                 cards, wbs, persona, note = _loadout(p)
@@ -2098,9 +2160,10 @@ def ev_edit_message(ev):
                 _raise_if_generation_cancelled(ev)
                 reply_msg = _msg("char", reply)
                 p["story"].append(reply_msg)
+            _commit_foreground_story(p, expected_story_signature)
+            if reply_msg:
                 _schedule_story_state(p["id"])
                 _schedule_scene_state(p["id"])
-            save_production(p)
             return {"message": m, "reply": reply_msg, "story": p["story"], "truncated": removed}
     raise ValueError("message not found")
 
@@ -2290,7 +2353,7 @@ def _build_turn_plan(p, cards):
     user = json.dumps({
         "characters": names,
         "scene_state": p.get("scene_state") or {},
-        "story_state": p.get("story_state") or {},
+        "story_state": _effective_story_state(p),
         "response_language": language,
         "recent_story": _scene_story_excerpt(p, response_language=language),
     }, ensure_ascii=False)
@@ -2385,6 +2448,9 @@ def _compressible_story_turns(story):
 
 
 STORY_STATE_BATCH_TURNS = int(os.environ.get("TAVERN_STORY_STATE_BATCH_TURNS", "15"))
+STORY_STATE_MAX_CHARS = max(4000, int(os.environ.get("TAVERN_STORY_STATE_MAX_CHARS", "15000")))
+STORY_STATE_BATCH_TOKEN_BUDGET = max(
+    8000, int(os.environ.get("TAVERN_STORY_STATE_BATCH_TOKEN_BUDGET", "50000")))
 
 
 def _story_messages_through_turn(story, end_turn):
@@ -2424,6 +2490,29 @@ def _story_lines_for_turns(p, start_turn, end_turn):
     return "\n".join(lines)
 
 
+def _story_batch_segments(p, start_turn, end_turn):
+    """Split an oversized batch only at complete user-turn boundaries."""
+    segments = []
+    segment_start = start_turn
+    segment_end = start_turn - 1
+    segment_parts = []
+    segment_tokens = 0
+    for turn in range(start_turn, end_turn + 1):
+        part = _story_lines_for_turns(p, turn, turn)
+        part_tokens = _estimate_text_tokens(part)
+        if segment_parts and segment_tokens + part_tokens > STORY_STATE_BATCH_TOKEN_BUDGET:
+            segments.append((segment_start, segment_end, "\n".join(segment_parts)))
+            segment_start = turn
+            segment_parts = []
+            segment_tokens = 0
+        segment_parts.append(part)
+        segment_tokens += part_tokens
+        segment_end = turn
+    if segment_parts:
+        segments.append((segment_start, segment_end, "\n".join(segment_parts)))
+    return segments
+
+
 def _estimate_text_tokens(text):
     """Cheap trigger-only token estimate: CJK ~= 1 token, other text ~= 4 chars/token."""
     cjk = 0
@@ -2459,15 +2548,15 @@ def _normalize_story_state(raw, turns, source_tokens):
         raw = {}
 
     limits = {
-        "timeline": (20, 120),
-        "facts": (20, 120),
-        "open_threads": (20, 140),
-        "relationships": (20, 140),
-        "user_state": (12, 140),
-        "scene_anchor": (10, 140),
-        "objects": (12, 140),
-        "secrets": (12, 140),
-        "style_notes": (8, 120),
+        "timeline": (12, 120),
+        "facts": (12, 120),
+        "open_threads": (12, 140),
+        "relationships": (12, 140),
+        "user_state": (8, 140),
+        "scene_anchor": (6, 140),
+        "objects": (10, 140),
+        "secrets": (10, 140),
+        "style_notes": (6, 120),
     }
 
     def arr(key):
@@ -2497,7 +2586,7 @@ def _normalize_story_state(raw, turns, source_tokens):
                 break
         return out
 
-    def dict_arr(key, max_keys=12, item_limit=8):
+    def dict_arr(key, max_keys=8, item_limit=6):
         vals = raw.get(key) or {}
         out = {}
         if isinstance(vals, list):
@@ -2535,7 +2624,84 @@ def _normalize_story_state(raw, turns, source_tokens):
         "source_tokens": source_tokens,
         "updated_at": int(time.time()),
     }
+    return _trim_story_state_to_budget(state, STORY_STATE_MAX_CHARS)
+
+
+def _story_state_chars(state):
+    return len(json.dumps(state or {}, ensure_ascii=False, separators=(",", ":")))
+
+
+def _trim_story_state_to_budget(state, max_chars):
+    """Bound ledger size while removing transient details before protected memory."""
+    state = dict(state or {})
+
+    def pop_character_note():
+        characters = state.get("character_state") or {}
+        if not isinstance(characters, dict) or not characters:
+            return False
+        name = max(characters, key=lambda key: len(characters.get(key) or []))
+        notes = list(characters.get(name) or [])
+        if notes:
+            notes.pop(0)
+        if notes:
+            characters[name] = notes
+        else:
+            characters.pop(name, None)
+        state["character_state"] = characters
+        return True
+
+    primary_order = (
+        "style_notes", "scene_anchor", "user_state", "timeline", "facts",
+        "relationships", "objects",
+    )
+    protected_order = ("open_threads", "secrets")
+    while _story_state_chars(state) > max_chars:
+        changed = False
+        for key in primary_order:
+            values = list(state.get(key) or [])
+            if values:
+                values.pop(0)
+                state[key] = values
+                changed = True
+                break
+        if not changed:
+            changed = pop_character_note()
+        if not changed:
+            for key in protected_order:
+                values = list(state.get(key) or [])
+                if values:
+                    values.pop(0)
+                    state[key] = values
+                    changed = True
+                    break
+        if not changed:
+            break
     return state
+
+
+def _story_state_quality_ok(previous, current):
+    """Reject catastrophic memory loss without adding another model call."""
+    if not _story_state_has_memory(previous):
+        return True
+
+    def count(keys, state):
+        return sum(len(state.get(key) or []) for key in keys)
+
+    old_protected = count(("open_threads", "relationships", "objects", "secrets"), previous)
+    new_protected = count(("open_threads", "relationships", "objects", "secrets"), current)
+    if old_protected >= 6 and new_protected < 2:
+        return False
+
+    old_history = count(("timeline", "facts"), previous)
+    new_history = count(("timeline", "facts"), current)
+    if old_history >= 6 and new_history < 2:
+        return False
+
+    old_characters = len(previous.get("character_state") or {})
+    new_characters = len(current.get("character_state") or {})
+    if old_characters >= 3 and new_characters == 0:
+        return False
+    return True
 
 
 def _story_state_has_memory(state):
@@ -2543,6 +2709,28 @@ def _story_state_has_memory(state):
         "timeline", "facts", "open_threads", "relationships", "character_state",
         "user_state", "scene_anchor", "objects", "secrets", "style_notes"
     ))
+
+
+def _validated_story_state(state, story):
+    """Return a ledger only when it safely replaces confirmed raw turns."""
+    if not isinstance(state, dict) or state.get("stale") or not _story_state_has_memory(state):
+        return {}
+    try:
+        covered_turns = int(state.get("turns") or 0)
+    except (TypeError, ValueError):
+        return {}
+    if (covered_turns <= 0 or covered_turns % STORY_STATE_BATCH_TURNS
+            or covered_turns > _compressible_story_turns(story)):
+        return {}
+    expected = str(state.get("covered_signature") or "").strip()
+    if expected and _story_prefix_signature(story, covered_turns) != expected:
+        return {}
+    return state
+
+
+def _effective_story_state(p):
+    return _validated_story_state(
+        (p or {}).get("story_state") or {}, (p or {}).get("story") or [])
 
 
 def _merge_story_state_batch(prev, batch, start_turn, end_turn,
@@ -2553,7 +2741,9 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
             "You are the high-fidelity continuity recorder for an interactive story. Merge previous_state and the complete new_story_batch into an updated story ledger. "
             "Write every textual value in English, translating older ledger values when necessary while preserving names and facts. Record only facts, relationships, secrets, objects, open threads, and style information that affect future continuation. "
             "Do not add literary commentary or infer events that did not happen. Output strict JSON using only timeline, facts, open_threads, relationships, character_state, user_state, scene_anchor, objects, secrets, and style_notes. "
-            "Keep entries short, concrete, unique, and non-prose. Keep at most 6 entries per array and at most 4 characters in character_state. Keep timeline/facts under 20 words and relationships/open_threads under 28 words. "
+            "Keep entries short, concrete, unique, and non-prose. Keep at most 12 entries per major array and at most 8 important characters in character_state. Keep timeline/facts under 20 words and relationships/open_threads under 28 words. "
+            "Never drop unresolved threads, unrevealed secrets, key objects, ongoing relationship changes, identity facts, major promises, major conflicts, relationship turning points, or consequential user choices unless the new batch explicitly resolves or changes them. "
+            "Remove duplicates, expired scene details, completed minor actions, and details that cannot affect continuation before removing protected memory. Keep the complete JSON ledger within 15000 characters. "
             "The batch contains complete conversational turns and must be treated as one continuous semantic unit. "
             "If new_story_batch is non-empty, never return an entirely empty JSON object."
         )
@@ -2564,9 +2754,11 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
             "输出严格 JSON，对象字段只能是 timeline、facts、open_threads、relationships、character_state、"
             "user_state、scene_anchor、objects、secrets、style_notes。"
             "所有数组条目必须短而具体，禁止长篇散文，禁止重复。"
-            "每个数组最多保留 6 条；character_state 最多 4 个角色。"
+            "主要数组最多保留 12 条；character_state 最多保留 8 个重要角色。"
             "timeline/facts 每条不超过 60 个汉字；relationships/open_threads 每条不超过 80 个汉字；"
             "character_state 每个角色最多 6 条，每条不超过 80 个汉字。"
+            "未解决线索、未揭露秘密、关键物品、持续中的关系变化，以及身份事实、重大承诺、核心冲突、关系转折和用户关键选择，在新批次明确解决或改变之前不得删除。"
+            "容量不足时，先删除重复表述、过时场景、已完成的小动作和不影响后续的细节，再考虑其他内容；完整 JSON 账本不得超过 15000 字符。"
             "这一批包含完整连续的对话轮次，必须作为一个语义整体理解，不得在事件中间切断。"
             "如果 new_story_batch 非空，严禁返回全空 JSON。"
         )
@@ -2627,12 +2819,16 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
     if not _story_state_has_memory(state):
         print("story_state batch empty; keeping previous memory", file=sys.stderr, flush=True)
         return None
+    if not _story_state_quality_ok(prev or {}, state):
+        print("story_state batch lost protected memory; keeping previous memory", file=sys.stderr, flush=True)
+        return None
     return state
 
 
 _STORY_STATE_RUN_LOCKS = {}
 _STORY_STATE_RUN_LOCKS_GUARD = threading.Lock()
 _STORY_STATE_JOBS = set()
+_STORY_STATE_PENDING = set()
 _STORY_STATE_JOBS_LOCK = threading.Lock()
 
 
@@ -2655,7 +2851,11 @@ def _commit_story_state_batch(pid, state, end_turn, expected_signature):
             return None
         if _story_prefix_signature(current.get("story") or [], end_turn) != expected_signature:
             return None
-        current["story_state"] = state
+        published = dict(state)
+        published["turns"] = end_turn
+        published["covered_signature"] = expected_signature
+        published.pop("stale", None)
+        current["story_state"] = published
         runtime = dict(current.get("runtime") or {})
         runtime.pop("state_stale_reason", None)
         runtime.pop("story_state_error", None)
@@ -2686,8 +2886,9 @@ def _summarize_story_state(p, force_full=False):
         snapshot = load_production(pid) or p
         story = snapshot.get("story") or []
         compressible_turns = _compressible_story_turns(story)
-        previous = snapshot.get("story_state") or {}
-        rebuild = force_full
+        stored_previous = snapshot.get("story_state") or {}
+        previous = _validated_story_state(stored_previous, story)
+        rebuild = force_full or (bool(stored_previous) and not previous)
         state = {} if rebuild else dict(previous)
         covered_turns = 0 if rebuild else int(previous.get("turns") or 0)
         language = _ensure_world_language(snapshot)
@@ -2695,15 +2896,19 @@ def _summarize_story_state(p, force_full=False):
         while compressible_turns - covered_turns >= STORY_STATE_BATCH_TURNS:
             start_turn = covered_turns + 1
             end_turn = covered_turns + STORY_STATE_BATCH_TURNS
-            batch = _story_lines_for_turns(snapshot, start_turn, end_turn)
-            if not batch.strip():
+            segments = _story_batch_segments(snapshot, start_turn, end_turn)
+            if not segments or not any(batch.strip() for _, _, batch in segments):
                 _record_story_state_error(pid, "empty story batch")
                 break
-            prefix = _story_messages_through_turn(story, end_turn)
-            source_tokens = _story_token_estimate(prefix)
             signature = _story_prefix_signature(story, end_turn)
-            merged = _merge_story_state_batch(
-                state, batch, start_turn, end_turn, source_tokens, language)
+            merged = state
+            for segment_start, segment_end, batch in segments:
+                prefix = _story_messages_through_turn(story, segment_end)
+                source_tokens = _story_token_estimate(prefix)
+                merged = _merge_story_state_batch(
+                    merged, batch, segment_start, segment_end, source_tokens, language)
+                if not merged:
+                    break
             if not merged:
                 _record_story_state_error(pid, f"compression failed for turns {start_turn}-{end_turn}")
                 break
@@ -2732,7 +2937,7 @@ def _maybe_auto_story_state(pid):
             return
         story = p.get("story") or []
         compressible_turns = _compressible_story_turns(story)
-        prev = p.get("story_state") or {}
+        prev = _validated_story_state(p.get("story_state") or {}, story)
         done_turns = int(prev.get("turns") or 0)
         if compressible_turns - done_turns < STORY_STATE_BATCH_TURNS:
             return
@@ -2750,15 +2955,24 @@ def _maybe_auto_story_state(pid):
 
 def _story_state_job(pid):
     try:
-        _maybe_auto_story_state(pid)
+        while True:
+            _maybe_auto_story_state(pid)
+            with _STORY_STATE_JOBS_LOCK:
+                if pid in _STORY_STATE_PENDING:
+                    _STORY_STATE_PENDING.discard(pid)
+                    continue
+                _STORY_STATE_JOBS.discard(pid)
+                return
     finally:
         with _STORY_STATE_JOBS_LOCK:
             _STORY_STATE_JOBS.discard(pid)
+            _STORY_STATE_PENDING.discard(pid)
 
 
 def _schedule_story_state(pid):
     with _STORY_STATE_JOBS_LOCK:
         if pid in _STORY_STATE_JOBS:
+            _STORY_STATE_PENDING.add(pid)
             return False
         _STORY_STATE_JOBS.add(pid)
     threading.Thread(target=_story_state_job, args=(pid,), daemon=True).start()

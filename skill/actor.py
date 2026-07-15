@@ -256,6 +256,45 @@ def _fit_history(story: list, covered_turns: int = 0) -> list:
     return kept
 
 
+def _story_state_has_memory(story_state: dict) -> bool:
+    return isinstance(story_state, dict) and any(story_state.get(key) for key in (
+        "timeline", "facts", "open_threads", "relationships", "character_state",
+        "user_state", "scene_anchor", "objects", "secrets", "style_notes",
+    ))
+
+
+def _story_prefix_signature(story: list, end_turn: int) -> str:
+    selected = []
+    seen_turns = 0
+    for message in story or []:
+        if message.get("role") == "user":
+            seen_turns += 1
+            if seen_turns > end_turn:
+                break
+        selected.append(message)
+    payload = [(m.get("id"), m.get("role"), m.get("text") or "") for m in selected]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _validated_story_state(story_state: dict, story: list) -> dict:
+    """Use a ledger only when it safely replaces confirmed raw history."""
+    if not _story_state_has_memory(story_state) or story_state.get("stale"):
+        return {}
+    try:
+        covered_turns = int(story_state.get("turns") or 0)
+    except (TypeError, ValueError):
+        return {}
+    total_turns = sum(1 for message in story or [] if message.get("role") == "user")
+    batch_turns = max(1, int(os.environ.get("TAVERN_STORY_STATE_BATCH_TURNS", "15")))
+    if (covered_turns <= 0 or covered_turns % batch_turns
+            or covered_turns > max(0, total_turns - 1)):
+        return {}
+    expected = str(story_state.get("covered_signature") or "").strip()
+    if expected and _story_prefix_signature(story, covered_turns) != expected:
+        return {}
+    return story_state
+
+
 def _language_code(value: str = "zh") -> str:
     return "zh" if str(value or "").lower().startswith("zh") else "en"
 
@@ -554,10 +593,7 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
 
     roles_txt = _role_blocks(cards, lang) or ("(No active characters configured)" if en else "（未设置登场角色）")
     scene_state_txt = _scene_state_block(scene_state or {}, lang)
-    effective_story_state = (
-        story_state if isinstance(story_state, dict)
-        and story_state.get("turns") else {}
-    )
+    effective_story_state = _validated_story_state(story_state, story)
     story_state_txt = _story_state_block(effective_story_state or {}, lang)
     turn_plan_txt = _turn_plan_block(turn_plan or {}, lang)
     multi_rule = ""
