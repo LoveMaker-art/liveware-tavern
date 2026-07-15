@@ -689,6 +689,12 @@ def parse_actor_self(md):
                 after = after.split("而是", 1)[1]
             tagline = after.strip().strip("。").lstrip("那个").strip()
             break
+    if not tagline:
+        for line in find("故事档案"):
+            line = line.strip()
+            if line and not line.startswith("-"):
+                tagline = line.strip("。")
+                break
     knows = [b for b in _bullets(find("我对你的了解")) if not b.startswith("（")]
     timeline = []
     for b in _bullets(find("成长记")):
@@ -2373,6 +2379,11 @@ def _world_turns(story):
     return sum(1 for m in story or [] if m.get("role") == "user")
 
 
+def _compressible_story_turns(story):
+    """Keep the latest user turn raw and compress only confirmed history."""
+    return max(0, _world_turns(story) - 1)
+
+
 STORY_STATE_BATCH_TURNS = int(os.environ.get("TAVERN_STORY_STATE_BATCH_TURNS", "15"))
 
 
@@ -2669,19 +2680,19 @@ def _record_story_state_error(pid, error):
 
 
 def _summarize_story_state(p, force_full=False):
-    """Compress complete 15-turn batches and publish each batch only on success."""
+    """Compress confirmed 15-turn batches and publish each batch only on success."""
     pid = p["id"]
     with _story_state_run_lock(pid):
         snapshot = load_production(pid) or p
         story = snapshot.get("story") or []
-        total_turns = _world_turns(story)
+        compressible_turns = _compressible_story_turns(story)
         previous = snapshot.get("story_state") or {}
         rebuild = force_full
         state = {} if rebuild else dict(previous)
         covered_turns = 0 if rebuild else int(previous.get("turns") or 0)
         language = _ensure_world_language(snapshot)
 
-        while total_turns - covered_turns >= STORY_STATE_BATCH_TURNS:
+        while compressible_turns - covered_turns >= STORY_STATE_BATCH_TURNS:
             start_turn = covered_turns + 1
             end_turn = covered_turns + STORY_STATE_BATCH_TURNS
             batch = _story_lines_for_turns(snapshot, start_turn, end_turn)
@@ -2720,10 +2731,10 @@ def _maybe_auto_story_state(pid):
         if not p:
             return
         story = p.get("story") or []
-        turns = _world_turns(story)
+        compressible_turns = _compressible_story_turns(story)
         prev = p.get("story_state") or {}
         done_turns = int(prev.get("turns") or 0)
-        if turns - done_turns < STORY_STATE_BATCH_TURNS:
+        if compressible_turns - done_turns < STORY_STATE_BATCH_TURNS:
             return
         try:
             _summarize_story_state(p)

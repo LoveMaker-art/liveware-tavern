@@ -43,18 +43,23 @@ class StoryCompressionTests(unittest.TestCase):
         self.temp.cleanup()
 
     @staticmethod
-    def production(pid):
+    def production(pid, turns=30):
         return {
             "id": pid,
             "name": "Compression test",
-            "story": story_with_turns(30, long_turn=15),
+            "story": story_with_turns(turns, long_turn=15),
             "story_state": {},
             "runtime": {},
             "cards": [],
             "worldbook_ids": [],
         }
 
-    def test_thirty_uncompressed_turns_commit_two_complete_batches(self):
+    def test_only_confirmed_turns_are_compressible(self):
+        self.assertEqual(server._compressible_story_turns(story_with_turns(15)), 14)
+        self.assertEqual(server._compressible_story_turns(story_with_turns(16)), 15)
+        self.assertEqual(server._compressible_story_turns(story_with_turns(31)), 30)
+
+    def test_thirty_one_turns_commit_two_batches_and_keep_latest_raw(self):
         calls = []
 
         def merge(previous, batch, start, end, source_tokens, language):
@@ -67,7 +72,7 @@ class StoryCompressionTests(unittest.TestCase):
             }
 
         server._merge_story_state_batch = merge
-        production = self.production("prod_two_batches")
+        production = self.production("prod_two_batches", turns=31)
         server.save_production(production)
 
         server._summarize_story_state(production)
@@ -75,7 +80,9 @@ class StoryCompressionTests(unittest.TestCase):
 
         self.assertEqual(calls, [(1, 15, True), (16, 30, True)])
         self.assertEqual(saved["story_state"]["turns"], 30)
-        self.assertEqual(actor._fit_history(saved["story"], covered_turns=30), [])
+        raw = actor._fit_history(saved["story"], covered_turns=30)
+        self.assertEqual(sum(message.get("role") == "user" for message in raw), 1)
+        self.assertEqual(raw[-1]["id"], "a31")
 
     def test_failed_second_batch_keeps_first_ledger_and_remaining_raw_turns(self):
         def merge(previous, _batch, start, end, source_tokens, language):
@@ -89,7 +96,7 @@ class StoryCompressionTests(unittest.TestCase):
             }
 
         server._merge_story_state_batch = merge
-        production = self.production("prod_failed_second")
+        production = self.production("prod_failed_second", turns=31)
         server.save_production(production)
 
         server._summarize_story_state(production)
@@ -98,7 +105,7 @@ class StoryCompressionTests(unittest.TestCase):
         raw = actor._fit_history(saved["story"], covered_turns=covered)
 
         self.assertEqual(covered, 15)
-        self.assertEqual(sum(message.get("role") == "user" for message in raw), 15)
+        self.assertEqual(sum(message.get("role") == "user" for message in raw), 16)
         self.assertIn("turns 16-30", saved["runtime"]["story_state_error"])
 
     def test_history_edit_rejects_stale_batch_commit(self):
