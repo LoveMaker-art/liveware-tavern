@@ -94,6 +94,53 @@ function attachGenMs(msg, startedAt) {
   return msg;
 }
 
+const stateSyncWatchers = new Map();
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function applyStateProjection(result) {
+  const production = state.productions.find((item) => item.id === result.production_id);
+  if (!production) return;
+  production.runtime_cast = result.runtime_cast || production.runtime_cast;
+  production.cards = Array.isArray(result.cards) ? result.cards : production.cards;
+  production.persona = result.persona || production.persona;
+  if (state.activeId !== production.id) return;
+  state.active = production;
+  state.persona = production.persona || {};
+  if (!state._editPersona && !state._editCast && !state._editLore) renderPanel();
+}
+
+function watchStateSync(meta, productionId) {
+  if (!meta || !meta.watch || !productionId) return;
+  const token = Symbol(productionId);
+  const since = Number(meta.revision || 0);
+  stateSyncWatchers.set(productionId, token);
+  void (async () => {
+    const deadline = Date.now() + 180000;
+    let failures = 0;
+    let idle = 0;
+    while (Date.now() < deadline && stateSyncWatchers.get(productionId) === token) {
+      await wait(1000);
+      try {
+        const result = await bridge.get(`/api/production/state-sync?production_id=${encodeURIComponent(productionId)}&since=${since}`);
+        failures = 0;
+        if (result.ready) {
+          applyStateProjection(result);
+          break;
+        }
+        if (result.pending) {
+          idle = 0;
+          continue;
+        }
+        if (result.error || !result.due || ++idle >= 3) break;
+      } catch (_) {
+        if (++failures >= 5) break;
+      }
+    }
+  })().finally(() => {
+    if (stateSyncWatchers.get(productionId) === token) stateSyncWatchers.delete(productionId);
+  });
+}
+
 async function loadAll() {
   const [pr, cr, wr, lwr, mr, tr] = await Promise.all([
     bridge.get("/api/productions"), bridge.get("/api/cards"), bridge.get("/api/worldbooks"),
@@ -312,6 +359,77 @@ function provenanceHtml(card) {
   return "";
 }
 
+function castProfile(card) {
+  const p = (card && card.profile) || {};
+  return {
+    identity: p.identity || { name: card?.name || "", description: card?.description || "" },
+    appearance: p.appearance || {},
+    personality: p.personality || { summary: card?.personality || "" },
+    expression: p.expression || {},
+    capabilities: p.capabilities || {},
+    background: p.background || {},
+  };
+}
+
+function castSummary(card) {
+  const p = castProfile(card);
+  const brief = (value, limit = 72) => {
+    const text = String(value || "").split(/\n+/).map((line) => line.replace(/^\s*[-*•·]\s*/, "").trim()).find(Boolean) || "";
+    return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  };
+  const identity = brief([p.identity.occupation, p.identity.story_role].filter(Boolean).join(" · ")
+    || p.identity.description || "");
+  const traits = Array.isArray(p.personality.traits) && p.personality.traits.length
+    ? p.personality.traits.slice(0, 3).join(" · ") : brief(p.personality.summary || "");
+  const relations = Array.isArray(card.relationships) ? card.relationships.filter(Boolean) : [];
+  return { identity, traits, relations: relations.join("；") };
+}
+
+function profileRows(card, includeSource = false) {
+  const p = castProfile(card);
+  const status = card.persistent_status || {};
+  const rows = [];
+  const list = (value) => Array.isArray(value) ? value.filter(Boolean).join("；") : (value || "");
+  const add = (label, value) => { const text = list(value); if (String(text).trim()) rows.push([label, String(text).trim()]); };
+  add(t("castFieldName"), p.identity.name || card.name);
+  add(t("castFieldAliases"), p.identity.aliases);
+  add(t("castFieldDescription"), p.identity.description || card.description);
+  add(t("castFieldGender"), p.identity.gender);
+  add(t("castFieldAge"), p.identity.age);
+  add(t("castFieldSpecies"), p.identity.species);
+  add(t("castFieldOccupation"), p.identity.occupation);
+  add(t("castFieldAffiliations"), p.identity.affiliations);
+  add(t("castFieldStoryRole"), p.identity.story_role);
+  add(t("castFieldAppearance"), p.appearance.summary);
+  add(t("castFieldFeatures"), p.appearance.features);
+  add(t("castFieldAttire"), p.appearance.attire);
+  add(t("castFieldTraits"), (Array.isArray(p.personality.traits) && p.personality.traits.length)
+    ? p.personality.traits : (p.personality.summary || card.personality));
+  add(t("castFieldValues"), p.personality.values);
+  add(t("castFieldMotivation"), p.personality.motivation);
+  add(t("castFieldFears"), p.personality.fears);
+  add(t("castFieldBoundaries"), p.personality.boundaries);
+  add(t("castFieldSpeech"), p.expression.speech_style);
+  add(t("castFieldHabits"), p.expression.habits);
+  add(t("castFieldMannerisms"), p.expression.mannerisms);
+  add(t("castFieldSkills"), p.capabilities.skills);
+  add(t("castFieldPowers"), p.capabilities.powers);
+  add(t("castFieldLimitations"), p.capabilities.limitations);
+  add(t("castFieldBackground"), p.background.summary);
+  add(t("castFieldHistory"), p.background.key_history);
+  add(t("castFieldLifeStatus"), status.life_status);
+  add(t("castFieldPhysicalCondition"), status.physical_condition);
+  add(t("castFieldRelationships"), card.relationships);
+  const entry = card.entry || {};
+  if (includeSource) {
+    add(t("cardFieldFirstMes"), entry.first_message || card.first_mes);
+    add(t("cardFieldCreator"), card.creator);
+    add(t("cardFieldSource"), card.source);
+    add(t("cardFieldTags"), card.tags);
+  }
+  return rows;
+}
+
 // 故事主理人小节收敛为两个入口：复盘深链与故事档案。
 // 深链打开 ClawChat 中当前主理人的会话，故事档案在酒馆同源页内打开。
 // 容器拦非同源导航 → openLinkExternally → in-app deep link;老版本 app 降级开资料页);
@@ -417,11 +535,16 @@ function renderPanel() {
   const actorSec = actorSectionHtml();
   const modelsSec = modelsSectionHtml();
   const persona = state.persona || {};
-  const hasPersona = persona.name || persona.description;
+  const personaSummary = castSummary(persona);
+  const hasPersona = persona.name || persona.description || persona.profile;
   const persSec = `<div class="pSection">
     ${sectionHead(t("pPersona"), "_editPersona")}
     ${hasPersona
-      ? `<p class="pname">${esc(persona.name || "")}</p><p class="pdesc">${esc(persona.description || "")}</p>`
+      ? `<div class="personaProfileCard" data-persona-detail="1" role="button" tabindex="0" aria-label="${esc(t("pPersona"))}">
+        <p class="pname">${esc(persona.name || "")}</p>
+        ${personaSummary.identity ? `<p class="pdesc">${esc(personaSummary.identity)}</p>` : ""}
+        ${personaSummary.traits ? `<p class="castTraits">${esc(personaSummary.traits)}</p>` : ""}
+      </div>`
       : `<p class="pmuted">${esc(t("pPersonaNone"))}</p>`}
     ${state._editPersona ? `<div class="persLinks"><button data-act="persCustom">${esc(t("personaCustom"))}</button><span class="dot">·</span><button data-act="persImport">${esc(t("personaImport"))}</button></div>` : ""}
   </div>`;
@@ -432,12 +555,12 @@ function renderPanel() {
     const cards = productionCards(p);
     const charFold = state._foldChar ? " folded" : "";
     const castHtml = cards.length ? cards.map((card) => {
-      const tags = (card.tags || []).map((x) => `<span class="tag">${esc(x)}</span>`).join("");
-      return `<div class="castCard">
+      const summary = castSummary(card);
+      return `<div class="castCard castProfileCard" data-cast-detail="${esc(card.id)}" role="button" tabindex="0">
         <div class="castTop"><p class="cname">${esc(card.name || "")}</p>${state._editCast ? `<span class="itemActions"><button class="itemEdit" data-cast-edit="${esc(card.id)}" aria-label="${esc(t("editCast"))}" title="${esc(t("editCast"))}">${PENCIL_SVG}</button><button class="loreDel" data-cast-del="${esc(card.id)}" aria-label="${esc(t("removeCast"))}" title="${esc(t("removeCast"))}">${TRASH_SVG}</button></span>` : ""}</div>
-        ${provenanceHtml(card)}
-        <p class="cdesc">${esc(card.description || "")}</p>
-        ${tags ? `<div class="ctags">${tags}</div>` : ""}
+        ${summary.identity ? `<p class="castIdentity">${esc(summary.identity)}</p>` : ""}
+        ${summary.traits ? `<p class="castTraits">${esc(summary.traits)}</p>` : ""}
+        ${summary.relations ? `<p class="castRelations"><span>${esc(t("castFieldRelationships"))}</span>${esc(summary.relations)}</p>` : ""}
       </div>`;
     }).join("") : `<p class="pmuted">${esc(t("pNone"))}</p>`;
     const charSec = `<div class="pSection pFold">
@@ -487,6 +610,17 @@ function renderPanel() {
     };
   });
   bindPersonaActions();
+  const personaDetail = body.querySelector("[data-persona-detail]");
+  if (personaDetail) {
+    const open = () => openPersonaDetailSheet();
+    personaDetail.onclick = open;
+    personaDetail.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      }
+    };
+  }
   const mm = $("#modelManage");
   if (mm) mm.onclick = openModelSheet;
   const vm = $("#voiceManage");
@@ -513,6 +647,11 @@ function renderPanel() {
   body.querySelectorAll("[data-cast-edit]").forEach((b) => {
     b.onclick = (e) => { e.stopPropagation(); openEditCastSheet(b.dataset.castEdit); };
   });
+  body.querySelectorAll("[data-cast-detail]").forEach((item) => {
+    const open = () => openCastDetailSheet(item.dataset.castDetail);
+    item.onclick = open;
+    item.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+  });
 }
 
 function toggleFold(key) {
@@ -530,27 +669,83 @@ function bindPersonaActions() {
 
 function openPersonaCustomSheet() {
   const persona = state.persona || {};
-  const card = el("div", "modalCard newWorldSheet");
+  const profile = castProfile(persona);
+  const status = persona.persistent_status || {};
+  const lines = (value) => Array.isArray(value) ? value.join("\n") : (value || "");
+  const personalityLines = (Array.isArray(profile.personality.traits) && profile.personality.traits.length)
+    ? profile.personality.traits : [profile.personality.summary || ""].filter(Boolean);
+  const card = el("div", "modalCard editEntitySheet");
   card.innerHTML = `<div class="newWorldHd">
       <div><p class="modalTitle">${esc(t("personaCustom"))}</p><p class="newWorldSub">${esc(t("personaCustomSub"))}</p></div>
       <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
     </div>
-    <input id="persName" class="newWorldInput" placeholder="${esc(t("personaPlaceholder"))}" value="${esc(persona.name || "")}" />
-    <textarea id="persDesc" class="newWorldText" placeholder="${esc(t("personaDescPlaceholder"))}">${esc(persona.description || "")}</textarea>
-    <div class="newWorldActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("personaSave"))}</button></div>`;
+    <div class="editEntityTabs" role="tablist">
+      <button class="active" data-edit-tab="basic" role="tab">${esc(t("editTabBasic"))}</button>
+      <button data-edit-tab="character" role="tab">${esc(t("editTabCharacter"))}</button>
+      <button data-edit-tab="progress" role="tab">${esc(t("editTabProgress"))}</button>
+    </div>
+    <div class="editEntityBody">
+      <section class="editEntityPane active" data-edit-pane="basic">
+        <div class="formSectionTitle">${esc(t("castGroupIdentity"))}</div>
+        <label class="fieldLabel">${esc(t("castFieldName"))}<input id="persName" class="formControl" value="${esc(persona.name || "")}" /></label>
+        <div class="stateEditorGrid">
+          <label class="fieldLabel">${esc(t("castFieldOccupation"))}<input id="persOccupation" class="formControl" value="${esc(profile.identity.occupation || "")}" /></label>
+          <label class="fieldLabel">${esc(t("castFieldStoryRole"))}<input id="persStoryRole" class="formControl" value="${esc(profile.identity.story_role || "")}" /></label>
+        </div>
+        <label class="fieldLabel">${esc(t("castFieldDescription"))}<textarea id="persDesc" class="formControl">${esc(profile.identity.description || persona.description || "")}</textarea></label>
+        <div class="formSectionTitle">${esc(t("castGroupAppearance"))}</div>
+        <label class="fieldLabel">${esc(t("castFieldAppearance"))}<textarea id="persAppearance" class="formControl">${esc(profile.appearance.summary || "")}</textarea></label>
+        <div class="formSectionTitle">${esc(t("castGroupBackground"))}</div>
+        <label class="fieldLabel">${esc(t("castFieldBackground"))}<textarea id="persBackground" class="formControl">${esc(profile.background.summary || "")}</textarea></label>
+      </section>
+      <section class="editEntityPane" data-edit-pane="character">
+        <div class="formSectionTitle">${esc(t("castGroupPersonality"))}</div>
+        <label class="fieldLabel">${esc(t("castFieldTraits"))}<textarea id="persTraits" class="formControl" placeholder="${esc(t("castLinesHint"))}">${esc(lines(personalityLines))}</textarea></label>
+        <label class="fieldLabel">${esc(t("castFieldMotivation"))}<textarea id="persMotivation" class="formControl">${esc(profile.personality.motivation || "")}</textarea></label>
+        <div class="formSectionTitle">${esc(t("castGroupCapabilities"))}</div>
+        <label class="fieldLabel">${esc(t("castFieldSkills"))}<textarea id="persSkills" class="formControl" placeholder="${esc(t("castLinesHint"))}">${esc(lines(profile.capabilities.skills))}</textarea></label>
+        <label class="fieldLabel">${esc(t("castFieldLimitations"))}<textarea id="persLimitations" class="formControl" placeholder="${esc(t("castLinesHint"))}">${esc(lines(profile.capabilities.limitations))}</textarea></label>
+      </section>
+      <section class="editEntityPane" data-edit-pane="progress">
+        <div class="formSectionTitle">${esc(t("castGroupStatus"))}</div>
+        <label class="fieldLabel">${esc(t("castFieldLifeStatus"))}<input id="persLifeStatus" class="formControl" value="${esc(status.life_status || "")}" /></label>
+        <label class="fieldLabel">${esc(t("castFieldPhysicalCondition"))}<textarea id="persPhysicalCondition" class="formControl">${esc(status.physical_condition || "")}</textarea></label>
+      </section>
+    </div>
+    <div class="editEntityFooter loreSheetActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("personaSave"))}</button></div>`;
   openModal(card);
   card.querySelector(".sheetClose").onclick = closeModal;
   card.querySelector(".ghost").onclick = closeModal;
+  card.querySelectorAll("[data-edit-tab]").forEach((button) => {
+    button.onclick = () => {
+      card.querySelectorAll("[data-edit-tab]").forEach((item) => item.classList.toggle("active", item === button));
+      card.querySelectorAll("[data-edit-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.editPane === button.dataset.editTab));
+      card.querySelector(".editEntityBody").scrollTop = 0;
+    };
+  });
   card.querySelector(".primary").onclick = async () => {
     const name = (card.querySelector("#persName").value || "").trim();
-    const desc = (card.querySelector("#persDesc").value || "").trim();
+    if (!name) { toast(t("castNameRequired")); return; }
     try {
-      const r = await bridge.event({ type: "set_persona", production_id: state.active?.id, name, description: desc });
-      state.active = r.production; state.persona = { name, description: desc };
+      card.classList.add("saving");
+      const r = await bridge.event({ type: "set_persona", production_id: state.active?.id,
+        profile: {
+          identity: { name, description: card.querySelector("#persDesc").value.trim(),
+            occupation: card.querySelector("#persOccupation").value.trim(), story_role: card.querySelector("#persStoryRole").value.trim() },
+          appearance: { summary: card.querySelector("#persAppearance").value.trim() },
+          personality: { summary: "", traits: card.querySelector("#persTraits").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+            motivation: card.querySelector("#persMotivation").value.trim() },
+          capabilities: { skills: card.querySelector("#persSkills").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+            limitations: card.querySelector("#persLimitations").value.split(/\n+/).map((x) => x.trim()).filter(Boolean) },
+          background: { summary: card.querySelector("#persBackground").value.trim() },
+        },
+        persistent_status: { life_status: card.querySelector("#persLifeStatus").value.trim(),
+          physical_condition: card.querySelector("#persPhysicalCondition").value.trim() } });
+      state.active = r.production; state.persona = r.persona;
       const i = state.productions.findIndex((p) => p.id === r.production.id);
       if (i >= 0) state.productions[i] = r.production;
       closeModal(); renderPanel(); toast(t("personaSave"));
-    } catch (e) { toast(t("genFailed", { err: e.message })); }
+    } catch (e) { card.classList.remove("saving"); toast(t("genFailed", { err: e.message })); }
   };
   card.querySelector("#persName").focus();
 }
@@ -568,10 +763,9 @@ function openPersonaCardSheet() {
 async function setPersonaFromCard(cardId) {
   const c = state.cardMap[cardId];
   if (!c) return;
-  const desc = [c.description, c.personality, c.scenario].filter(Boolean).join("\n\n");
   try {
-    const r = await bridge.event({ type: "set_persona", production_id: state.active?.id, name: c.name || "", description: desc });
-    state.active = r.production; state.persona = r.production.persona || { name: c.name || "", description: desc };
+    const r = await bridge.event({ type: "set_persona", production_id: state.active?.id, card_id: cardId });
+    state.active = r.production; state.persona = r.persona;
     const i = state.productions.findIndex((p) => p.id === r.production.id);
     if (i >= 0) state.productions[i] = r.production;
     closeModal(); renderPanel(); toast(t("personaSave"));
@@ -597,33 +791,169 @@ async function detachCardFromActive(cardId) {
   } catch (e) { toast(t("castRemoveFailed", { err: e.message })); }
 }
 
+function profileDetailGroups(entity) {
+  const rows = profileRows(entity);
+  const groups = [
+    [t("castGroupIdentity"), ["castFieldName", "castFieldAliases", "castFieldDescription", "castFieldGender", "castFieldAge", "castFieldSpecies", "castFieldOccupation", "castFieldAffiliations", "castFieldStoryRole"]],
+    [t("castGroupAppearance"), ["castFieldAppearance", "castFieldFeatures", "castFieldAttire"]],
+    [t("castGroupPersonality"), ["castFieldTraits", "castFieldValues", "castFieldMotivation", "castFieldFears", "castFieldBoundaries"]],
+    [t("castGroupExpression"), ["castFieldSpeech", "castFieldHabits", "castFieldMannerisms"]],
+    [t("castGroupCapabilities"), ["castFieldSkills", "castFieldPowers", "castFieldLimitations"]],
+    [t("castGroupBackground"), ["castFieldBackground", "castFieldHistory"]],
+    [t("castGroupStatus"), ["castFieldLifeStatus", "castFieldPhysicalCondition"]],
+    [t("castGroupRelationships"), ["castFieldRelationships"]],
+  ].map(([title, keys]) => {
+    const labels = new Set(keys.map((key) => t(key)));
+    return [title, rows.filter(([label]) => labels.has(label))];
+  }).filter(([, items]) => items.length);
+  return groups;
+}
+
+function openProfileDetailSheet(entity, title) {
+  const groups = profileDetailGroups(entity);
+  const body = groups.map(([groupTitle, items]) => `<section class="castDetailGroup"><h3>${esc(groupTitle)}</h3>${items.map(([label, value]) => `<div class="castDetailRow"><span>${esc(label)}</span><p>${esc(value)}</p></div>`).join("")}</section>`).join("");
+  const card = el("div", "modalCard castDetailSheet");
+  card.innerHTML = `<div class="sheetHd"><div class="t">${CARD_SVG}${esc(title)}</div><button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button></div>
+    <div class="sheetBody castDetailBody">${body || `<p class="pmuted">${esc(t("cardNoDetail"))}</p>`}</div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+}
+
+function openPersonaDetailSheet() {
+  const persona = state.persona || {};
+  if (!(persona.name || persona.description || persona.profile)) return;
+  const runtimeCast = (state.active && state.active.runtime_cast) || {};
+  const entity = {
+    ...persona,
+    persistent_status: persona.persistent_status || runtimeCast.user_status || {},
+  };
+  openProfileDetailSheet(entity, persona.name || t("pPersona"));
+}
+
+function openCastDetailSheet(cardId) {
+  const character = productionCards(state.active).find((c) => c.id === cardId);
+  if (!character) return;
+  openProfileDetailSheet(character, character.name || t("unnamedCard"));
+}
+
 function openEditCastSheet(cardId) {
   const character = productionCards(state.active).find((c) => c.id === cardId);
   if (!character) return;
+  const profile = castProfile(character);
+  const status = character.persistent_status || {};
+  const lines = (value) => Array.isArray(value) ? value.join("\n") : (value || "");
+  const personalityLines = (Array.isArray(profile.personality.traits) && profile.personality.traits.length)
+    ? profile.personality.traits : [profile.personality.summary || character.personality || ""].filter(Boolean);
+  const relationshipDetails = Array.isArray(character.relationship_details) ? character.relationship_details : [];
+  const relationshipTargets = [
+    { id: "__user__", name: (state.persona && state.persona.name) || t("pPersona") },
+    ...productionCards(state.active).filter((item) => item.id !== cardId).map((item) => ({ id: item.id, name: item.name || t("unnamedCard") })),
+  ];
+  const relationshipOptions = (selected) => relationshipTargets.map((target) =>
+    `<option value="${esc(target.id)}"${target.id === selected ? " selected" : ""}>${esc(target.name)}</option>`).join("");
+  const relationshipDescription = (relation) => {
+    const description = String(relation.description || relation.type || "").trim();
+    const attitude = String(relation.attitude || "").trim();
+    return attitude && !description.includes(attitude) ? `${description}${description ? "，" : ""}${attitude}` : description;
+  };
+  const relationshipRow = (relation = {}) => `<div class="relationEditRow">
+    <label class="fieldLabel">${esc(t("relationTarget"))}<select class="formControl relationTarget">${relationshipOptions(relation.target_id || "__user__")}</select></label>
+    <button type="button" class="relationRemove" aria-label="${esc(t("relationRemove"))}" title="${esc(t("relationRemove"))}">${TRASH_SVG}</button>
+    <label class="fieldLabel relationDescription">${esc(t("relationDescription"))}<textarea class="formControl" placeholder="${esc(t("relationDescriptionHint"))}">${esc(relationshipDescription(relation))}</textarea></label>
+  </div>`;
   const card = el("div", "modalCard editEntitySheet");
   card.innerHTML = `<div class="newWorldHd">
       <div><p class="modalTitle">${esc(t("editCastTitle", { name: character.name || t("unnamedCard") }))}</p><p class="newWorldSub">${esc(t("editCastSub"))}</p></div>
       <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">×</button>
     </div>
+    <div class="editEntityTabs" role="tablist">
+      <button class="active" data-edit-tab="basic" role="tab">${esc(t("editTabBasic"))}</button>
+      <button data-edit-tab="character" role="tab">${esc(t("editTabCharacter"))}</button>
+      <button data-edit-tab="progress" role="tab">${esc(t("editTabProgress"))}</button>
+    </div>
     <div class="editEntityBody">
+      <section class="editEntityPane active" data-edit-pane="basic">
+      <div class="formSectionTitle">${esc(t("castGroupIdentity"))}</div>
       <label class="fieldLabel">${esc(t("castFieldName"))}<input id="castEditName" class="formControl" value="${esc(character.name || "")}" /></label>
-      <label class="fieldLabel">${esc(t("castFieldDescription"))}<textarea id="castEditDescription" class="formControl">${esc(character.description || "")}</textarea></label>
-      <label class="fieldLabel">${esc(t("castFieldPersonality"))}<textarea id="castEditPersonality" class="formControl">${esc(character.personality || "")}</textarea></label>
-      <label class="fieldLabel">${esc(t("castFieldScenario"))}<textarea id="castEditScenario" class="formControl">${esc(character.scenario || "")}</textarea></label>
-      <div class="loreSheetActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("save"))}</button></div>
-    </div>`;
+      <div class="stateEditorGrid">
+        <label class="fieldLabel">${esc(t("castFieldOccupation"))}<input id="castEditOccupation" class="formControl" value="${esc(profile.identity.occupation || "")}" /></label>
+        <label class="fieldLabel">${esc(t("castFieldStoryRole"))}<input id="castEditStoryRole" class="formControl" value="${esc(profile.identity.story_role || "")}" /></label>
+      </div>
+      <label class="fieldLabel">${esc(t("castFieldDescription"))}<textarea id="castEditDescription" class="formControl">${esc(profile.identity.description || character.description || "")}</textarea></label>
+      <div class="formSectionTitle">${esc(t("castGroupAppearance"))}</div>
+      <label class="fieldLabel">${esc(t("castFieldAppearance"))}<textarea id="castEditAppearance" class="formControl">${esc(profile.appearance.summary || "")}</textarea></label>
+      <div class="formSectionTitle">${esc(t("castGroupBackground"))}</div>
+      <label class="fieldLabel">${esc(t("castFieldBackground"))}<textarea id="castEditBackground" class="formControl">${esc(profile.background.summary || "")}</textarea></label>
+      </section>
+      <section class="editEntityPane" data-edit-pane="character">
+      <div class="formSectionTitle">${esc(t("castGroupPersonality"))}</div>
+      <label class="fieldLabel">${esc(t("castFieldTraits"))}<textarea id="castEditTraits" class="formControl" placeholder="${esc(t("castLinesHint"))}">${esc(lines(personalityLines))}</textarea></label>
+      <label class="fieldLabel">${esc(t("castFieldMotivation"))}<textarea id="castEditMotivation" class="formControl">${esc(profile.personality.motivation || "")}</textarea></label>
+      <div class="formSectionTitle">${esc(t("castGroupExpression"))}</div>
+      <label class="fieldLabel">${esc(t("castFieldSpeech"))}<textarea id="castEditSpeech" class="formControl">${esc(profile.expression.speech_style || "")}</textarea></label>
+      <div class="formSectionTitle">${esc(t("castGroupCapabilities"))}</div>
+      <label class="fieldLabel">${esc(t("castFieldSkills"))}<textarea id="castEditSkills" class="formControl" placeholder="${esc(t("castLinesHint"))}">${esc(lines(profile.capabilities.skills))}</textarea></label>
+      <label class="fieldLabel">${esc(t("castFieldLimitations"))}<textarea id="castEditLimitations" class="formControl" placeholder="${esc(t("castLinesHint"))}">${esc(lines(profile.capabilities.limitations))}</textarea></label>
+      </section>
+      <section class="editEntityPane" data-edit-pane="progress">
+      <div class="formSectionTitle">${esc(t("castGroupStatus"))}</div>
+      <label class="fieldLabel">${esc(t("castFieldLifeStatus"))}<input id="castEditLifeStatus" class="formControl" value="${esc(status.life_status || "")}" /></label>
+      <label class="fieldLabel">${esc(t("castFieldPhysicalCondition"))}<textarea id="castEditPhysicalCondition" class="formControl">${esc(status.physical_condition || "")}</textarea></label>
+      <div class="formSectionTitle">${esc(t("castGroupRelationships"))}</div>
+      <div id="castEditRelationships" class="relationEditor">${relationshipDetails.map(relationshipRow).join("")}</div>
+      <button type="button" id="addCastRelationship" class="actorMore relationAdd">＋ ${esc(t("relationAdd"))}</button>
+      </section>
+    </div>
+    <div class="editEntityFooter loreSheetActs"><button class="ghost">${esc(t("cancel"))}</button><button class="primary">${esc(t("save"))}</button></div>`;
   openModal(card);
   card.querySelector(".sheetClose").onclick = closeModal;
   card.querySelector(".ghost").onclick = closeModal;
+  const relationEditor = card.querySelector("#castEditRelationships");
+  const wireRelationRow = (row) => {
+    const remove = row.querySelector(".relationRemove");
+    if (remove) remove.onclick = () => row.remove();
+  };
+  relationEditor.querySelectorAll(".relationEditRow").forEach(wireRelationRow);
+  card.querySelector("#addCastRelationship").onclick = () => {
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = relationshipRow();
+    const row = wrapper.firstElementChild;
+    relationEditor.appendChild(row);
+    wireRelationRow(row);
+  };
+  card.querySelectorAll("[data-edit-tab]").forEach((button) => {
+    button.onclick = () => {
+      card.querySelectorAll("[data-edit-tab]").forEach((item) => item.classList.toggle("active", item === button));
+      card.querySelectorAll("[data-edit-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.editPane === button.dataset.editTab));
+      card.querySelector(".editEntityBody").scrollTop = 0;
+    };
+  });
   card.querySelector(".primary").onclick = async () => {
     const name = card.querySelector("#castEditName").value.trim();
     if (!name) { toast(t("castNameRequired")); return; }
     try {
       card.classList.add("saving");
       await bridge.event({ type: "update_cast", production_id: state.active.id, card_id: cardId,
-        name, description: card.querySelector("#castEditDescription").value.trim(),
-        personality: card.querySelector("#castEditPersonality").value.trim(),
-        scenario: card.querySelector("#castEditScenario").value.trim() });
+        profile: {
+          identity: { name, description: card.querySelector("#castEditDescription").value.trim(),
+            occupation: card.querySelector("#castEditOccupation").value.trim(), story_role: card.querySelector("#castEditStoryRole").value.trim() },
+          appearance: { summary: card.querySelector("#castEditAppearance").value.trim() },
+          personality: { summary: "",
+            traits: card.querySelector("#castEditTraits").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+            motivation: card.querySelector("#castEditMotivation").value.trim() },
+          expression: { speech_style: card.querySelector("#castEditSpeech").value.trim() },
+          capabilities: { skills: card.querySelector("#castEditSkills").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+            limitations: card.querySelector("#castEditLimitations").value.split(/\n+/).map((x) => x.trim()).filter(Boolean) },
+          background: { summary: card.querySelector("#castEditBackground").value.trim() },
+        },
+        persistent_status: {
+          life_status: card.querySelector("#castEditLifeStatus").value.trim(),
+          physical_condition: card.querySelector("#castEditPhysicalCondition").value.trim(),
+        },
+        relationships: [...relationEditor.querySelectorAll(".relationEditRow")].map((row) => ({
+          target_id: row.querySelector(".relationTarget").value,
+          description: row.querySelector(".relationDescription textarea").value.trim(),
+        })).filter((relation) => relation.target_id && relation.description) });
       closeModal(); await loadAll(); toast(t("castUpdated"));
     } catch (e) {
       card.classList.remove("saving");
@@ -686,6 +1016,7 @@ function updateSendEmpty() {
 async function send() {
   const input = $("#input"); const text = input.value.trim();
   if (!text || state.busy || !state.active) return;
+  const productionId = state.active.id;
   const startedAt = Date.now();
   const storyBefore = state.active.story.slice();
   const op = {
@@ -704,12 +1035,13 @@ async function send() {
   state.active.story.push(tempUser, tempChar);
   renderStage(); anchorTurn(lastUserTurn(), true);
   try {
-    const msg = await bridge.generate({ type: "send_message", production_id: state.active.id, text,
+    const msg = await bridge.generate({ type: "send_message", production_id: productionId, text,
       locale: I18N.lang, request_id: op.requestId }, op.controller.signal);
     if (op.cancelled) return;
     const meta = msg._event || {};
     state.active.story = storyBefore.concat([meta.user_message || tempUser, attachGenMs(msg, startedAt)]);
     renderStage(); renderRail(); anchorTurn(lastUserTurn());
+    watchStateSync(meta.state_sync, productionId);
   } catch (e) {
     if (!op.cancelled) {
       op.rollback(); renderStage();
@@ -734,6 +1066,7 @@ function clearCtlBusy() {
 
 async function regenerate(btn) {
   if (state.busy || !state.active) return;
+  const productionId = state.active.id;
   const startedAt = Date.now();
   state.busy = true; setCtlBusy(btn, t("regenBusy")); setComposerSending(true);
   const lastIdx = state.active.story.length - 1;
@@ -743,9 +1076,11 @@ async function regenerate(btn) {
     renderStage(); anchorTurn(lastUserTurn(), true);
   }
   try {
-    const msg = await bridge.generate({ type: "regenerate", production_id: state.active.id, locale: I18N.lang });
+    const msg = await bridge.generate({ type: "regenerate", production_id: productionId, locale: I18N.lang });
+    const meta = msg._event || {};
     state.active.story[lastIdx] = attachGenMs(msg, startedAt);
     renderStage(); anchorTurn(lastUserTurn(), true);
+    watchStateSync(meta.state_sync, productionId);
   } catch (e) {
     if (oldMsg) state.active.story[lastIdx] = oldMsg;
     renderStage();
@@ -756,6 +1091,7 @@ async function regenerate(btn) {
 
 async function doContinue(btn) {
   if (state.busy || !state.active) return;
+  const productionId = state.active.id;
   const startedAt = Date.now();
   state.busy = true; setCtlBusy(btn, t("contBusy")); setComposerSending(true);
   const text = I18N.lang === "zh" ? "*剧情继续*" : "*Continue the story.*";
@@ -764,11 +1100,12 @@ async function doContinue(btn) {
   state.active.story.push(tempUser, tempChar);
   renderStage(); anchorTurn(lastUserTurn(), true);
   try {
-    const msg = await bridge.generate({ type: "continue", production_id: state.active.id, text, locale: I18N.lang });
+    const msg = await bridge.generate({ type: "continue", production_id: productionId, text, locale: I18N.lang });
     const meta = msg._event || {};
     const base = state.active.story.slice(0, -2);
     state.active.story = base.concat([meta.user_message || tempUser, attachGenMs(msg, startedAt)]);
     renderStage(); renderRail(); anchorTurn(lastUserTurn(), true);
+    watchStateSync(meta.state_sync, productionId);
   } catch (e) {
     state.active.story = state.active.story.slice(0, -2); renderStage();
     toast(t("genFailed", { err: e.message }));
@@ -828,6 +1165,7 @@ function editMsg(id) {
   const turn = document.querySelector(`.turn[data-id="${id}"]`);
   const m = state.active && state.active.story.find((x) => x.id === id);
   if (!turn || !m || turn.querySelector(".editbox")) return;
+  const productionId = state.active.id;
   const body = turn.querySelector(".body");
   const ctl = turn.querySelector(".ctl");
   const ta = document.createElement("textarea");
@@ -860,10 +1198,10 @@ function editMsg(id) {
     try {
       let r;
       if (isUserEdit) {
-        const msg = await bridge.generate({ type: "edit_message", production_id: state.active.id, message_id: id, text: v, continue_after: true, locale: I18N.lang });
+        const msg = await bridge.generate({ type: "edit_message", production_id: productionId, message_id: id, text: v, continue_after: true, locale: I18N.lang });
         r = msg._event || { message: msg };
       } else {
-        r = await bridge.event({ type: "edit_message", production_id: state.active.id, message_id: id, text: v, continue_after: false, locale: I18N.lang });
+        r = await bridge.event({ type: "edit_message", production_id: productionId, message_id: id, text: v, continue_after: false, locale: I18N.lang });
       }
       $("#think")?.remove();
       if (Array.isArray(r.story)) {
@@ -877,6 +1215,7 @@ function editMsg(id) {
       }
       renderStage(); renderRail();
       anchorTurn(document.querySelector(`.turn[data-id="${id}"]`), true);
+      watchStateSync(r.state_sync, productionId);
     } catch (e) {
       $("#think")?.remove();
       if (isUserEdit) { state.active.story = prevStory; renderStage(); renderRail(); }
@@ -987,21 +1326,13 @@ function cardLibraryGroups() {
 }
 
 function cardDetailText(c) {
-  const rows = [];
-  const add = (label, value) => { if (value) rows.push([label, String(value)]); };
-  add(t("cardFieldName"), c.name || t("unnamedCard"));
-  add(t("cardFieldDesc"), c.description);
-  add(t("cardFieldPersona"), c.personality);
-  add(t("cardFieldScenario"), c.scenario);
-  add(t("cardFieldFirstMes"), c.first_mes);
-  add(t("cardFieldCreator"), c.creator);
-  add(t("cardFieldSource"), c.source);
-  if (Array.isArray(c.tags) && c.tags.length) add(t("cardFieldTags"), c.tags.join("、"));
+  const rows = profileRows(c, true);
   if (c.character_book && Array.isArray(c.character_book.entries)) {
-    add(t("cardFieldWorldbook"), c.character_book.entries.map((e) => {
+    const content = c.character_book.entries.map((e) => {
       const keys = (e.keys || e.key || []).join ? (e.keys || e.key || []).join("、") : String(e.keys || e.key || "");
       return `${keys ? keys + "：" : ""}${e.content || ""}`;
-    }).filter(Boolean).join("\n\n"));
+    }).filter(Boolean).join("\n\n");
+    if (content) rows.push([t("cardFieldWorldbook"), content]);
   }
   return rows;
 }

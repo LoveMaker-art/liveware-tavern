@@ -10,6 +10,7 @@ import base64
 import json
 import struct
 import hashlib
+import re
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
@@ -84,6 +85,221 @@ _STR_FIELDS = (
 )
 
 
+def _text(value, limit=4000):
+    return str(value or "").strip()[:limit]
+
+
+def _list(value, limit=12, item_limit=240):
+    values = value if isinstance(value, list) else ([value] if value else [])
+    out = []
+    for item in values:
+        text = _text(item, item_limit)
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+_SECTION_NAMES = {
+    "identity": {"身份", "基本信息", "角色身份", "identity", "profile"},
+    "appearance": {"外貌", "外观", "形象", "appearance", "looks"},
+    "personality": {"性格", "人格", "personality", "traits"},
+    "expression": {"表达", "表达方式", "说话方式", "语言风格", "speech", "expression"},
+    "capabilities": {"能力", "技能", "能力与限制", "capabilities", "abilities", "skills", "powers"},
+    "background": {"背景", "经历", "过往", "background", "history"},
+    "relationships": {"关系", "人物关系", "relationships", "relations"},
+}
+
+
+def _section_key(name):
+    normalized = re.sub(r"[\s_-]+", "", str(name or "").strip().lower())
+    for key, aliases in _SECTION_NAMES.items():
+        if normalized in {re.sub(r"[\s_-]+", "", alias.lower()) for alias in aliases}:
+            return key
+    return ""
+
+
+def _section_lines(value, limit=24, item_limit=500):
+    out = []
+    for raw in str(value or "").splitlines():
+        line = re.sub(r"^\s*(?:[-*•·]|\d+[.)、])\s*", "", raw).strip()
+        if not line or re.match(r"^(?:【当前(?:任务|状态|位置)】|\[current\s+(?:task|status|location)\])", line, re.I):
+            continue
+        line = _text(line, item_limit)
+        if line and line not in out:
+            out.append(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _description_sections(value):
+    """Read common XML-like sections without treating the outer role tag as content."""
+    source = str(value or "").strip()
+    wrapped = bool(re.match(r"^\s*<(?:角色|character)\b[^>]*>", source, re.I))
+    body = re.sub(r"^\s*<(?:角色|character)\b[^>]*>\s*", "", source, flags=re.I)
+    body = re.sub(r"\s*</(?:角色|character)>\s*$", "", body, flags=re.I)
+    pattern = re.compile(
+        r"<\s*([A-Za-z\u4e00-\u9fff _-]+)(?:\s+[^>]*)?>(.*?)</\s*\1\s*>",
+        re.I | re.S,
+    )
+    sections = {}
+    spans = []
+    for match in pattern.finditer(body):
+        key = _section_key(match.group(1))
+        if not key:
+            continue
+        spans.append(match.span())
+        sections.setdefault(key, []).extend(_section_lines(match.group(2)))
+    remainder = body
+    for start, end in reversed(spans):
+        remainder = remainder[:start] + "\n" + remainder[end:]
+    sections["remainder"] = _section_lines(remainder)
+    sections["_wrapped"] = wrapped
+    return sections
+
+
+def canonical_relationship_hints(data: dict) -> list:
+    data = data if isinstance(data, dict) else {}
+    return (_description_sections(data.get("description")).get("relationships") or [])[:24]
+
+
+def canonical_scene_notes(data: dict) -> list:
+    """Extract explicitly marked mutable scene notes so callers can move them to the ledger."""
+    source = str((data or {}).get("description") or "")
+    notes = []
+    pattern = re.compile(
+        r"(?:【当前(?:任务|状态|位置)】|\[current\s+(?:task|status|location)\])\s*([^\n<]+)", re.I)
+    for match in pattern.finditer(source):
+        note = _text(match.group(1), 300)
+        if note and note not in notes:
+            notes.append(note)
+    return notes[:8]
+
+
+def canonical_profile(data: dict) -> dict:
+    """Map arbitrary V1/V2/V3 card fields into Tavern's stable character schema.
+
+    The original fields remain available for round-tripping, but generation and
+    UI can rely on one predictable shape regardless of import source.
+    """
+    data = data if isinstance(data, dict) else {}
+    supplied = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
+    tavern = extensions.get("tavern") if isinstance(extensions.get("tavern"), dict) else {}
+    extension_profile = tavern.get("profile") if isinstance(tavern.get("profile"), dict) else {}
+
+    def section(name):
+        merged = {}
+        if isinstance(extension_profile.get(name), dict):
+            merged.update(extension_profile[name])
+        if isinstance(supplied.get(name), dict):
+            merged.update(supplied[name])
+        return merged
+
+    identity = section("identity")
+    appearance = section("appearance")
+    personality = section("personality")
+    expression = section("expression")
+    capabilities = section("capabilities")
+    background = section("background")
+    nickname = data.get("nickname")
+    aliases = identity.get("aliases") or ([nickname] if nickname else [])
+    parsed = _description_sections(data.get("description"))
+    raw_description = _text(data.get("description"))
+    generated_profile = (
+        not supplied
+        or _text(identity.get("description")) == raw_description
+        or _text(identity.get("description")).lstrip().lower().startswith(("<角色", "<character"))
+    )
+    parsed_identity = parsed.get("identity") or parsed.get("remainder") or []
+    parsed_personality = parsed.get("personality") or []
+    parsed_appearance = parsed.get("appearance") or []
+    parsed_capabilities = parsed.get("capabilities") or []
+    parsed_background = parsed.get("background") or []
+    parsed_expression = parsed.get("expression") or []
+    has_structured_sections = bool(parsed.get("_wrapped")) or any(parsed.get(key) for key in _SECTION_NAMES)
+
+    if generated_profile and has_structured_sections:
+        identity["description"] = "\n".join(parsed_identity or parsed_background[:2])
+    if generated_profile and parsed_appearance:
+        appearance["summary"] = "\n".join(parsed_appearance)
+    if generated_profile and parsed_personality:
+        personality["summary"] = ""
+        personality["traits"] = parsed_personality
+    if generated_profile and parsed_expression:
+        expression["speech_style"] = "\n".join(parsed_expression)
+    if generated_profile and parsed_capabilities:
+        capabilities["skills"] = parsed_capabilities
+    if generated_profile and parsed_background:
+        background["summary"] = "\n".join(parsed_background)
+
+    return {
+        "identity": {
+            "name": _text(identity.get("name") or data.get("name"), 160),
+            "aliases": _list(aliases, 8, 120),
+            "description": _text(identity.get("description") or (
+                "" if has_structured_sections else data.get("description"))),
+            "gender": _text(identity.get("gender"), 80),
+            "age": _text(identity.get("age"), 80),
+            "species": _text(identity.get("species"), 100),
+            "occupation": _text(identity.get("occupation"), 180),
+            "affiliations": _list(identity.get("affiliations"), 10, 160),
+            "story_role": _text(identity.get("story_role"), 180),
+        },
+        "appearance": {
+            "summary": _text(appearance.get("summary"), 2500),
+            "features": _list(appearance.get("features"), 12, 180),
+            "attire": _list(appearance.get("attire"), 10, 180),
+        },
+        "personality": {
+            # An explicit empty summary means the normalized traits replaced the
+            # legacy all-in-one personality prose. Do not resurrect that prose.
+            "summary": _text(personality.get("summary") if "summary" in personality else data.get("personality")),
+            "traits": _list(personality.get("traits"), 12, 120),
+            "values": _list(personality.get("values"), 10, 160),
+            "motivation": _text(personality.get("motivation"), 500),
+            "fears": _list(personality.get("fears"), 8, 180),
+            "boundaries": _list(personality.get("boundaries"), 10, 180),
+        },
+        "expression": {
+            "speech_style": _text(expression.get("speech_style"), 500),
+            "habits": _list(expression.get("habits"), 10, 180),
+            "mannerisms": _list(expression.get("mannerisms"), 10, 180),
+        },
+        "capabilities": {
+            "skills": _list(capabilities.get("skills"), 12, 180),
+            "powers": _list(capabilities.get("powers"), 12, 180),
+            "limitations": _list(capabilities.get("limitations"), 12, 180),
+        },
+        "background": {
+            "summary": _text(background.get("summary"), 2500),
+            "key_history": _list(background.get("key_history"), 12, 240),
+        },
+    }
+
+
+def canonical_entry(data: dict) -> dict:
+    data = data if isinstance(data, dict) else {}
+    supplied = data.get("entry") if isinstance(data.get("entry"), dict) else {}
+    return {
+        "initial_scenario": _text(supplied.get("initial_scenario") or data.get("scenario")),
+        "first_message": _text(supplied.get("first_message") or data.get("first_mes")),
+        "example_dialogue": _text(supplied.get("example_dialogue") or data.get("mes_example")),
+    }
+
+
+def canonical_performance(data: dict) -> dict:
+    data = data if isinstance(data, dict) else {}
+    supplied = data.get("performance") if isinstance(data.get("performance"), dict) else {}
+    return {
+        "system_prompt": _text(supplied.get("system_prompt") or data.get("system_prompt")),
+        "post_history_instructions": _text(
+            supplied.get("post_history_instructions") or data.get("post_history_instructions")),
+    }
+
+
 def normalize_card(card_obj: dict) -> dict:
     """V1/V2/V3 → tavern 内部统一形态。保留 extensions + 原始 data。"""
     data = card_obj.get("data") if isinstance(card_obj.get("data"), dict) else card_obj
@@ -100,6 +316,9 @@ def normalize_card(card_obj: dict) -> dict:
     if isinstance(data.get("character_book"), dict):
         out["character_book"] = data["character_book"]
     out["extensions"] = data.get("extensions") or {}  # 铁律：不丢未知键
+    out["profile"] = canonical_profile(data)
+    out["entry"] = canonical_entry(data)
+    out["performance"] = canonical_performance(data)
     cid = "card_" + hashlib.sha1(
         (out["name"] + "|" + out["description"][:200]).encode("utf-8")
     ).hexdigest()[:12]

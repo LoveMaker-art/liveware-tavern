@@ -45,6 +45,12 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn("skill/SOUL.md", names)
         self.assertEqual(set(manifest["managed_files"]), names)
 
+    def test_persona_profile_has_accessible_detail_entry(self):
+        app = (ROOT / "skill/reader/app.js").read_text(encoding="utf-8")
+        self.assertIn('data-persona-detail="1"', app)
+        self.assertIn('role="button"', app)
+        self.assertIn("openPersonaDetailSheet", app)
+
 
 if __name__ == "__main__":
     unittest.main()

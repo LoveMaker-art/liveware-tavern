@@ -116,14 +116,21 @@ class StoryCompressionTests(unittest.TestCase):
         production = self.production("prod_edit_guard")
         server.save_production(production)
         signature = server._story_prefix_signature(production["story"], 15)
+        cast_state = server._ensure_runtime_cast(production)
+        expected_cast_revision = int(cast_state.get("revision") or 0)
+        next_cast = dict(cast_state)
+        next_cast["applied_turn"] = 15
+        next_cast["revision"] = expected_cast_revision + 1
         production["story"][2]["text"] = "Edited after compression started."
         server.save_production(production)
 
         result = server._commit_story_state_batch(
-            production["id"], {"facts": ["stale"], "turns": 15}, 15, signature)
+            production["id"], {"facts": ["stale"], "turns": 15}, next_cast,
+            15, signature, expected_cast_revision)
 
         self.assertIsNone(result)
-        self.assertFalse(server.load_production(production["id"]).get("story_state"))
+        self.assertFalse(server._story_state_has_memory(
+            server.load_production(production["id"]).get("story_state")))
 
     def test_foreground_story_commit_preserves_newer_background_ledger(self):
         production = self.production("prod_foreground_merge", turns=16)
@@ -131,9 +138,14 @@ class StoryCompressionTests(unittest.TestCase):
         foreground = server.load_production(production["id"])
         expected_story_signature = server._story_content_signature(foreground["story"])
         prefix_signature = server._story_prefix_signature(foreground["story"], 15)
+        cast_state = server._ensure_runtime_cast(foreground)
+        expected_cast_revision = int(cast_state.get("revision") or 0)
+        next_cast = dict(cast_state)
+        next_cast["applied_turn"] = 15
+        next_cast["revision"] = expected_cast_revision + 1
         committed = server._commit_story_state_batch(
             production["id"], {"facts": ["Committed memory."], "turns": 15},
-            15, prefix_signature)
+            next_cast, 15, prefix_signature, expected_cast_revision)
         self.assertIsNotNone(committed)
 
         foreground["story"].extend((
@@ -232,7 +244,7 @@ class StoryCompressionTests(unittest.TestCase):
             if index:
                 self.assertEqual(start, segments[index - 1][1] + 1)
 
-    def test_all_story_ledger_fields_are_injected(self):
+    def test_plot_ledger_fields_are_injected_and_cast_fields_are_excluded(self):
         state = {
             "timeline": ["timeline"],
             "facts": ["fact"],
@@ -240,7 +252,7 @@ class StoryCompressionTests(unittest.TestCase):
             "relationships": ["relationship"],
             "character_state": {"Character": ["state"]},
             "user_state": ["user state"],
-            "scene_anchor": ["scene"],
+            "scene": {"time": "scene time", "place": "scene place"},
             "objects": ["object"],
             "secrets": ["secret"],
             "style_notes": ["style"],
@@ -249,9 +261,67 @@ class StoryCompressionTests(unittest.TestCase):
 
         block = actor._story_state_block(state, "en")
 
-        for value in ("timeline", "fact", "thread", "relationship", "state",
-                      "user state", "scene", "object", "secret", "style"):
+        for value in ("timeline", "fact", "thread", "scene time", "scene place",
+                      "object", "secret", "style"):
             self.assertIn(value, block)
+        for value in ("relationship", "user state"):
+            self.assertNotIn(value, block)
+
+    def test_runtime_cast_applies_only_evidence_backed_durable_changes(self):
+        previous = {
+            "schema_version": 3,
+            "applied_turn": 0,
+            "revision": 2,
+            "characters": [server._runtime_character({
+                "id": "card_a",
+                "name": "A",
+                "description": "Original identity.",
+            })],
+            "relationships": [],
+        }
+        raw = {
+            "character_changes": {
+                "card_a": {
+                    "profile": {"identity": {"occupation": "Captain"}},
+                    "persistent_status": {"life_status": "Active"},
+                    "evidence": [{
+                        "turn": 3,
+                        "fact": "A formally accepted the captaincy.",
+                        "reason": "occupation and life_status changed durably.",
+                    }],
+                },
+            },
+            "user_changes": {},
+            "relationship_changes": [],
+        }
+
+        result = server._normalize_runtime_cast_result(raw, previous, 1, 15)
+
+        self.assertEqual(result["characters"][0]["profile"]["identity"]["occupation"], "Captain")
+        self.assertEqual(result["characters"][0]["persistent_status"]["life_status"], "Active")
+        self.assertEqual(result["applied_turn"], 15)
+
+    def test_runtime_cast_ignores_profile_change_without_evidence(self):
+        previous = {
+            "schema_version": 3,
+            "applied_turn": 0,
+            "revision": 1,
+            "characters": [server._runtime_character({
+                "id": "card_a",
+                "name": "A",
+                "description": "Original identity.",
+            })],
+            "relationships": [],
+        }
+        raw = {
+            "character_changes": {
+                "card_a": {"profile": {"identity": {"occupation": "Captain"}}},
+            },
+        }
+
+        result = server._normalize_runtime_cast_result(raw, previous, 1, 15)
+
+        self.assertEqual(result["characters"][0]["profile"]["identity"]["occupation"], "")
 
 
 if __name__ == "__main__":

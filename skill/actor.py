@@ -11,6 +11,7 @@ LLM client 抄 clawchat-localagent/probe/probe_toolcall.py 的 chat()：纯 stdl
 POST {base}/chat/completions。模型 creds 只在 server 进程的 env，页面永不见。
 """
 import hashlib
+import html
 import json
 import os
 import re
@@ -42,6 +43,7 @@ MODEL_BASE = _load_model_base()
 MODEL_NAME = os.environ.get("TAVERN_MODEL", "deepseek-v4-flash")
 MODEL_TEMP = float(os.environ.get("TAVERN_MODEL_TEMP", "0.85"))
 ACTOR_MAX_TOKENS = int(os.environ.get('TAVERN_ACTOR_MAX_TOKENS', '2000'))
+# 上下文预算(字符):长局只喂最新尾巴+开场,别每回合发整条 story 撞模型上限。
 # 世界书扫描深度(往回看几条命中关键词)。
 LORE_LOOKBACK = int(os.environ.get("TAVERN_LORE_LOOKBACK", "6"))
 # 世界书注入预算(字符):防止大型 lorebook 把角色卡/剧情挤出上下文。
@@ -159,7 +161,9 @@ def _lore_extra_text(scene_state=None, story_state=None, turn_plan=None) -> str:
                 parts.append(x)
 
     add_obj(scene_state)
-    add_obj(story_state)
+    if isinstance(story_state, dict):
+        add_obj({key: story_state.get(key) for key in
+                 ("timeline", "facts", "open_threads", "objects", "secrets", "scene", "style_notes")})
     add_obj(turn_plan)
     return " ".join(parts)
 
@@ -258,8 +262,7 @@ def _fit_history(story: list, covered_turns: int = 0) -> list:
 
 def _story_state_has_memory(story_state: dict) -> bool:
     return isinstance(story_state, dict) and any(story_state.get(key) for key in (
-        "timeline", "facts", "open_threads", "relationships", "character_state",
-        "user_state", "scene_anchor", "objects", "secrets", "style_notes",
+        "timeline", "facts", "open_threads", "objects", "secrets", "style_notes",
     ))
 
 
@@ -383,22 +386,180 @@ def _role_blocks(cards: list, response_language: str = "zh") -> str:
     en = _language_code(response_language) == "en"
     blocks = []
     for i, c in enumerate(cards, 1):
-        system_title = "Character-specific instructions" if en else "角色专属提示"
-        example_title = "Dialogue examples (imitate voice and rhythm, never copy content)" if en else "示例对白（仿其语气、句式、节奏，别照抄内容）"
-        sysprompt = (f"\n### {system_title}\n" + c.get("system_prompt", "")) if c.get("system_prompt") else ""
-        example = (f"\n### {example_title}\n" + c.get("mes_example", "")) if c.get("mes_example") else ""
-        role_title = f"Character {i}" if en else f"角色 {i}"
-        personality_title = "Personality" if en else "性格"
-        scenario_title = "Scene connection" if en else "场景关联"
-        blocks.append(f"""### {role_title}: {c.get('name','')}
-{c.get('description','')}
+        profile = c.get("profile") if isinstance(c.get("profile"), dict) else {}
+        identity = profile.get("identity") if isinstance(profile.get("identity"), dict) else {}
+        appearance = profile.get("appearance") if isinstance(profile.get("appearance"), dict) else {}
+        personality = profile.get("personality") if isinstance(profile.get("personality"), dict) else {}
+        expression = profile.get("expression") if isinstance(profile.get("expression"), dict) else {}
+        capabilities = profile.get("capabilities") if isinstance(profile.get("capabilities"), dict) else {}
+        background = profile.get("background") if isinstance(profile.get("background"), dict) else {}
+        entry = c.get("entry") if isinstance(c.get("entry"), dict) else {}
+        performance = c.get("performance") if isinstance(c.get("performance"), dict) else {}
+        persistent = c.get("persistent_status") if isinstance(c.get("persistent_status"), dict) else {}
 
-{personality_title}:
-{c.get('personality','')}
+        def values(raw):
+            vals = raw if isinstance(raw, list) else ([raw] if raw else [])
+            return [str(value).strip() for value in vals if str(value).strip()]
 
-{scenario_title}:
-{c.get('scenario','')}{sysprompt}{example}""".strip())
+        def line(label, raw):
+            vals = values(raw)
+            safe_values = [html.escape(value, quote=False) for value in vals]
+            return (f"- {label}: " if en else f"- {label}：") + "; ".join(safe_values) if vals else ""
+
+        def section(tag, rows):
+            rows = [row for row in rows if row]
+            return (f"\n<{tag}>\n" + "\n".join(rows) + f"\n</{tag}>") if rows else ""
+
+        sysprompt_value = performance.get("system_prompt") or c.get("system_prompt", "")
+        example_value = entry.get("example_dialogue") or c.get("mes_example", "")
+        sysprompt = section("character_instructions", [html.escape(str(sysprompt_value), quote=False)]) if sysprompt_value else ""
+        example = section("dialogue_examples", [html.escape(str(example_value), quote=False)]) if example_value else ""
+        identity_txt = section("identity", [
+            line("Name" if en else "姓名", identity.get("name") or c.get("name")),
+            line("Aliases" if en else "别名", identity.get("aliases")),
+            line("Description" if en else "人物简介", identity.get("description") or c.get("description")),
+            line("Gender" if en else "性别", identity.get("gender")),
+            line("Age" if en else "年龄", identity.get("age")),
+            line("Species" if en else "种族", identity.get("species")),
+            line("Occupation" if en else "职业身份", identity.get("occupation")),
+            line("Affiliations" if en else "所属组织", identity.get("affiliations")),
+            line("Story role" if en else "故事定位", identity.get("story_role")),
+        ])
+        traits = values(personality.get("traits"))
+        personality_txt = section("personality", [
+            line("Summary" if en else "概述", (personality.get("summary") or c.get("personality")) if not traits else ""),
+            line("Traits" if en else "特质", personality.get("traits")),
+            line("Values" if en else "价值观", personality.get("values")),
+            line("Core goal" if en else "核心目标", personality.get("motivation")),
+            line("Fears" if en else "恐惧", personality.get("fears")),
+            line("Boundaries" if en else "底线", personality.get("boundaries")),
+        ])
+        appearance_txt = section("appearance", [
+            line("Summary" if en else "概述", appearance.get("summary")),
+            line("Features" if en else "特征", appearance.get("features")),
+            line("Attire" if en else "着装", appearance.get("attire")),
+        ])
+        expression_txt = section("expression", [
+            line("Speech style" if en else "说话方式", expression.get("speech_style")),
+            line("Habits" if en else "习惯", expression.get("habits")),
+            line("Mannerisms" if en else "动作特征", expression.get("mannerisms")),
+        ])
+        capability_txt = section("capabilities", [
+            line("Skills" if en else "技能", capabilities.get("skills")),
+            line("Powers" if en else "特殊能力", capabilities.get("powers")),
+            line("Limitations" if en else "限制", capabilities.get("limitations")),
+        ])
+        background_txt = section("background", [
+            line("Summary" if en else "经历概述", background.get("summary")),
+            line("Key history" if en else "关键经历", background.get("key_history")),
+        ])
+        persistent_txt = section("current_status", [
+            line("Life status" if en else "生命状态", persistent.get("life_status")),
+            line("Physical condition" if en else "身体状况", persistent.get("physical_condition")),
+        ])
+        cid = html.escape(str(c.get("id") or ""), quote=True)
+        cname = html.escape(str(c.get("name") or identity.get("name") or ""), quote=True)
+        content = (identity_txt + appearance_txt + personality_txt + expression_txt +
+                   capability_txt + background_txt + persistent_txt + sysprompt + example).strip()
+        blocks.append(f'<character id="{cid}" name="{cname}">\n{content}\n</character>')
     return "\n\n".join(blocks)
+
+
+def user_character_block(persona: dict, response_language: str = "zh") -> str:
+    """Render the user character as structured context without performance cues."""
+    if not isinstance(persona, dict) or not (persona.get("name") or persona.get("profile")):
+        return ""
+    en = _language_code(response_language) == "en"
+    profile = persona.get("profile") if isinstance(persona.get("profile"), dict) else {}
+    identity = profile.get("identity") if isinstance(profile.get("identity"), dict) else {}
+    appearance = profile.get("appearance") if isinstance(profile.get("appearance"), dict) else {}
+    personality = profile.get("personality") if isinstance(profile.get("personality"), dict) else {}
+    capabilities = profile.get("capabilities") if isinstance(profile.get("capabilities"), dict) else {}
+    background = profile.get("background") if isinstance(profile.get("background"), dict) else {}
+    status = persona.get("persistent_status") if isinstance(persona.get("persistent_status"), dict) else {}
+
+    def values(raw):
+        vals = raw if isinstance(raw, list) else ([raw] if raw else [])
+        return [str(value).strip() for value in vals if str(value).strip()]
+
+    def line(label, raw):
+        vals = values(raw)
+        return (f"- {label}: " if en else f"- {label}：") + "; ".join(
+            html.escape(value, quote=False) for value in vals) if vals else ""
+
+    def section(tag, rows):
+        rows = [row for row in rows if row]
+        return (f"<{tag}>\n" + "\n".join(rows) + f"\n</{tag}>") if rows else ""
+
+    traits = values(personality.get("traits"))
+    sections = [
+        section("identity", [
+            line("Name" if en else "姓名", identity.get("name") or persona.get("name")),
+            line("Aliases" if en else "别名", identity.get("aliases")),
+            line("Description" if en else "人物简介", identity.get("description") or persona.get("description")),
+            line("Gender" if en else "性别", identity.get("gender")),
+            line("Age" if en else "年龄", identity.get("age")),
+            line("Species" if en else "种族", identity.get("species")),
+            line("Occupation" if en else "职业身份", identity.get("occupation")),
+            line("Affiliations" if en else "所属组织", identity.get("affiliations")),
+            line("Story role" if en else "故事定位", identity.get("story_role")),
+        ]),
+        section("appearance", [
+            line("Summary" if en else "概述", appearance.get("summary")),
+            line("Features" if en else "特征", appearance.get("features")),
+            line("Attire" if en else "着装", appearance.get("attire")),
+        ]),
+        section("personality", [
+            line("Summary" if en else "概述", personality.get("summary") if not traits else ""),
+            line("Traits" if en else "特质", personality.get("traits")),
+            line("Values" if en else "价值观", personality.get("values")),
+            line("Core goal" if en else "核心目标", personality.get("motivation")),
+            line("Fears" if en else "恐惧", personality.get("fears")),
+            line("Boundaries" if en else "底线", personality.get("boundaries")),
+        ]),
+        section("capabilities", [
+            line("Skills" if en else "技能", capabilities.get("skills")),
+            line("Powers" if en else "特殊能力", capabilities.get("powers")),
+            line("Limitations" if en else "限制", capabilities.get("limitations")),
+        ]),
+        section("background", [
+            line("Summary" if en else "经历概述", background.get("summary")),
+            line("Key history" if en else "关键经历", background.get("key_history")),
+        ]),
+        section("current_status", [
+            line("Life status" if en else "生命状态", status.get("life_status")),
+            line("Physical condition" if en else "身体状况", status.get("physical_condition")),
+        ]),
+    ]
+    return "\n".join(section_text for section_text in sections if section_text)
+
+
+def _relationships_block(cards: list, response_language: str = "zh") -> str:
+    """Render each canonical relationship edge once for the whole request."""
+    en = _language_code(response_language) == "en"
+    seen = set()
+    rows = []
+    for card in cards:
+        source_id = str(card.get("id") or "")
+        source_name = html.escape(str(card.get("name") or ("Character" if en else "角色")), quote=False)
+        details = card.get("relationship_details") if isinstance(card.get("relationship_details"), list) else []
+        for relation in details:
+            if not isinstance(relation, dict):
+                continue
+            target_id = str(relation.get("target_id") or "")
+            relation_id = str(relation.get("id") or "")
+            edge_key = relation_id or "|".join(sorted((source_id, target_id)))
+            if not edge_key or edge_key in seen:
+                continue
+            seen.add(edge_key)
+            target_name = html.escape(str(relation.get("target_name") or target_id or ("User" if en else "用户")), quote=False)
+            description = str(relation.get("description") or relation.get("type") or "").strip()
+            legacy_attitude = str(relation.get("attitude") or "").strip()
+            if legacy_attitude and legacy_attitude not in description:
+                description += (", " if en else "，") + legacy_attitude
+            if description:
+                rows.append(f"- {source_name} ↔ {target_name}：" + html.escape(description, quote=False))
+    return "\n".join(rows)
 
 def _story_state_block(story_state: dict, response_language: str = "zh") -> str:
     if not isinstance(story_state, dict):
@@ -406,46 +567,57 @@ def _story_state_block(story_state: dict, response_language: str = "zh") -> str:
     en = _language_code(response_language) == "en"
     parts = []
 
-    labels = (
-        (
-            ("Timeline", "timeline"),
-            ("Established facts", "facts"),
-            ("Open threads", "open_threads"),
-            ("Relationship changes", "relationships"),
-            ("User state", "user_state"),
-            ("Scene anchors", "scene_anchor"),
-            ("Important objects", "objects"),
-            ("Secrets", "secrets"),
-            ("Style continuity", "style_notes"),
-        ) if en else (
-            ("时间线", "timeline"),
-            ("已发生事实", "facts"),
-            ("未解决线索", "open_threads"),
-            ("关系变化", "relationships"),
-            ("用户状态", "user_state"),
-            ("场景锚点", "scene_anchor"),
-            ("关键物品", "objects"),
-            ("秘密信息", "secrets"),
-            ("风格延续", "style_notes"),
-        )
-    )
-    for title, key in labels:
+    def simple(title, key):
         vals = [str(x).strip() for x in (story_state.get(key) or []) if str(x).strip()]
         if vals:
             parts.append(title + "：\n" + "\n".join("- " + v for v in vals))
 
-    character_state = story_state.get("character_state") or {}
-    if isinstance(character_state, dict) and character_state:
-        rows = []
-        for name, values in character_state.items():
-            if isinstance(values, list):
-                details = [str(x).strip() for x in values if str(x).strip()]
-            else:
-                details = [str(values).strip()] if str(values).strip() else []
-            if details:
-                rows.append(f"### {name}\n" + "\n".join("- " + value for value in details))
-        if rows:
-            parts.append(("Character states" if en else "角色状态") + "：\n" + "\n".join(rows))
+    simple("Timeline" if en else "时间线", "timeline")
+    facts = []
+    for item in story_state.get("facts") or []:
+        raw = item if isinstance(item, dict) else {"content": item}
+        content = str(raw.get("content") or "").strip()
+        known = [str(x).strip() for x in raw.get("known_by") or [] if str(x).strip()]
+        if content:
+            facts.append(content + ((" [known by: " if en else "〔知情者：") + "、".join(known) + (']' if en else '〕') if known else ""))
+    if facts:
+        parts.append(("Established facts" if en else "已发生事实") + "：\n" + "\n".join("- " + x for x in facts))
+    simple("Open threads" if en else "未解决线索", "open_threads")
+    objects = []
+    for item in story_state.get("objects") or []:
+        raw = item if isinstance(item, dict) else {"name": item}
+        name = str(raw.get("name") or "").strip()
+        details = [str(raw.get(key) or "").strip() for key in ("status", "holder", "location")]
+        details = [x for x in details if x]
+        if name:
+            objects.append(name + ("（" + "；".join(details) + "）" if details else ""))
+    if objects:
+        parts.append(("Important objects" if en else "关键物品") + "：\n" + "\n".join("- " + x for x in objects))
+    secrets = []
+    for item in story_state.get("secrets") or []:
+        raw = item if isinstance(item, dict) else {"content": item}
+        content = str(raw.get("content") or "").strip()
+        known = [str(x).strip() for x in raw.get("known_by") or [] if str(x).strip()]
+        if content:
+            secrets.append(content + ((" [known by: " if en else "〔知情者：") + "、".join(known) + (']' if en else '〕') if known else ""))
+    if secrets:
+        parts.append(("Secrets" if en else "秘密信息") + "：\n" + "\n".join("- " + x for x in secrets))
+    scene = story_state.get("scene") if isinstance(story_state.get("scene"), dict) else {}
+    scene_rows = []
+    if scene.get("time"):
+        scene_rows.append(("Time: " if en else "时间：") + str(scene["time"]))
+    if scene.get("place"):
+        scene_rows.append(("Place: " if en else "地点：") + str(scene["place"]))
+    for participant in scene.get("participants") or []:
+        if not isinstance(participant, dict):
+            continue
+        details = [str(participant.get(key) or "").strip() for key in ("location", "activity", "condition")]
+        details = [x for x in details if x]
+        if participant.get("character_id"):
+            scene_rows.append(str(participant["character_id"]) + ("：" + "；".join(details) if details else ""))
+    if scene_rows:
+        parts.append(("Checkpoint scene" if en else "阶段场景") + "：\n" + "\n".join("- " + x for x in scene_rows))
+    simple("Style continuity" if en else "风格延续", "style_notes")
 
     if not parts:
         return ""
@@ -467,9 +639,18 @@ def _scene_state_block(scene_state: dict, response_language: str = "zh") -> str:
             val = str(val or "").strip()
         return f"- {title}：{val}" if val else ""
 
-    labels = (("Location", "location"), ("Time", "time"), ("Mood", "mood"), ("Current focus", "current_focus"), ("Present characters", "present_characters"), ("Nearby / available characters", "nearby_characters"), ("Offstage characters", "hidden_characters"), ("Open threads", "open_threads")) if en else (("地点", "location"), ("时间", "time"), ("氛围", "mood"), ("当前焦点", "current_focus"), ("在场角色", "present_characters"), ("附近/可引入角色", "nearby_characters"), ("暂不出场角色", "hidden_characters"), ("未解决线索", "open_threads"))
+    labels = (("Location", "location"), ("Time", "time"), ("Mood", "mood"), ("Current focus", "current_focus"), ("Open threads", "open_threads")) if en else (("地点", "location"), ("时间", "time"), ("氛围", "mood"), ("当前焦点", "current_focus"), ("未解决线索", "open_threads"))
     rows = [line(title, key) for title, key in labels]
     rows = [r for r in rows if r]
+    for participant in scene_state.get("participants") or []:
+        if not isinstance(participant, dict) or not participant.get("character_id"):
+            continue
+        details = [str(participant.get(key) or "").strip()
+                   for key in ("location", "activity", "condition")]
+        details = [value for value in details if value]
+        if details:
+            rows.append(("- Participant " if en else "- 场中角色 ") +
+                        str(participant["character_id"]) + "：" + "；".join(details))
     return ("## Current scene\n" if en else "## 当前场景\n") + "\n".join(rows) if rows else ""
 
 
@@ -509,25 +690,42 @@ def _multi_character_rules_zh(names: str) -> str:
     )
 
 
-def _system_prompt_en(roles_txt: str, lore_txt: str, persona_txt: str,
+def _system_prompt_en(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
                       scene_state_txt: str, story_state_txt: str,
                       turn_plan_txt: str, multi_rule: str) -> str:
     return f"""# Task
 Write the next response by the active character or characters to the user's latest action in this fictional story.
 
 Use the character profiles, world lore, current scene, story state, turn plan, and conversation history below. Continue the story directly.
+Character profiles own identity, personality, abilities, and current status. The user character is context only: never write the user's actions, speech, thoughts, feelings, or decisions. The relationship graph is the sole source of character relationships. Story state and current scene own locations, activities, knowledge boundaries, and object custody.
 
-## Active characters
+<characters>
 {roles_txt}
+</characters>
 
-## World lore
-{lore_txt or '(None)'}{persona_txt}
+<relationship_graph>
+{relationships_txt or '(None)'}
+</relationship_graph>
 
-{scene_state_txt}
+<world_lore>
+{html.escape(lore_txt or '(None)', quote=False)}
+</world_lore>
 
-{story_state_txt}
+<user_character>
+{persona_txt or '(None)'}
+</user_character>
 
-{turn_plan_txt}
+<current_scene>
+{html.escape(scene_state_txt or '(None)', quote=False)}
+</current_scene>
+
+<story_state>
+{html.escape(story_state_txt or '(None)', quote=False)}
+</story_state>
+
+<turn_plan>
+{html.escape(turn_plan_txt or '(None)', quote=False)}
+</turn_plan>
 
 ## Output policy
 {format_rules_en()}{multi_rule}
@@ -537,7 +735,7 @@ Use the character profiles, world lore, current scene, story state, turn plan, a
 """
 
 
-def _system_prompt_zh(roles_txt: str, lore_txt: str, persona_txt: str,
+def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
                       scene_state_txt: str, story_state_txt: str,
                       turn_plan_txt: str, multi_rule: str) -> str:
     return f"""# 任务
@@ -552,18 +750,35 @@ def _system_prompt_zh(roles_txt: str, lore_txt: str, persona_txt: str,
 - 历史对话
 
 输出当前故事的下一段内容。
+角色档案只决定身份、性格、能力与当前状态；用户角色资料只作为上下文，不得替用户书写行动、对白、想法、感受或决定；人物关系图是角色关系的唯一来源；故事状态和当前场景决定位置、行动、认知边界与物品归属。
 
-## 登场角色
+<characters>
 {roles_txt}
+</characters>
 
-## 世界设定
-{lore_txt or '（无）'}{persona_txt}
+<relationship_graph>
+{relationships_txt or '（无）'}
+</relationship_graph>
 
-{scene_state_txt}
+<world_lore>
+{html.escape(lore_txt or '（无）', quote=False)}
+</world_lore>
 
-{story_state_txt}
+<user_character>
+{persona_txt or '（无）'}
+</user_character>
 
-{turn_plan_txt}
+<current_scene>
+{html.escape(scene_state_txt or '（无）', quote=False)}
+</current_scene>
+
+<story_state>
+{html.escape(story_state_txt or '（无）', quote=False)}
+</story_state>
+
+<turn_plan>
+{html.escape(turn_plan_txt or '（无）', quote=False)}
+</turn_plan>
 
 ## 输出规范
 {format_rules_zh()}{multi_rule}
@@ -584,14 +799,10 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
     lore_top = [e for e in lore if (e.get("position") or "") == "before_char"]
     lore_near = [e for e in lore if (e.get("position") or "") != "before_char"]
     lore_top_txt = "\n".join("- " + (e.get("content") or "") for e in lore_top)
-    persona_txt = ""
-    if persona:
-        if en:
-            persona_txt = f"\n\n## User persona ({persona.get('name','User')})\n{persona.get('description','')}"
-        else:
-            persona_txt = f"\n\n## 对手戏（你的搭档「{persona.get('name','我')}」）\n{persona.get('description','')}"
+    persona_txt = user_character_block(persona, lang)
 
     roles_txt = _role_blocks(cards, lang) or ("(No active characters configured)" if en else "（未设置登场角色）")
+    relationships_txt = _relationships_block(cards, lang)
     scene_state_txt = _scene_state_block(scene_state or {}, lang)
     effective_story_state = _validated_story_state(story_state, story)
     story_state_txt = _story_state_block(effective_story_state or {}, lang)
@@ -602,9 +813,9 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
         multi_rule = (_multi_character_rules_en(names) if en
                       else _multi_character_rules_zh(names))
 
-    sys = (_system_prompt_en(roles_txt, lore_top_txt, persona_txt, scene_state_txt,
+    sys = (_system_prompt_en(roles_txt, relationships_txt, lore_top_txt, persona_txt, scene_state_txt,
                              story_state_txt, turn_plan_txt, multi_rule) if en else
-           _system_prompt_zh(roles_txt, lore_top_txt, persona_txt, scene_state_txt,
+           _system_prompt_zh(roles_txt, relationships_txt, lore_top_txt, persona_txt, scene_state_txt,
                              story_state_txt, turn_plan_txt, multi_rule))
     msgs = [{"role": "system", "content": sys}]
     covered_turns = int((effective_story_state or {}).get("turns") or 0)
@@ -626,7 +837,8 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
                      "content": (("### Relevant world lore for this moment (integrate naturally; do not list it)\n" if en else "### 此刻相关的世界设定（自然融入，别罗列）\n") + near_txt)})
     if note:
         msgs.append({"role": "system", "content": ("[Director note for this turn] " if en else "〔导演提示，本回合照此调整〕") + note})
-    post = primary.get("post_history_instructions")
+    primary_performance = primary.get("performance") if isinstance(primary.get("performance"), dict) else {}
+    post = primary_performance.get("post_history_instructions") or primary.get("post_history_instructions")
     final_parts = []
     if post:
         final_parts.append(post)

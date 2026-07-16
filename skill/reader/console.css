@@ -84,6 +84,11 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .pFoldBody{overflow:hidden;transition:max-height .22s ease, opacity .18s, margin .22s}
 .pFoldBody.folded{max-height:0!important;opacity:0;margin-top:0;margin-bottom:0}
 /* persona 小节:我的角色卡——名+描述+编辑区 */
+.personaProfileCard{position:relative;padding:4px 24px 4px 0;cursor:pointer;outline:none}
+.personaProfileCard::after{content:"›";position:absolute;right:2px;top:50%;transform:translateY(-50%);
+  color:var(--muted);font-size:20px;line-height:1;transition:color .15s,transform .15s}
+.personaProfileCard:hover::after{color:var(--brandink);transform:translate(2px,-50%)}
+.personaProfileCard:focus-visible{box-shadow:inset 2px 0 0 var(--brand);padding-left:8px}
 .pname{font-weight:600;font-size:14px;margin:0 0 2px}
 .pdesc{font-size:12.5px;color:var(--ink2);line-height:1.55;margin:0}
 .personaEdit{display:flex;flex-direction:column;gap:7px;margin-top:8px}
@@ -296,6 +301,13 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .sendbtn.empty:active{transform:none}
 
 .cname{font-weight:600;font-size:15px;margin:0 0 4px}
+.castProfileCard{padding:10px 0;cursor:pointer;outline:none}
+.castProfileCard+.castProfileCard{border-top:1px solid var(--line)}
+.castProfileCard:focus-visible{box-shadow:inset 2px 0 0 var(--brand);padding-left:8px}
+.castIdentity{margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.castTraits{margin:5px 0 0;font-size:11.5px;line-height:1.45;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.castRelations{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:7px;margin:8px 0 0;font-size:11.5px;line-height:1.45;color:var(--ink2)}
+.castRelations span{color:var(--muted)}
 /* 来源/出处(Task 2):有 creator 显作者、agent 原创显「Agent 创作」 */
 .prov{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);margin:0 0 7px}
 .prov svg{flex:0 0 auto;opacity:.85}
@@ -543,13 +555,58 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .loreSheetActs button:not(.primary){background:transparent;color:var(--ink2)}
 .loreSheetActs button:not(.primary):hover{background:var(--bg)}
 .loreSheet.saving .loreText,.loreSheet.saving button{opacity:.62;pointer-events:none}
-.editEntitySheet{max-width:460px;max-height:86vh;padding:0;overflow:hidden}
-.editEntityBody{max-height:calc(86vh - 72px);padding:14px 18px 18px;display:grid;gap:12px;overflow-y:auto}
+.editEntitySheet{max-width:460px;height:min(720px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);
+  padding:0;overflow:hidden;display:flex;flex-direction:column}
+.editEntityTabs{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin:0 18px 8px;padding:3px;
+  border:1px solid var(--line);border-radius:var(--radius2);background:var(--bg);flex:0 0 auto}
+.editEntityTabs button{height:34px;border:0;border-radius:6px;background:transparent;color:var(--muted);
+  font:inherit;font-size:12.5px;cursor:pointer}
+.editEntityTabs button.active{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.editEntityBody{flex:1 1 auto;min-height:0;padding:8px 18px 18px;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;touch-action:pan-y}
+.editEntityPane{display:none;gap:12px}
+.editEntityPane.active{display:grid}
+.editEntityFooter{flex:0 0 auto;padding:12px 18px calc(14px + env(safe-area-inset-bottom,0px));
+  border-top:1px solid var(--line);background:var(--surface)}
+.formSectionTitle{margin-top:5px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;font-weight:700;color:var(--ink)}
+.formSectionTitle:first-child{margin-top:0;padding-top:0;border-top:0}
+.readOnlyRelations{display:grid;gap:4px;padding:9px 10px;border:1px solid var(--line);border-radius:var(--radius2);background:var(--bg)}
+.readOnlyRelations p{margin:0;color:var(--ink2);font-size:12.5px;line-height:1.5}
+.relationEditor{display:grid;gap:10px}
+.relationEditRow{display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:8px;
+  padding:10px;border:1px solid var(--line);border-radius:var(--radius2);background:var(--bg);align-items:end}
+.relationDescription{grid-column:1/3}
+.relationDescription textarea{min-height:62px}
+.relationRemove{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border:0;
+  border-radius:var(--radius2);background:transparent;color:var(--muted);cursor:pointer}
+.relationRemove:hover,.relationRemove:active{background:var(--surface);color:var(--danger)}
+.relationAdd{justify-self:start;margin-top:0}
+.castDetailSheet{max-width:480px;height:min(720px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);
+  padding:0;overflow:hidden;display:flex;flex-direction:column}
+.castDetailBody{flex:1 1 auto;min-height:0;display:grid;align-content:start;gap:20px;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;touch-action:pan-y;padding:8px 18px 24px}
+.castDetailGroup{display:grid;gap:10px}
+.castDetailGroup+.castDetailGroup{padding-top:16px;border-top:1px solid var(--line)}
+.castDetailGroup h3{margin:0;font-size:13px;color:var(--ink);font-weight:700}
+.castDetailRow{display:grid;grid-template-columns:92px minmax(0,1fr);gap:12px;align-items:start}
+.castDetailRow>span{font-size:11.5px;color:var(--muted);line-height:1.55}
+.castDetailRow>p{margin:0;font-size:13px;color:var(--ink2);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.stateEditorGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .fieldLabel{display:grid;gap:6px;color:var(--muted);font-size:12px;line-height:1.4}
 .formControl{box-sizing:border-box;width:100%;border:1px solid var(--line2);border-radius:var(--radius2);background:var(--bg);color:var(--ink);font:inherit;font-size:13px;padding:9px 10px;outline:none}
 textarea.formControl{min-height:74px;resize:vertical;line-height:1.55}
 .formControl:focus{border-color:var(--brand)}
 .editEntitySheet.saving .formControl,.editEntitySheet.saving button{opacity:.62;pointer-events:none}
+@media(max-width:560px){
+  .modal{padding:10px}
+  .editEntitySheet,.castDetailSheet{height:calc(100dvh - 20px);max-height:calc(100dvh - 20px)}
+  .stateEditorGrid{grid-template-columns:1fr}
+  .relationEditRow{grid-template-columns:minmax(0,1fr) 34px}
+  .relationEditRow>.fieldLabel:first-child{grid-column:1/2}
+  .relationDescription{grid-column:1/3}
+  .relationRemove{grid-column:2;grid-row:1}
+  .castDetailRow{grid-template-columns:78px minmax(0,1fr)}
+}
 .modeSwitch{display:grid;grid-template-columns:1fr 1fr;padding:3px;border:1px solid var(--line2);border-radius:var(--radius2);background:var(--bg)}
 .modeSwitch button{height:34px;border:0;border-radius:6px;background:transparent;color:var(--muted);font:inherit;font-size:13px;cursor:pointer}
 .modeSwitch button.active{background:var(--brandtint2);color:var(--brandink);box-shadow:0 1px 2px rgba(0,0,0,.12)}

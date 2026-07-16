@@ -801,7 +801,12 @@ def _actor_host():
 
 
 def load_card(cid):
-    return _read(os.path.join(STATE, "cards", cid + ".json"))
+    card = _read(os.path.join(STATE, "cards", cid + ".json"))
+    if isinstance(card, dict):
+        card["profile"] = card_import.canonical_profile(card)
+        card["entry"] = card_import.canonical_entry(card)
+        card["performance"] = card_import.canonical_performance(card)
+    return card
 
 
 def load_worldbook(wid):
@@ -824,9 +829,21 @@ def _production_lock(pid):
 
 def save_production(p):
     with _production_lock(p["id"]):
-        record = dict(p)
-        record.pop("worldbooks", None)
+        record = _production_record(p)
         _write(os.path.join(STATE, "productions", p["id"] + ".json"), record)
+
+
+def _production_record(p):
+    """Strip hydrated projections before persisting a production."""
+    record = dict(p)
+    record.pop("worldbooks", None)
+    if isinstance(record.get("persona"), dict):
+        persona = dict(record["persona"])
+        persona.pop("persistent_status", None)
+        record["persona"] = persona
+    if isinstance(record.get("runtime_cast"), dict):
+        record.pop("cards", None)
+    return record
 
 
 def _story_content_signature(story):
@@ -868,8 +885,7 @@ def _commit_foreground_story(p, expected_story_signature):
         else:
             current["story_state"] = {}
 
-        record = dict(current)
-        record.pop("worldbooks", None)
+        record = _production_record(current)
         _write(os.path.join(STATE, "productions", pid + ".json"), record)
         p.clear()
         p.update(current)
@@ -890,8 +906,7 @@ def _merge_production_fields(pid, expected_story_revision=None, **fields):
         if expected_story_revision is not None and _story_revision(current) != expected_story_revision:
             return None
         current.update(fields)
-        record = dict(current)
-        record.pop("worldbooks", None)
+        record = _production_record(current)
         _write(os.path.join(STATE, "productions", pid + ".json"), record)
         return current
 
@@ -1109,7 +1124,15 @@ def _materialize_worldbook_ids(pid, source_ids):
 
 def _library_cards():
     # 角色卡库：所有可复用角色模板。加入/移出某个世界不会删除这里的卡。
-    return [c for c in _list("cards") if c]
+    cards = []
+    for raw in _list("cards"):
+        if not isinstance(raw, dict):
+            continue
+        raw["profile"] = card_import.canonical_profile(raw)
+        raw["entry"] = card_import.canonical_entry(raw)
+        raw["performance"] = card_import.canonical_performance(raw)
+        cards.append(raw)
+    return cards
 
 
 def _library_worldbooks():
@@ -1163,6 +1186,9 @@ def _store_card(card, source=""):
     # 信息面板优先显 creator,无 creator 才回落 source(Task 2 角色卡出处)。
     if source:
         card["source"] = source
+    card["profile"] = card_import.canonical_profile(card)
+    card["entry"] = card_import.canonical_entry(card)
+    card["performance"] = card_import.canonical_performance(card)
     if str(card.get("source") or "").startswith("builtin:"):
         lang = (((card.get("extensions") or {}).get("tavern") or {}).get("language") or "zh")
         identity = app_identity()
@@ -1509,9 +1535,14 @@ def ev_attach_card(ev):
         ids.append(cid)
     p["card_ids"] = ids
     p.setdefault("card_id", ids[0])
-    session_cards = [c for c in (p.get("cards") or []) if isinstance(c, dict) and c.get("id") != cid]
-    session_cards.append(card)
-    p["cards"] = session_cards
+    runtime_cast = _ensure_runtime_cast(p)
+    characters = [c for c in runtime_cast.get("characters") or []
+                  if isinstance(c, dict) and c.get("id") != cid]
+    characters.append(_runtime_character(card))
+    runtime_cast["characters"] = characters
+    runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
+    runtime_cast["updated_at"] = int(time.time())
+    _hydrate_runtime_cards(p)
     wid = "wb_" + cid
     if load_worldbook(wid) and wid not in p.get("worldbook_ids", []):
         runtime_id = _clone_worldbook_for_production(p["id"], wid)
@@ -1528,16 +1559,68 @@ def ev_update_cast(ev):
     if not p:
         raise ValueError("production not found")
     cid = ev.get("card_id")
-    card = next((c for c in (p.get("cards") or []) if c.get("id") == cid), None)
+    runtime_cast = _ensure_runtime_cast(p)
+    card = next((c for c in (runtime_cast.get("characters") or []) if c.get("id") == cid), None)
     if not card:
         raise ValueError("character not found in current world")
-    fields = ("name", "description", "personality", "scenario")
-    for field in fields:
-        if field in ev:
-            card[field] = str(ev.get(field) or "").strip()
-    if not card.get("name"):
+    if "profile" in ev and isinstance(ev.get("profile"), dict):
+        merged_profile = json.loads(json.dumps(card.get("profile") or {}, ensure_ascii=False))
+        for section, values in ev["profile"].items():
+            if isinstance(values, dict):
+                merged_profile.setdefault(section, {}).update(values)
+        card["profile"] = card_import.canonical_profile({**card, "profile": merged_profile})
+    else:
+        fields = ("name", "description", "personality")
+        for field in fields:
+            if field in ev:
+                card[field] = str(ev.get(field) or "").strip()
+        card["profile"] = card_import.canonical_profile(card)
+    identity = card["profile"]["identity"]
+    card["name"] = identity.get("name") or ""
+    card["description"] = identity.get("description") or ""
+    card["personality"] = card["profile"]["personality"].get("summary") or ""
+    if "entry" in ev and isinstance(ev.get("entry"), dict):
+        merged_entry = dict(card.get("entry") or {})
+        merged_entry.update(ev["entry"])
+        card["entry"] = card_import.canonical_entry({**card, "entry": merged_entry})
+        card["scenario"] = card["entry"].get("initial_scenario") or ""
+    elif "scenario" in ev:
+        card["scenario"] = str(ev.get("scenario") or "").strip()
+        card["entry"] = card_import.canonical_entry(card)
+    if not card["name"]:
         raise ValueError("name is required")
+    if "persistent_status" in ev:
+        card["persistent_status"] = _normalize_persistent_status(ev.get("persistent_status") or {})
+        card["status_updated_turn"] = _world_turns(p.get("story") or [])
+    if "relationships" in ev and isinstance(ev.get("relationships"), list):
+        valid_targets = {str(c.get("id")) for c in (runtime_cast.get("characters") or []) if c.get("id")}
+        valid_targets.add("__user__")
+        kept = []
+        for relation in runtime_cast.get("relationships") or []:
+            participants = [str(x) for x in (relation.get("participants") or [])]
+            if cid not in participants:
+                kept.append(relation)
+                continue
+        incoming = []
+        current_turn = _world_turns(p.get("story") or [])
+        for raw in ev.get("relationships") or []:
+            if not isinstance(raw, dict):
+                continue
+            target = str(raw.get("target_id") or "")
+            description = _clip_memory_text(raw.get("description"), 300)
+            if not target or target == cid or target not in valid_targets or not description:
+                continue
+            incoming.append({
+                "participants": [cid, target],
+                "description": description,
+                "updated_turn": current_turn,
+            })
+        runtime_cast["relationships"] = _normalize_relationships(
+            kept + incoming, runtime_cast.get("characters") or [], p.get("persona") or {})
     card["updated_at"] = int(time.time())
+    runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
+    runtime_cast["updated_at"] = int(time.time())
+    _hydrate_runtime_cards(p)
     p["turn_plan"] = {}
     save_production(p)
     return {"production": p, "card": card}
@@ -1551,7 +1634,14 @@ def ev_detach_card(ev):
     ids = [x for x in _production_card_ids(p) if x != cid]
     p["card_ids"] = ids
     p["card_id"] = ids[0] if ids else None
-    p["cards"] = [c for c in (p.get("cards") or []) if isinstance(c, dict) and c.get("id") != cid]
+    runtime_cast = _ensure_runtime_cast(p)
+    runtime_cast["characters"] = [c for c in (runtime_cast.get("characters") or [])
+                                  if isinstance(c, dict) and c.get("id") != cid]
+    runtime_cast["relationships"] = [r for r in (runtime_cast.get("relationships") or [])
+                                     if cid not in (r.get("participants") or [])]
+    runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
+    runtime_cast["updated_at"] = int(time.time())
+    _hydrate_runtime_cards(p)
     source_wid = "wb_" + str(cid)
     kept_worldbook_ids = []
     for wid in p.get("worldbook_ids", []):
@@ -1601,6 +1691,13 @@ def ev_delete_card(ev):
             prod["card_ids"] = ids
             prod["card_id"] = ids[0] if ids else None
             prod["worldbook_ids"] = wids
+            runtime_cast = _ensure_runtime_cast(prod)
+            runtime_cast["characters"] = [c for c in (runtime_cast.get("characters") or [])
+                                          if c.get("id") != cid]
+            runtime_cast["relationships"] = [r for r in (runtime_cast.get("relationships") or [])
+                                             if cid not in (r.get("participants") or [])]
+            runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
+            _hydrate_runtime_cards(prod)
             save_production(prod)
             changed.append(prod["id"])
     return {"deleted": cid, "updated_productions": changed}
@@ -1757,16 +1854,423 @@ def _migrate_worldbook_storage():
     return migrated
 
 
+def _state_list(value, limit=12, max_len=180):
+    values = value if isinstance(value, list) else ([value] if value else [])
+    out = []
+    for item in values:
+        text = _clip_memory_text(item, max_len)
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _stable_memory_id(prefix, value):
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return prefix + "_" + hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _normalize_known_by(value, valid_ids=None):
+    values = value if isinstance(value, list) else ([value] if value else [])
+    out = []
+    for item in values:
+        cid = str(item or "").strip()
+        if cid and (not valid_ids or cid in valid_ids) and cid not in out:
+            out.append(cid)
+    return out[:24]
+
+
+def _normalize_fact_entry(value, valid_ids=None, secret=False):
+    raw = value if isinstance(value, dict) else {"content": value}
+    content = _clip_memory_text(raw.get("content") or raw.get("fact") or raw.get("summary"), 220)
+    if not content:
+        return None
+    known_by = _normalize_known_by(raw.get("known_by"), valid_ids)
+    return {
+        "id": str(raw.get("id") or _stable_memory_id("secret" if secret else "fact", content)),
+        "content": content,
+        "known_by": known_by,
+    }
+
+
+def _normalize_object_entry(value, valid_ids=None):
+    raw = value if isinstance(value, dict) else {"name": value}
+    name = _clip_memory_text(raw.get("name") or raw.get("content") or raw.get("summary"), 160)
+    if not name:
+        return None
+    holder = str(raw.get("holder") or "").strip()
+    if holder and valid_ids and holder not in valid_ids:
+        holder = ""
+    return {
+        "id": str(raw.get("id") or _stable_memory_id("object", name)),
+        "name": name,
+        "status": _clip_memory_text(raw.get("status"), 160),
+        "holder": holder,
+        "location": _clip_memory_text(raw.get("location"), 160),
+    }
+
+
+def _normalize_scene_participant(value, valid_ids=None):
+    raw = value if isinstance(value, dict) else {}
+    cid = str(raw.get("character_id") or raw.get("id") or "").strip()
+    if not cid or (valid_ids and cid not in valid_ids):
+        return None
+    return {
+        "character_id": cid,
+        "location": _clip_memory_text(raw.get("location"), 160),
+        "activity": _clip_memory_text(raw.get("activity") or raw.get("goal"), 180),
+        "condition": _clip_memory_text(raw.get("condition"), 160),
+    }
+
+
+def _normalize_ledger_scene(value, valid_ids=None):
+    raw = value if isinstance(value, dict) else {}
+    participants = []
+    seen = set()
+    for item in raw.get("participants") or []:
+        participant = _normalize_scene_participant(item, valid_ids)
+        if participant and participant["character_id"] not in seen:
+            seen.add(participant["character_id"])
+            participants.append(participant)
+    return {
+        "time": _clip_memory_text(raw.get("time"), 160),
+        "place": _clip_memory_text(raw.get("place") or raw.get("location"), 180),
+        "participants": participants[:24],
+    }
+
+
+def _migrate_legacy_story_context(state, characters):
+    """Move old per-card scene/knowledge state into the canonical story ledger."""
+    ledger = dict(state or {})
+    valid_ids = {str(c.get("id")) for c in characters if isinstance(c, dict) and c.get("id")}
+    valid_ids.add("__user__")
+    def entries(value):
+        return [value] if isinstance(value, (str, dict)) else list(value or [])
+
+    facts = []
+    for item in entries(ledger.get("facts")):
+        fact = _normalize_fact_entry(item, valid_ids)
+        if fact and fact["id"] not in {x["id"] for x in facts}:
+            facts.append(fact)
+    scene = _normalize_ledger_scene(ledger.get("scene"), valid_ids)
+    participants = {item["character_id"]: item for item in scene["participants"]}
+    for character in characters:
+        if not isinstance(character, dict):
+            continue
+        cid = str(character.get("id") or "")
+        old = character.get("state") if isinstance(character.get("state"), dict) else {}
+        if not cid:
+            continue
+        participant = participants.get(cid) or {
+            "character_id": cid, "location": "", "activity": "", "condition": ""}
+        participant["location"] = participant.get("location") or _clip_memory_text(old.get("location"), 160)
+        participant["activity"] = participant.get("activity") or _clip_memory_text(old.get("goal"), 180)
+        participant["condition"] = participant.get("condition") or _clip_memory_text(old.get("condition"), 160)
+        scene_notes = card_import.canonical_scene_notes(character)
+        if scene_notes and not participant["activity"]:
+            participant["activity"] = _clip_memory_text("；".join(scene_notes), 180)
+        if any(participant.get(key) for key in ("location", "activity", "condition")):
+            participants[cid] = participant
+        for memory in _state_list(old.get("knowledge"), 20, 220) + _state_list(old.get("notes"), 20, 220):
+            fact = _normalize_fact_entry({"content": memory, "known_by": [cid]}, valid_ids)
+            if fact and fact["id"] not in {x["id"] for x in facts}:
+                facts.append(fact)
+    scene["participants"] = list(participants.values())[:24]
+    ledger["scene"] = scene
+    ledger["facts"] = facts[:40]
+    objects = []
+    for item in entries(ledger.get("objects")):
+        obj = _normalize_object_entry(item, valid_ids)
+        if obj and obj["id"] not in {x["id"] for x in objects}:
+            objects.append(obj)
+    ledger["objects"] = objects[:24]
+    secrets = []
+    for item in entries(ledger.get("secrets")):
+        fact = _normalize_fact_entry(item, valid_ids, secret=True)
+        if fact and fact["id"] not in {x["id"] for x in secrets}:
+            secrets.append(fact)
+    ledger["secrets"] = secrets[:24]
+    return ledger
+
+
+def _normalize_persistent_status(value):
+    raw = value if isinstance(value, dict) else {}
+    identity_status = raw.get("identity_status")
+    if identity_status is None:
+        identity_status = "；".join(_state_list(raw.get("identity_changes"), 10, 180))
+    physical_condition = raw.get("physical_condition")
+    if physical_condition is None:
+        physical_condition = "；".join(_state_list(raw.get("long_term_conditions"), 10, 180))
+    return {
+        "life_status": _clip_memory_text(raw.get("life_status"), 80),
+        "identity_status": _clip_memory_text(identity_status, 600),
+        "physical_condition": _clip_memory_text(physical_condition, 600),
+    }
+
+
+def _canonical_profile_snapshot(value):
+    """Return one detached canonical profile suitable for per-world storage."""
+    raw = value if isinstance(value, dict) else {}
+    if any(key in raw for key in (
+            "identity", "appearance", "personality", "expression",
+            "capabilities", "background")):
+        raw = {"profile": raw}
+    return card_import.canonical_profile(raw)
+
+
+def _profile_has_content(profile):
+    return any(
+        value
+        for section in (profile or {}).values() if isinstance(section, dict)
+        for value in section.values()
+    )
+
+
+def _normalize_persona(value):
+    """Normalize the per-world user character without performance instructions."""
+    raw = json.loads(json.dumps(value or {}, ensure_ascii=False)) if isinstance(value, dict) else {}
+    profile = card_import.canonical_profile(raw)
+    name = profile["identity"].get("name") or _clip_memory_text(raw.get("name"), 160)
+    description = profile["identity"].get("description") or _clip_memory_text(raw.get("description"), 2500)
+    profile["identity"]["name"] = name
+    profile["identity"]["description"] = description
+    persona = {"name": name, "description": description, "profile": profile}
+    if raw.get("source_card_id"):
+        persona["source_card_id"] = str(raw.get("source_card_id"))
+    if isinstance(raw.get("persistent_status"), dict):
+        persona["persistent_status"] = _normalize_persistent_status(raw.get("persistent_status"))
+    return persona
+
+
+def _runtime_character(card, legacy_notes=None, applied_turn=0):
+    item = json.loads(json.dumps(card or {}, ensure_ascii=False))
+    cid = str(item.get("id") or "card_" + secrets.token_hex(4))
+    item["id"] = cid
+    item.setdefault("source_card_id", cid)
+    current_profile = _canonical_profile_snapshot(item.get("profile") or item)
+    origin_profile = item.get("origin_profile")
+    item["origin_profile"] = _canonical_profile_snapshot(
+        origin_profile if isinstance(origin_profile, dict) else current_profile)
+    item["profile"] = current_profile
+    item["entry"] = card_import.canonical_entry(item)
+    item["performance"] = card_import.canonical_performance(item)
+    item["name"] = item["profile"]["identity"]["name"] or item.get("name") or ""
+    item["persistent_status"] = _normalize_persistent_status(item.get("persistent_status") or {})
+    item["profile_updated_turn"] = int(item.get("profile_updated_turn") or applied_turn or 0)
+    item["status_updated_turn"] = int(
+        item.get("status_updated_turn") or item.get("state_updated_turn") or applied_turn or 0)
+    item.pop("state", None)
+    item.pop("state_updated_turn", None)
+    item.pop("relationships", None)
+    item.pop("relationship_details", None)
+    return item
+
+
+def _normalize_relationships(value, characters, persona=None):
+    valid_ids = {str(c.get("id")) for c in characters if c.get("id")}
+    valid_ids.add("__user__")
+    names_by_id = {str(c.get("id")): str(c.get("name") or "").strip()
+                   for c in characters if c.get("id")}
+    names = {str(c.get("name") or "").strip(): str(c.get("id")) for c in characters}
+    names["用户"] = "__user__"
+    names["User"] = "__user__"
+    if (persona or {}).get("name"):
+        names[str(persona.get("name")).strip()] = "__user__"
+    out = []
+    seen = set()
+    values = value if isinstance(value, list) else []
+    for raw in values:
+        if isinstance(raw, str):
+            participants = [cid for name, cid in names.items() if name and name in raw][:2]
+            description = _clip_memory_text(raw, 300)
+            updated_turn = 0
+        elif isinstance(raw, dict):
+            participants = [str(x) for x in (raw.get("participants") or []) if str(x) in valid_ids][:2]
+            description = _clip_memory_text(
+                raw.get("description") or raw.get("type") or raw.get("label") or raw.get("summary"), 300)
+            legacy_attitude = _clip_memory_text(raw.get("attitude"), 120)
+            if legacy_attitude and legacy_attitude not in description:
+                description = _clip_memory_text(description + ("，" if description else "") + legacy_attitude, 300)
+            updated_turn = int(raw.get("updated_turn") or 0)
+        else:
+            continue
+        if len(participants) != 2 or participants[0] == participants[1] or not description:
+            continue
+        participants = sorted(participants)
+        # Older snapshots often repeated both names inside the description,
+        # producing UI such as "Delta: User and Delta: ...". The edge already
+        # owns its participants, so retain only the human-readable predicate.
+        subject, separator, predicate = description.partition("：")
+        if not separator:
+            subject, separator, predicate = description.partition(":")
+        if separator and predicate.strip():
+            subject_folded = subject.casefold()
+            participant_aliases = []
+            for participant in participants:
+                if participant == "__user__":
+                    aliases = ["用户", "user", str((persona or {}).get("name") or "").strip()]
+                else:
+                    aliases = [names_by_id.get(participant, "")]
+                participant_aliases.append([alias.casefold() for alias in aliases if alias])
+            if all(any(alias in subject_folded for alias in aliases)
+                   for aliases in participant_aliases):
+                description = predicate.strip()
+        key = "|".join(participants)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"id": "rel_" + hashlib.sha1(key.encode()).hexdigest()[:12],
+                    "participants": participants, "description": description,
+                    "updated_turn": updated_turn})
+    return out[:24]
+
+
+def _relationships_from_cards(characters, persona=None):
+    """Seed runtime relationships from card prose only when no live relationship state exists."""
+    by_name = {str(c.get("name") or "").strip(): str(c.get("id")) for c in characters}
+    user_names = {"你", "用户", "user"}
+    if (persona or {}).get("name"):
+        user_names.add(str(persona.get("name")).strip().lower())
+    hints = []
+    for character in characters:
+        source_id = str(character.get("id") or "")
+        for line in card_import.canonical_relationship_hints(character):
+            parts = re.split(r"[：:]", line, maxsplit=1)
+            label, detail = (parts[0], parts[1]) if len(parts) == 2 else (line, line)
+            label = str(label).strip()
+            target_id = ""
+            if label.lower() in user_names or label.startswith("你"):
+                target_id = "__user__"
+            else:
+                for name, cid in by_name.items():
+                    if name and (label == name or label.startswith(name)):
+                        target_id = cid
+                        break
+            if target_id and target_id != source_id:
+                hints.append({"participants": [source_id, target_id],
+                              "description": str(detail).strip(), "updated_turn": 0})
+    return _normalize_relationships(hints, characters, persona)
+
+
+def _ensure_runtime_cast(p):
+    if p is None:
+        return {}
+    existing = p.get("runtime_cast") if isinstance(p.get("runtime_cast"), dict) else None
+    if existing:
+        applied_turn = int(existing.get("applied_turn") or 0)
+        raw_characters = [c for c in (existing.get("characters") or []) if isinstance(c, dict)]
+        migrated_characters = []
+        for raw_character in raw_characters:
+            character = json.loads(json.dumps(raw_character, ensure_ascii=False))
+            if not isinstance(character.get("origin_profile"), dict):
+                source_id = str(character.get("source_card_id") or character.get("id") or "")
+                source_card = load_card(source_id) if source_id else None
+                character["origin_profile"] = _canonical_profile_snapshot(
+                    (source_card or {}).get("profile") or source_card or
+                    character.get("profile") or character)
+            migrated_characters.append(character)
+        raw_characters = migrated_characters
+        p["story_state"] = _migrate_legacy_story_context(p.get("story_state") or {}, raw_characters)
+        characters = [_runtime_character(c, applied_turn=applied_turn) for c in raw_characters]
+        runtime_cast = dict(existing)
+    else:
+        source_cards = p.get("cards") if isinstance(p.get("cards"), list) else None
+        if source_cards is None:
+            source_cards = [load_card(cid) for cid in _production_card_ids(p)]
+        source_cards = [c for c in source_cards if isinstance(c, dict)]
+        ledger = p.get("story_state") if isinstance(p.get("story_state"), dict) else {}
+        applied_turn = int(ledger.get("turns") or 0)
+        legacy_states = ledger.get("character_state") if isinstance(ledger.get("character_state"), dict) else {}
+        characters = [_runtime_character(c, legacy_states.get(str(c.get("name") or "")), applied_turn)
+                      for c in source_cards]
+        runtime_cast = {
+            "schema_version": 2,
+            "applied_turn": applied_turn,
+            "revision": 1,
+            "characters": characters,
+            "relationships": _normalize_relationships(ledger.get("relationships") or [], characters,
+                                                        p.get("persona") or {}),
+            "updated_at": int(time.time()),
+        }
+    runtime_cast["schema_version"] = 3
+    runtime_cast["applied_turn"] = applied_turn
+    runtime_cast["revision"] = max(1, int(runtime_cast.get("revision") or 1))
+    runtime_cast["characters"] = characters
+    persona_profile = _canonical_profile_snapshot((p.get("persona") or {}).get("profile") or
+                                                   (p.get("persona") or {}))
+    current_user_profile = runtime_cast.get("user_profile")
+    runtime_cast["user_profile"] = _canonical_profile_snapshot(
+        current_user_profile if isinstance(current_user_profile, dict) else persona_profile)
+    origin_user_profile = runtime_cast.get("origin_user_profile")
+    runtime_cast["origin_user_profile"] = _canonical_profile_snapshot(
+        origin_user_profile if isinstance(origin_user_profile, dict)
+        else runtime_cast["user_profile"])
+    runtime_cast["user_profile_updated_turn"] = int(
+        runtime_cast.get("user_profile_updated_turn") or 0)
+    persona_status = ((p.get("persona") or {}).get("persistent_status")
+                      if isinstance(p.get("persona"), dict) else {})
+    runtime_cast["user_status"] = _normalize_persistent_status(
+        runtime_cast.get("user_status") if "user_status" in runtime_cast else persona_status)
+    runtime_cast["user_status_updated_turn"] = int(runtime_cast.get("user_status_updated_turn") or 0)
+    runtime_cast["relationships"] = _normalize_relationships(
+        runtime_cast.get("relationships") or [], characters, p.get("persona") or {})
+    if not runtime_cast["relationships"]:
+        runtime_cast["relationships"] = _relationships_from_cards(characters, p.get("persona") or {})
+    p["runtime_cast"] = runtime_cast
+    return runtime_cast
+
+
+def _hydrate_runtime_cards(p):
+    runtime_cast = _ensure_runtime_cast(p)
+    characters = json.loads(json.dumps(runtime_cast.get("characters") or [], ensure_ascii=False))
+    by_id = {str(c.get("id")): c for c in characters}
+    persona_name = str((p.get("persona") or {}).get("name") or "用户")
+    for relation in runtime_cast.get("relationships") or []:
+        participants = relation.get("participants") or []
+        if len(participants) != 2:
+            continue
+        for cid in participants:
+            card = by_id.get(str(cid))
+            if not card:
+                continue
+            other = participants[1] if participants[0] == cid else participants[0]
+            other_name = persona_name if other == "__user__" else str((by_id.get(str(other)) or {}).get("name") or other)
+            detail = {
+                "id": relation.get("id"),
+                "target_id": other,
+                "target_name": other_name,
+                "description": relation.get("description") or "",
+            }
+            card.setdefault("relationship_details", []).append(detail)
+            card.setdefault("relationships", []).append(f"{other_name}：{detail['description']}")
+    p["cards"] = characters
+    return characters
+
+
+def _hydrate_user_persona(p):
+    runtime_cast = p.get("runtime_cast") if isinstance(p.get("runtime_cast"), dict) else {}
+    stored = p.get("persona") if isinstance(p.get("persona"), dict) else {}
+    current_profile = runtime_cast.get("user_profile")
+    if isinstance(current_profile, dict):
+        persona = _normalize_persona({"profile": current_profile})
+        if stored.get("source_card_id"):
+            persona["source_card_id"] = str(stored.get("source_card_id"))
+    else:
+        persona = _normalize_persona(stored)
+    persona["persistent_status"] = _normalize_persistent_status(runtime_cast.get("user_status") or {})
+    p["persona"] = persona
+    return persona
+
+
 def _ensure_production_session(p):
-    """Hydrate current-story data; worldbook files are the sole lore authority."""
+    """Hydrate current-story projections; runtime_cast is the sole cast authority."""
     if p is None:
         return p
-    if not isinstance(p.get("cards"), list):
-        cards = [load_card(cid) for cid in _production_card_ids(p)]
-        p["cards"] = [c for c in cards if c]
+    p["persona"] = _normalize_persona(p.get("persona") or {})
+    _hydrate_runtime_cards(p)
+    _hydrate_user_persona(p)
     p["worldbooks"] = _snapshot_worldbooks(p.get("worldbook_ids") or [])
-    if not isinstance(p.get("persona"), dict):
-        p["persona"] = {}
     p.setdefault("story", [])
     p.setdefault("runtime", {})
     return p
@@ -1820,9 +2324,11 @@ def ev_send_message(ev):
     m = _msg("char", reply)
     p["story"].append(m)
     _commit_foreground_story(p, expected_story_signature)
+    state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
     _schedule_scene_state(p["id"])
-    return {"reply": reply, "message": m, "user_message": user_msg, "production_id": p["id"]}
+    return {"reply": reply, "message": m, "user_message": user_msg,
+            "production_id": p["id"], "state_sync": state_sync}
 
 
 def ev_regenerate(ev):
@@ -1847,9 +2353,10 @@ def ev_regenerate(ev):
     last["text"] = reply
     p["story"] = saved_story
     _commit_foreground_story(p, expected_story_signature)
+    state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
     _schedule_scene_state(p["id"])
-    return {"message": last, "production_id": p["id"]}
+    return {"message": last, "production_id": p["id"], "state_sync": state_sync}
 
 
 def _continue_note(note: str = "", response_language: str = "zh") -> str:
@@ -1948,9 +2455,11 @@ def ev_continue(ev):
     m = _msg("char", reply)
     p["story"].append(m)
     _commit_foreground_story(p, expected_story_signature)
+    state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
     _schedule_scene_state(p["id"])
-    return {"reply": reply, "user_message": user_msg, "message": m, "production_id": p["id"]}
+    return {"reply": reply, "user_message": user_msg, "message": m,
+            "production_id": p["id"], "state_sync": state_sync}
 
 
 def _compact_story_context(card, story, max_turns=8, response_language="zh"):
@@ -2015,10 +2524,7 @@ def ev_suggest(ev):
     cards, wbs, persona, note = _loadout(p)
     lore = actor.select_lore(wbs, p["story"])
     lore_txt = "\n".join("- " + (e.get("content") or "")[:500] for e in lore[:4])
-    persona_txt = ""
-    if persona:
-        persona_txt = (f"Name: {persona.get('name','')}\nDescription: {persona.get('description','')[:500]}" if en else
-                       f"名字：{persona.get('name','')}\n描述：{persona.get('description','')[:500]}")
+    persona_txt = actor.user_character_block(persona, language)
     primary = cards[0] if cards else {}
     ctx = _compact_story_context(primary, p["story"], response_language=language)
     if en:
@@ -2161,10 +2667,13 @@ def ev_edit_message(ev):
                 reply_msg = _msg("char", reply)
                 p["story"].append(reply_msg)
             _commit_foreground_story(p, expected_story_signature)
+            state_sync = {"watch": False, "revision": 0}
             if reply_msg:
+                state_sync = _story_state_sync_trigger(p["id"])
                 _schedule_story_state(p["id"])
                 _schedule_scene_state(p["id"])
-            return {"message": m, "reply": reply_msg, "story": p["story"], "truncated": removed}
+            return {"message": m, "reply": reply_msg, "story": p["story"],
+                    "truncated": removed, "state_sync": state_sync}
     raise ValueError("message not found")
 
 
@@ -2281,7 +2790,6 @@ def _closest_card_name(value, names):
 def _normalize_scene_state(raw, cards, response_language="zh"):
     if not isinstance(raw, dict):
         raw = {}
-    names = _card_names(cards)
 
     def text(key, fallback=""):
         return str(raw.get(key) or fallback or "").strip()[:160]
@@ -2301,30 +2809,28 @@ def _normalize_scene_state(raw, cards, response_language="zh"):
                 out.append(x[:120])
         return out[:limit]
 
-    present = arr("present_characters", normalize_names=True)
-    nearby = arr("nearby_characters", normalize_names=True)
-    hidden = arr("hidden_characters", normalize_names=True)
-    if not present and names:
-        present.append(names[0])
+    valid_ids = {str(c.get("id")) for c in cards or [] if c.get("id")}
+    participants = []
+    for value in raw.get("participants") or []:
+        participant = _normalize_scene_participant(value, valid_ids)
+        if participant:
+            participants.append(participant)
     unknown = "Unspecified" if _locale_code(response_language) == "en" else "未明确"
     return {
         "location": text("location", unknown),
         "time": text("time", unknown),
         "mood": text("mood", unknown),
         "current_focus": text("current_focus"),
-        "present_characters": present[:8],
-        "nearby_characters": nearby[:8],
-        "hidden_characters": hidden[:8],
         "open_threads": arr("open_threads", limit=10),
+        "participants": participants[:24],
         "updated_at": int(time.time()),
     }
 
 
 def _scene_story_excerpt(p, max_items=12, response_language=None):
-    cards, _, _, _ = _loadout(p)
     language = response_language or _ensure_world_language(p)
     en = language == "en"
-    cname = "/".join(c.get("name", "Character" if en else "角色") for c in cards[:4]) or ("Character" if en else "角色")
+    cname = "Story response" if en else "故事回复"
     lines = []
     for m in (p.get("story") or [])[-max_items:]:
         who = ("User" if en else "用户") if m.get("role") == "user" else cname
@@ -2350,10 +2856,17 @@ def _build_turn_plan(p, cards):
         "narration_goal、do_not。primary_speaker 是字符串，其余是字符串数组或字符串。"
         "原则：不要求所有角色说话；优先回应被用户点名或最有动机的人；保护角色知识边界。"
     ))
+    scene = p.get("scene_state") or {}
+    plot = _effective_story_state(p)
     user = json.dumps({
-        "characters": names,
-        "scene_state": p.get("scene_state") or {},
-        "story_state": _effective_story_state(p),
+        "characters": [{"id": c.get("id"), "name": c.get("name"),
+                        "profile": c.get("profile") or {},
+                        "persistent_status": c.get("persistent_status") or {},
+                        "relationships": c.get("relationships") or []} for c in cards],
+        "scene_state": {key: scene.get(key) for key in
+                        ("location", "time", "mood", "current_focus", "open_threads")},
+        "story_state": {key: plot.get(key) for key in
+                        ("timeline", "facts", "open_threads", "objects", "secrets", "scene", "style_notes")},
         "response_language": language,
         "recent_story": _scene_story_excerpt(p, response_language=language),
     }, ensure_ascii=False)
@@ -2398,18 +2911,17 @@ def _update_scene_state(p):
     en = language == "en"
     sys = ((
         "You are the continuity recorder for an interactive story. Update the current scene state from the recent story and write all textual values in English. "
-        "Record only events that clearly happened or are strongly established; do not add literary commentary. Output strict JSON with only location, time, mood, current_focus, present_characters, nearby_characters, hidden_characters, and open_threads. "
-        "present means clearly onstage now; nearby means close enough to enter naturally; hidden means offstage or not yet revealed."
+        "Record only events that clearly happened or are strongly established; do not add literary commentary. Output strict JSON with only location, time, mood, current_focus, open_threads, and participants. "
+        "participants contains character_id, location, activity, and condition for characters clearly present or recently tracked. Do not record personality, identity, relationships, or learned facts."
     ) if en else (
         "你是互动故事的场记。根据最近剧情更新当前场景状态，所有文本值使用简体中文。"
         "只记录已经明确发生或强烈成立的内容，不要写文学点评。"
-        "输出严格 JSON，字段只有 location、time、mood、current_focus、present_characters、"
-        "nearby_characters、hidden_characters、open_threads。"
-        "present=此刻明确在场；nearby=附近或可自然引入；hidden=暂不出场/未显身。"
+        "输出严格 JSON，字段只有 location、time、mood、current_focus、open_threads、participants。"
+        "participants 记录明确在场或刚被追踪角色的 character_id、location、activity、condition。不要记录人物性格、身份、关系或已知事实。"
     ))
     user = json.dumps({
-        "characters": _card_names(cards),
         "previous_scene_state": p.get("scene_state") or {},
+        "roster": [{"id": c.get("id"), "name": c.get("name")} for c in cards],
         "response_language": language,
         "recent_story": _scene_story_excerpt(p, response_language=language),
     }, ensure_ascii=False)
@@ -2468,8 +2980,8 @@ def _story_messages_through_turn(story, end_turn):
 
 def _story_lines_for_turns(p, start_turn, end_turn):
     """Render complete story messages for an inclusive user-turn batch."""
-    cards, _, _, _ = _loadout(p)
-    cname = "/".join(c.get("name", "角色") for c in cards[:4]) or "角色"
+    en = _ensure_world_language(p) == "en"
+    cname = "Story response" if en else "故事回复"
     lines = []
     seen_turns = 0
     for message in p.get("story") or []:
@@ -2485,8 +2997,10 @@ def _story_lines_for_turns(p, start_turn, end_turn):
         text = (message.get("text") or "").strip().replace("\r\n", "\n")
         if not text:
             continue
-        who = "用户" if message.get("role") == "user" else cname
-        lines.append(f"{who}: {text}")
+        who = ("User" if en else "用户") if message.get("role") == "user" else cname
+        turn_label = max(0, seen_turns)
+        prefix = f"[Turn {turn_label} · {who}]" if en else f"[第 {turn_label} 轮 · {who}]"
+        lines.append(f"{prefix}\n{text}")
     return "\n".join(lines)
 
 
@@ -2549,13 +3063,7 @@ def _normalize_story_state(raw, turns, source_tokens):
 
     limits = {
         "timeline": (12, 120),
-        "facts": (12, 120),
         "open_threads": (12, 140),
-        "relationships": (12, 140),
-        "user_state": (8, 140),
-        "scene_anchor": (6, 140),
-        "objects": (10, 140),
-        "secrets": (10, 140),
         "style_notes": (6, 120),
     }
 
@@ -2573,57 +3081,45 @@ def _normalize_story_state(raw, turns, source_tokens):
                 break
         return out
 
-    def _arr_from_value(obj, key, limit=8, max_len=150):
-        vals = obj.get(key) or []
-        if isinstance(vals, str):
-            vals = [vals]
-        out = []
-        for v in vals:
-            x = _clip_memory_text(v, max_len)
-            if x and x not in out:
-                out.append(x)
-            if len(out) >= limit:
-                break
-        return out
-
-    def dict_arr(key, max_keys=8, item_limit=6):
-        vals = raw.get(key) or {}
-        out = {}
-        if isinstance(vals, list):
-            for item in vals:
-                if isinstance(item, dict):
-                    name = str(item.get("name") or item.get("角色") or item.get("character") or "").strip()
-                    notes = item.get("state") or item.get("notes") or item.get("items") or item.get("状态") or []
-                    if name:
-                        out[name[:40]] = _arr_from_value({"_": notes}, "_", item_limit)
-        elif isinstance(vals, dict):
-            for name, notes in vals.items():
-                n = str(name).strip()[:40]
-                if n:
-                    out[n] = _arr_from_value({"_": notes}, "_", item_limit)
-        clean = {}
-        for name, notes in out.items():
-            if notes:
-                clean[name] = notes
-            if len(clean) >= max_keys:
-                break
-        return clean
-
     state = {
         "timeline": arr("timeline"),
-        "facts": arr("facts"),
+        "facts": [],
         "open_threads": arr("open_threads"),
-        "relationships": arr("relationships"),
-        "character_state": dict_arr("character_state"),
-        "user_state": arr("user_state"),
-        "scene_anchor": arr("scene_anchor"),
-        "objects": arr("objects"),
-        "secrets": arr("secrets"),
+        "objects": [],
+        "secrets": [],
+        "scene": _normalize_ledger_scene(raw.get("scene")),
         "style_notes": arr("style_notes"),
         "turns": turns,
         "source_tokens": source_tokens,
         "updated_at": int(time.time()),
     }
+    fact_values = raw.get("facts") or []
+    if isinstance(fact_values, (str, dict)):
+        fact_values = [fact_values]
+    for value in fact_values:
+        fact = _normalize_fact_entry(value)
+        if fact and fact["id"] not in {item["id"] for item in state["facts"]}:
+            state["facts"].append(fact)
+        if len(state["facts"]) >= 24:
+            break
+    object_values = raw.get("objects") or []
+    if isinstance(object_values, (str, dict)):
+        object_values = [object_values]
+    for value in object_values:
+        obj = _normalize_object_entry(value)
+        if obj and obj["id"] not in {item["id"] for item in state["objects"]}:
+            state["objects"].append(obj)
+        if len(state["objects"]) >= 16:
+            break
+    secret_values = raw.get("secrets") or []
+    if isinstance(secret_values, (str, dict)):
+        secret_values = [secret_values]
+    for value in secret_values:
+        secret = _normalize_fact_entry(value, secret=True)
+        if secret and secret["id"] not in {item["id"] for item in state["secrets"]}:
+            state["secrets"].append(secret)
+        if len(state["secrets"]) >= 16:
+            break
     return _trim_story_state_to_budget(state, STORY_STATE_MAX_CHARS)
 
 
@@ -2635,24 +3131,8 @@ def _trim_story_state_to_budget(state, max_chars):
     """Bound ledger size while removing transient details before protected memory."""
     state = dict(state or {})
 
-    def pop_character_note():
-        characters = state.get("character_state") or {}
-        if not isinstance(characters, dict) or not characters:
-            return False
-        name = max(characters, key=lambda key: len(characters.get(key) or []))
-        notes = list(characters.get(name) or [])
-        if notes:
-            notes.pop(0)
-        if notes:
-            characters[name] = notes
-        else:
-            characters.pop(name, None)
-        state["character_state"] = characters
-        return True
-
     primary_order = (
-        "style_notes", "scene_anchor", "user_state", "timeline", "facts",
-        "relationships", "objects",
+        "style_notes", "timeline", "facts", "objects",
     )
     protected_order = ("open_threads", "secrets")
     while _story_state_chars(state) > max_chars:
@@ -2664,8 +3144,6 @@ def _trim_story_state_to_budget(state, max_chars):
                 state[key] = values
                 changed = True
                 break
-        if not changed:
-            changed = pop_character_note()
         if not changed:
             for key in protected_order:
                 values = list(state.get(key) or [])
@@ -2687,8 +3165,8 @@ def _story_state_quality_ok(previous, current):
     def count(keys, state):
         return sum(len(state.get(key) or []) for key in keys)
 
-    old_protected = count(("open_threads", "relationships", "objects", "secrets"), previous)
-    new_protected = count(("open_threads", "relationships", "objects", "secrets"), current)
+    old_protected = count(("open_threads", "objects", "secrets"), previous)
+    new_protected = count(("open_threads", "objects", "secrets"), current)
     if old_protected >= 6 and new_protected < 2:
         return False
 
@@ -2697,17 +3175,12 @@ def _story_state_quality_ok(previous, current):
     if old_history >= 6 and new_history < 2:
         return False
 
-    old_characters = len(previous.get("character_state") or {})
-    new_characters = len(current.get("character_state") or {})
-    if old_characters >= 3 and new_characters == 0:
-        return False
     return True
 
 
 def _story_state_has_memory(state):
     return any(state.get(k) for k in (
-        "timeline", "facts", "open_threads", "relationships", "character_state",
-        "user_state", "scene_anchor", "objects", "secrets", "style_notes"
+        "timeline", "facts", "open_threads", "objects", "secrets", "style_notes"
     ))
 
 
@@ -2736,13 +3209,17 @@ def _effective_story_state(p):
 def _merge_story_state_batch(prev, batch, start_turn, end_turn,
                              source_tokens, response_language="zh"):
     language = _locale_code(response_language)
+    plot_keys = ("timeline", "facts", "open_threads", "objects", "secrets", "style_notes", "scene")
+    prev = {key: (prev or {}).get(key) or ({} if key == "scene" else []) for key in plot_keys}
     if language == "en":
         sys_prompt = (
             "You are the high-fidelity continuity recorder for an interactive story. Merge previous_state and the complete new_story_batch into an updated story ledger. "
-            "Write every textual value in English, translating older ledger values when necessary while preserving names and facts. Record only facts, relationships, secrets, objects, open threads, and style information that affect future continuation. "
-            "Do not add literary commentary or infer events that did not happen. Output strict JSON using only timeline, facts, open_threads, relationships, character_state, user_state, scene_anchor, objects, secrets, and style_notes. "
-            "Keep entries short, concrete, unique, and non-prose. Keep at most 12 entries per major array and at most 8 important characters in character_state. Keep timeline/facts under 20 words and relationships/open_threads under 28 words. "
-            "Never drop unresolved threads, unrevealed secrets, key objects, ongoing relationship changes, identity facts, major promises, major conflicts, relationship turning points, or consequential user choices unless the new batch explicitly resolves or changes them. "
+            "Write every textual value in English, translating older ledger values when necessary while preserving names and facts. Record only completed or ongoing plot events, causal facts, secrets, key objects, open threads, major promises, conflicts, turning points, and consequential choices. "
+            "The ledger is the sole owner of scene location, participant positions and activities, story facts, knowledge boundaries, and object custody. "
+            "Do not store personality, identity, abilities, durable identity changes, long-term conditions, or current relationship conclusions; those belong to the character registry. Relationship changes may appear only as timeline events. "
+            "Output strict JSON using only timeline, facts, open_threads, objects, secrets, scene, and style_notes. facts and secrets contain objects with id, content, and known_by character ids. objects contain id, name, status, holder character id, and location. scene contains time, place, and participants; every participant has character_id, location, activity, and condition. "
+            "Keep entries short, concrete, unique, and non-prose. Keep at most 12 entries per major array. Keep timeline/facts under 20 words and open_threads under 28 words. "
+            "Never drop unresolved threads, unrevealed secrets, key objects, identity revelations, major promises, major conflicts, turning points, or consequential user choices unless the new batch explicitly resolves or changes them. "
             "Remove duplicates, expired scene details, completed minor actions, and details that cannot affect continuation before removing protected memory. Keep the complete JSON ledger within 15000 characters. "
             "The batch contains complete conversational turns and must be treated as one continuous semantic unit. "
             "If new_story_batch is non-empty, never return an entirely empty JSON object."
@@ -2750,14 +3227,14 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
     else:
         sys_prompt = (
             "你是互动故事的高保真场记。把 previous_state 与完整的 new_story_batch 合并成新的剧情账本，所有文本值使用简体中文；必要时翻译旧账本内容，同时保留姓名与事实。"
-            "只记录会影响后续续写的事实、关系、秘密、物件、伏笔和风格；不要文学点评，不猜测未发生内容。"
-            "输出严格 JSON，对象字段只能是 timeline、facts、open_threads、relationships、character_state、"
-            "user_state、scene_anchor、objects、secrets、style_notes。"
+            "只记录已经发生或仍在推进的剧情事件、因果事实、秘密、关键物件、伏笔、重大承诺、冲突、转折与关键选择。"
+            "剧情账本是场景地点、角色所处位置与行动、剧情事实、角色认知边界和物品归属的唯一来源。"
+            "不要保存人物性格、身份、能力、长期身份变化、长期身体情况或当前关系结论；这些属于角色档案。关系变化只能作为时间线事件记录。"
+            "不要文学点评，不猜测未发生内容。输出严格 JSON，对象字段只能是 timeline、facts、open_threads、objects、secrets、scene、style_notes。"
+            "facts 与 secrets 的每项包含 id、content、known_by；known_by 只能填写角色 id 或 __user__。objects 的每项包含 id、name、status、holder、location。scene 包含 time、place、participants；每名参与者包含 character_id、location、activity、condition。"
             "所有数组条目必须短而具体，禁止长篇散文，禁止重复。"
-            "主要数组最多保留 12 条；character_state 最多保留 8 个重要角色。"
-            "timeline/facts 每条不超过 60 个汉字；relationships/open_threads 每条不超过 80 个汉字；"
-            "character_state 每个角色最多 6 条，每条不超过 80 个汉字。"
-            "未解决线索、未揭露秘密、关键物品、持续中的关系变化，以及身份事实、重大承诺、核心冲突、关系转折和用户关键选择，在新批次明确解决或改变之前不得删除。"
+            "主要数组最多保留 12 条；timeline/facts 每条不超过 60 个汉字；open_threads 每条不超过 80 个汉字。"
+            "未解决线索、未揭露秘密、关键物品、身份揭露、重大承诺、核心冲突、剧情转折和用户关键选择，在新批次明确解决或改变之前不得删除。"
             "容量不足时，先删除重复表述、过时场景、已完成的小动作和不影响后续的细节，再考虑其他内容；完整 JSON 账本不得超过 15000 字符。"
             "这一批包含完整连续的对话轮次，必须作为一个语义整体理解，不得在事件中间切断。"
             "如果 new_story_batch 非空，严禁返回全空 JSON。"
@@ -2796,11 +3273,10 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
         for mem_model in _memory_models():
             try:
                 repair_prompt = ((
-                    "Repair the user's content into strict JSON and write all textual values in English. Output only a JSON object using timeline, facts, open_threads, relationships, character_state, user_state, scene_anchor, objects, secrets, and style_notes."
+                    "Repair the user's content into strict JSON and write all textual values in English. Output only a JSON object using timeline, facts, open_threads, objects, secrets, scene, and style_notes."
                 ) if language == "en" else (
                     "把用户给出的内容修复为严格 JSON，所有文本值使用简体中文。只输出 JSON 对象。"
-                    "字段只能是 timeline、facts、open_threads、relationships、character_state、"
-                    "user_state、scene_anchor、objects、secrets、style_notes。"
+                    "字段只能是 timeline、facts、open_threads、objects、secrets、scene、style_notes。"
                 ))
                 repair = actor.chat([
                     {"role": "system", "content": repair_prompt},
@@ -2825,11 +3301,400 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
     return state
 
 
+_PROFILE_CHANGE_FIELDS = {
+    "identity": {
+        "name", "aliases", "description", "gender", "age", "species",
+        "occupation", "affiliations", "story_role",
+    },
+    "appearance": {"summary", "features"},
+    "personality": {"summary", "traits", "values", "motivation", "fears", "boundaries"},
+    "expression": {"speech_style", "habits", "mannerisms"},
+    "capabilities": {"skills", "powers", "limitations"},
+}
+_PROFILE_LIST_FIELDS = {
+    "aliases", "affiliations", "features", "traits", "values", "fears",
+    "boundaries", "habits", "mannerisms", "skills", "powers", "limitations",
+}
+
+
+def _validated_change_evidence(value, start_turn, end_turn):
+    values = value if isinstance(value, list) else ([value] if isinstance(value, dict) else [])
+    out = []
+    for raw in values:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            turn = int(raw.get("turn"))
+        except (TypeError, ValueError):
+            continue
+        fact = _clip_memory_text(raw.get("fact"), 300)
+        reason = _clip_memory_text(raw.get("reason"), 300)
+        if start_turn <= turn <= end_turn and fact and reason:
+            out.append({"turn": turn, "fact": fact, "reason": reason})
+    return out[:6]
+
+
+def _merge_profile_changes(current, changes):
+    """Apply non-empty whitelisted fields to the current profile."""
+    before = _canonical_profile_snapshot(current)
+    merged = json.loads(json.dumps(before, ensure_ascii=False))
+    incoming = changes if isinstance(changes, dict) else {}
+    for section, allowed_fields in _PROFILE_CHANGE_FIELDS.items():
+        section_changes = incoming.get(section)
+        if not isinstance(section_changes, dict):
+            section_changes = {}
+        target = merged.setdefault(section, {})
+        for field in allowed_fields:
+            if field in section_changes:
+                raw = section_changes.get(field)
+            elif field != "summary":
+                misplaced = [values.get(field) for values in incoming.values()
+                             if isinstance(values, dict) and field in values]
+                if not misplaced:
+                    continue
+                raw = misplaced[0]
+            else:
+                continue
+            if field in _PROFILE_LIST_FIELDS:
+                values = raw if isinstance(raw, list) else ([raw] if raw else [])
+                cleaned = []
+                for value in values:
+                    text = _clip_memory_text(value, 240)
+                    if text and text not in cleaned:
+                        cleaned.append(text)
+                if cleaned:
+                    target[field] = cleaned[:12]
+            else:
+                limit = 2500 if field in ("description", "summary") else 600
+                text = _clip_memory_text(raw, limit)
+                if text:
+                    target[field] = text
+    old_name = str((before.get("identity") or {}).get("name") or "").strip()
+    new_name = str((merged.get("identity") or {}).get("name") or "").strip()
+    if old_name and new_name and old_name != new_name:
+        aliases = list((merged.get("identity") or {}).get("aliases") or [])
+        if old_name not in aliases:
+            aliases.append(old_name)
+        merged["identity"]["aliases"] = aliases[:8]
+    result = _canonical_profile_snapshot(merged)
+    return result, result != before
+
+
+def _merge_persistent_status_changes(current, changes):
+    before = _normalize_persistent_status(current or {})
+    merged = dict(before)
+    incoming = changes if isinstance(changes, dict) else {}
+    for field, limit in (("life_status", 80), ("physical_condition", 600)):
+        if field in incoming:
+            text = _clip_memory_text(incoming.get(field), limit)
+            if text:
+                merged[field] = text
+    result = _normalize_persistent_status(merged)
+    return result, result != before
+
+
+def _runtime_cast_missing_fields(raw):
+    """List fields named by evidence but omitted from the emitted change payload."""
+    raw = raw if isinstance(raw, dict) else {}
+    candidates = []
+    character_changes = raw.get("character_changes")
+    if isinstance(character_changes, dict):
+        candidates.extend(value for value in character_changes.values() if isinstance(value, dict))
+    if isinstance(raw.get("user_changes"), dict):
+        candidates.append(raw["user_changes"])
+    field_names = set().union(*_PROFILE_CHANGE_FIELDS.values()) | {
+        "life_status", "physical_condition",
+    }
+    missing = []
+    for candidate in candidates:
+        emitted = set()
+        profile = candidate.get("profile") if isinstance(candidate.get("profile"), dict) else {}
+        for values in profile.values():
+            if isinstance(values, dict):
+                emitted.update(str(key) for key in values)
+        status = candidate.get("persistent_status")
+        if isinstance(status, dict):
+            emitted.update(str(key) for key in status)
+        evidence_values = candidate.get("evidence")
+        evidence_values = evidence_values if isinstance(evidence_values, list) else [evidence_values]
+        evidence_text = " ".join(
+            str(item.get("reason") or "") for item in evidence_values if isinstance(item, dict))
+        for field in field_names:
+            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(field) + r"(?![A-Za-z0-9_])",
+                         evidence_text) and field not in emitted:
+                missing.append(field)
+    return sorted(set(missing))
+
+
+def _runtime_cast_change_set_consistent(raw):
+    return not _runtime_cast_missing_fields(raw)
+
+
+def _normalize_runtime_cast_result(raw, previous, start_turn, end_turn, persona=None):
+    """Validate an evidence-backed change set and apply it to one durable cast snapshot."""
+    raw = raw if isinstance(raw, dict) else {}
+    previous = previous if isinstance(previous, dict) else {}
+    raw_changes = raw.get("character_changes") if isinstance(raw.get("character_changes"), dict) else {}
+    characters = []
+    for old in previous.get("characters") or []:
+        if not isinstance(old, dict):
+            continue
+        item = _runtime_character(old, applied_turn=int(previous.get("applied_turn") or 0))
+        candidate = raw_changes.get(str(item.get("id")))
+        evidence = _validated_change_evidence(
+            candidate.get("evidence") if isinstance(candidate, dict) else None,
+            start_turn, end_turn)
+        profile_changed = status_changed = False
+        if evidence:
+            item["profile"], profile_changed = _merge_profile_changes(
+                item.get("profile") or {}, candidate.get("profile") or {})
+            item["persistent_status"], status_changed = _merge_persistent_status_changes(
+                item.get("persistent_status") or {}, candidate.get("persistent_status") or {})
+        if profile_changed:
+            item["profile_updated_turn"] = end_turn
+            item["last_change_evidence"] = evidence
+        if status_changed:
+            item["status_updated_turn"] = end_turn
+            item["last_change_evidence"] = evidence
+        identity = item["profile"]["identity"]
+        item["name"] = identity.get("name") or item.get("name") or ""
+        item["description"] = identity.get("description") or ""
+        item["personality"] = item["profile"]["personality"].get("summary") or ""
+        characters.append(item)
+
+    previous_user_profile = _canonical_profile_snapshot(
+        previous.get("user_profile") or (persona or {}).get("profile") or persona or {})
+    previous_user_status = _normalize_persistent_status(previous.get("user_status") or {})
+    user_profile = previous_user_profile
+    user_status = previous_user_status
+    user_profile_changed = user_status_changed = False
+    user_candidate = raw.get("user_changes") if isinstance(raw.get("user_changes"), dict) else {}
+    user_evidence = _validated_change_evidence(user_candidate.get("evidence"), start_turn, end_turn)
+    if user_evidence:
+        user_profile, user_profile_changed = _merge_profile_changes(
+            previous_user_profile, user_candidate.get("profile") or {})
+        user_status, user_status_changed = _merge_persistent_status_changes(
+            previous_user_status, user_candidate.get("persistent_status") or {})
+
+    previous_relationships = _normalize_relationships(
+        previous.get("relationships") or [], characters, persona or {})
+    relationships_by_key = {
+        "|".join(item.get("participants") or []): dict(item)
+        for item in previous_relationships
+    }
+    valid_ids = {str(item.get("id")) for item in characters if item.get("id")}
+    valid_ids.add("__user__")
+    relation_changes = raw.get("relationship_changes")
+    if not isinstance(relation_changes, list):
+        relation_changes = []
+    for change in relation_changes:
+        if not isinstance(change, dict):
+            continue
+        evidence = _validated_change_evidence(change.get("evidence"), start_turn, end_turn)
+        participants = sorted({str(value) for value in (change.get("participants") or [])})
+        if not evidence or len(participants) != 2 or any(value not in valid_ids for value in participants):
+            continue
+        key = "|".join(participants)
+        action = str(change.get("action") or "upsert").strip().lower()
+        if action == "remove":
+            relationships_by_key.pop(key, None)
+            continue
+        description = _clip_memory_text(change.get("description"), 300)
+        if action == "upsert" and description:
+            relationships_by_key[key] = {
+                "participants": participants,
+                "description": description,
+                "updated_turn": end_turn,
+            }
+    relationships = _normalize_relationships(
+        list(relationships_by_key.values()), characters, persona or {})
+
+    result = {
+        "schema_version": 3,
+        "applied_turn": end_turn,
+        "revision": int(previous.get("revision") or 0) + 1,
+        "characters": characters,
+        "origin_user_profile": _canonical_profile_snapshot(
+            previous.get("origin_user_profile") or previous_user_profile),
+        "user_profile": user_profile,
+        "user_profile_updated_turn": (
+            end_turn if user_profile_changed
+            else int(previous.get("user_profile_updated_turn") or 0)),
+        "user_status": user_status,
+        "user_status_updated_turn": (
+            end_turn if user_status_changed
+            else int(previous.get("user_status_updated_turn") or 0)),
+        "relationships": relationships,
+        "updated_at": int(time.time()),
+    }
+    if user_profile_changed or user_status_changed:
+        result["user_last_change_evidence"] = user_evidence
+    elif previous.get("user_last_change_evidence"):
+        result["user_last_change_evidence"] = previous.get("user_last_change_evidence")
+    return result
+
+
+def _merge_runtime_cast_batch(previous, batch, start_turn, end_turn,
+                              response_language="zh", persona=None):
+    """Build the next cast snapshot from evidence-backed durable changes."""
+    previous = previous if isinstance(previous, dict) else {}
+    language = _locale_code(response_language)
+    roster = [{"id": c.get("id"), "name": c.get("name")}
+              for c in (previous.get("characters") or []) if isinstance(c, dict)]
+    if not roster:
+        result = dict(previous)
+        result["applied_turn"] = end_turn
+        result["revision"] = int(previous.get("revision") or 0) + 1
+        result["updated_at"] = int(time.time())
+        return result
+    if language == "en":
+        system_prompt = (
+            "# Responsibility\n"
+            "You maintain the long-lived character profiles for an interactive story. Compare each immutable origin_profile, the previous effective profile and status, and the complete numbered new_story_batch. Submit only durable changes explicitly established in this batch. Do not continue or summarize the story.\n"
+            "# Boundaries\n"
+            "origin_profile is read-only. current_profile is the only effective profile. Never add, remove, merge, or rename character ids. Temporary emotion, action, location, short-term goal, clothing, knowledge, and held objects belong to the story ledger.\n"
+            "Names, aliases, identity, durable appearance, personality, expression, abilities, physical condition, and relationships may change only when the batch clearly establishes a lasting change. A passing mood, disguise, joke, claim, conversation, or co-presence is not enough. Use aliases for temporary codenames; change name only for a formal rename, identity reveal, or lasting adoption. Personality changes require repeated behavior, explicit self-transformation, or a consequential event.\n"
+            "For the user character, record only facts explicitly chosen by the user or objectively completed in the story. Never infer the user's personality, feelings, intent, speech, action, or decision.\n"
+            "# Allowed fields\n"
+            "profile.identity: name, aliases, description, gender, age, species, occupation, affiliations, story_role. profile.appearance: summary, features. profile.personality: summary, traits, values, motivation, fears, boundaries. profile.expression: speech_style, habits, mannerisms. profile.capabilities: skills, powers, limitations. persistent_status: life_status, physical_condition.\n"
+            "# Evidence\n"
+            "Every submitted entity change needs evidence entries with turn, fact, and reason. turn must be within the supplied range and refer to a numbered turn in new_story_batch. If a reason names a field such as occupation, that exact field and its new value must also be present under profile or persistent_status. Never describe a change only in evidence. Without sufficient evidence, omit the change. Never use empty strings or empty arrays to erase existing data.\n"
+            "# Output\n"
+            "Output strict JSON only, with character_changes, user_changes, and relationship_changes. character_changes is keyed only by supplied character id. Each value may contain profile, persistent_status, and evidence. profile must preserve the exact section hierarchy listed above; for example occupation must be under profile.identity, never profile.capabilities. user_changes uses the same shape. Each relationship change contains participants, action (upsert or remove), description, and evidence. Output empty objects or arrays when nothing changed."
+        )
+    else:
+        system_prompt = (
+            "# 职责\n"
+            "你维护互动故事的长期角色档案。对照每名角色不可修改的 origin_profile、上一版唯一生效档案与持续状态，以及带回合编号的完整 new_story_batch，只提交本批剧情已经明确成立的长期变化。不要续写或总结剧情。\n"
+            "# 数据边界\n"
+            "origin_profile 只用于理解和核对，绝不修改；current_profile 是当前唯一生效档案。不得增加、删除、合并角色或修改角色 id。临时情绪、当前动作、所在地点、短期目标、临时着装、认知和持有物属于剧情账本，不写入角色档案。\n"
+            "姓名、别名、身份、长期外貌、性格、表达方式、能力、身体情况和关系可以变化，但必须是本批剧情明确建立且会影响后续演绎的持续变化。单次情绪、伪装、玩笑、单方面声称、交谈或同场均不足以构成长期变化。临时代号写入 aliases；只有正式改名、身份揭露或长期采用新名字时才修改 name。性格变化必须有反复表现、明确自我转变或重大事件作为依据。\n"
+            "用户角色只记录用户明确选择或剧情已经客观完成的变化；不得推断用户的性格、感受、意图、对白、行动或决定。\n"
+            "# 允许更新的字段\n"
+            "profile.identity：name、aliases、description、gender、age、species、occupation、affiliations、story_role。profile.appearance：summary、features。profile.personality：summary、traits、values、motivation、fears、boundaries。profile.expression：speech_style、habits、mannerisms。profile.capabilities：skills、powers、limitations。persistent_status：life_status、physical_condition。\n"
+            "# 证据要求\n"
+            "每个提交的实体变化都必须提供 evidence，其中每项包含 turn、fact、reason。turn 必须位于给定 range 内，并对应 new_story_batch 中标注的回合。reason 如果点名 occupation 等字段，profile 或 persistent_status 中必须同时携带该字段及其新值，禁止只在证据里描述变化。证据不足就省略该变化。不得用空字符串或空数组覆盖已有内容。\n"
+            "# 输出格式\n"
+            "只输出严格 JSON，顶层字段只能是 character_changes、user_changes、relationship_changes。character_changes 只能以给定角色 id 为键，每项可包含 profile、persistent_status、evidence。profile 必须严格保持上文列出的分区层级，例如 occupation 必须位于 profile.identity，绝不能放入 profile.capabilities。user_changes 结构相同。relationship_changes 每项包含 participants、action（upsert 或 remove）、description、evidence。没有变化时输出空对象或空数组。"
+        )
+    payload = json.dumps({
+        "roster": roster,
+        "user_persona": persona or {},
+        "previous_cast": {
+            "characters": {str(c.get("id")): {
+                               "origin_profile": c.get("origin_profile") or c.get("profile") or {},
+                               "current_profile": c.get("profile") or {},
+                               "persistent_status": c.get("persistent_status") or {},
+                           }
+                           for c in previous.get("characters") or [] if isinstance(c, dict)},
+            "origin_user_profile": previous.get("origin_user_profile") or {},
+            "current_user_profile": previous.get("user_profile") or (persona or {}).get("profile") or {},
+            "user_status": previous.get("user_status") or {},
+            "relationships": previous.get("relationships") or [],
+        },
+        "new_story_batch": batch,
+        "range": {"start_turn": start_turn, "end_turn": end_turn},
+    }, ensure_ascii=False)
+    last_error = None
+    for mem_model in _memory_models():
+        try:
+            out = actor.chat([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload},
+            ], temperature=0.1, model=mem_model, max_tokens=4500).strip()
+            raw = _json_from_model_text(out)
+            missing_fields = _runtime_cast_missing_fields(raw)
+            if missing_fields:
+                repair_prompt = ((
+                    "Repair one character change-set JSON without re-analyzing or continuing the story. "
+                    "Some evidence reasons name fields that are missing from the change payload. Put each explicitly established new value under the exact allowed profile hierarchy (for example profile.identity.occupation), or remove only the unsupported evidence. Never invent a value. Preserve valid changes and evidence. Output strict JSON only."
+                ) if language == "en" else (
+                    "修复一份角色变化集 JSON，不要重新分析或续写剧情。部分 evidence.reason 点名了字段，但变化对象漏掉了对应字段。"
+                    "把证据中已经明确成立的新值放回正确的允许层级（例如 profile.identity.occupation）；如果证据无法确定新值，只删除那条无效证据。"
+                    "不得猜测，不得删除其他有效变化。只输出严格 JSON。"
+                ))
+                repair_payload = json.dumps({
+                    "missing_fields": missing_fields,
+                    "change_set": raw,
+                }, ensure_ascii=False)
+                repaired = actor.chat([
+                    {"role": "system", "content": repair_prompt},
+                    {"role": "user", "content": repair_payload},
+                ], temperature=0.0, model=mem_model, max_tokens=4500).strip()
+                raw = _json_from_model_text(repaired)
+            if not _runtime_cast_change_set_consistent(raw):
+                raise ValueError("cast change evidence and emitted fields disagree after repair")
+            result = _normalize_runtime_cast_result(
+                raw, previous, start_turn, end_turn, persona)
+            if len(result.get("characters") or []) == len(previous.get("characters") or []):
+                return result
+        except Exception as error:
+            last_error = error
+            print("runtime_cast batch failed with %s:" % mem_model.get("model"), repr(error),
+                  file=sys.stderr, flush=True)
+    print("runtime_cast batch failed:", repr(last_error), file=sys.stderr, flush=True)
+    return None
+
+
 _STORY_STATE_RUN_LOCKS = {}
 _STORY_STATE_RUN_LOCKS_GUARD = threading.Lock()
 _STORY_STATE_JOBS = set()
 _STORY_STATE_PENDING = set()
 _STORY_STATE_JOBS_LOCK = threading.Lock()
+
+
+def _story_state_progress(p):
+    story = (p or {}).get("story") or []
+    compressible_turns = _compressible_story_turns(story)
+    previous = _validated_story_state((p or {}).get("story_state") or {}, story)
+    covered_turns = int(previous.get("turns") or 0)
+    return compressible_turns, covered_turns
+
+
+def _story_state_sync_trigger(pid):
+    """Describe the checkpoint a client should watch without delaying the reply."""
+    p = load_production(pid)
+    if not p:
+        return {"watch": False, "revision": 0}
+    compressible_turns, covered_turns = _story_state_progress(p)
+    runtime_cast = _ensure_runtime_cast(p)
+    due = compressible_turns - covered_turns >= STORY_STATE_BATCH_TURNS
+    return {
+        "watch": due,
+        "revision": int(runtime_cast.get("revision") or 0),
+        "target_turn": covered_turns + STORY_STATE_BATCH_TURNS if due else covered_turns,
+    }
+
+
+def _story_state_sync_view(pid, since_revision=0):
+    """Return a small polling response and projections only after a completed commit."""
+    p = load_production(pid)
+    if not p:
+        return None
+    compressible_turns, covered_turns = _story_state_progress(p)
+    runtime_cast = _ensure_runtime_cast(p)
+    revision = int(runtime_cast.get("revision") or 0)
+    with _STORY_STATE_JOBS_LOCK:
+        pending = pid in _STORY_STATE_JOBS
+    changed = revision != int(since_revision or 0)
+    result = {
+        "production_id": pid,
+        "pending": pending,
+        "due": compressible_turns - covered_turns >= STORY_STATE_BATCH_TURNS,
+        "changed": changed,
+        "ready": changed and not pending,
+        "revision": revision,
+        "applied_turn": int(runtime_cast.get("applied_turn") or 0),
+        "story_state_turns": covered_turns,
+        "error": str(((p.get("runtime") or {}).get("story_state_error") or ""))[:500],
+    }
+    if result["ready"]:
+        result.update({
+            "runtime_cast": runtime_cast,
+            "cards": p.get("cards") or [],
+            "persona": p.get("persona") or {},
+        })
+    return result
 
 
 def _story_state_run_lock(pid):
@@ -2843,25 +3708,31 @@ def _story_prefix_signature(story, end_turn):
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def _commit_story_state_batch(pid, state, end_turn, expected_signature):
-    """Atomically publish one complete 15-turn ledger batch."""
+def _commit_story_state_batch(pid, state, runtime_cast, end_turn, expected_signature,
+                              expected_cast_revision):
+    """Atomically publish one complete plot ledger and cast snapshot checkpoint."""
     with _production_lock(pid):
         current = load_production(pid)
         if not current:
             return None
         if _story_prefix_signature(current.get("story") or [], end_turn) != expected_signature:
             return None
+        current_cast = _ensure_runtime_cast(current)
+        if int(current_cast.get("revision") or 0) != int(expected_cast_revision or 0):
+            return None
         published = dict(state)
         published["turns"] = end_turn
         published["covered_signature"] = expected_signature
         published.pop("stale", None)
         current["story_state"] = published
+        current["runtime_cast"] = runtime_cast
+        _hydrate_runtime_cards(current)
+        _hydrate_user_persona(current)
         runtime = dict(current.get("runtime") or {})
         runtime.pop("state_stale_reason", None)
         runtime.pop("story_state_error", None)
         current["runtime"] = runtime
-        record = dict(current)
-        record.pop("worldbooks", None)
+        record = _production_record(current)
         _write(os.path.join(STATE, "productions", pid + ".json"), record)
         return current
 
@@ -2874,8 +3745,7 @@ def _record_story_state_error(pid, error):
         runtime = dict(current.get("runtime") or {})
         runtime["story_state_error"] = str(error)[:500]
         current["runtime"] = runtime
-        record = dict(current)
-        record.pop("worldbooks", None)
+        record = _production_record(current)
         _write(os.path.join(STATE, "productions", pid + ".json"), record)
 
 
@@ -2891,6 +3761,53 @@ def _summarize_story_state(p, force_full=False):
         rebuild = force_full or (bool(stored_previous) and not previous)
         state = {} if rebuild else dict(previous)
         covered_turns = 0 if rebuild else int(previous.get("turns") or 0)
+        cast_state = _ensure_runtime_cast(snapshot)
+        if rebuild:
+            # A plot-ledger rebuild must never replay or reset character evolution.
+            # Rebuild the ledger in memory, then atomically move the preserved cast
+            # checkpoint to the rebuilt ledger boundary without a cast model call.
+            rebuilt_state = {}
+            rebuilt_turns = 0
+            language = _ensure_world_language(snapshot)
+            while compressible_turns - rebuilt_turns >= STORY_STATE_BATCH_TURNS:
+                start_turn = rebuilt_turns + 1
+                end_turn = rebuilt_turns + STORY_STATE_BATCH_TURNS
+                segments = _story_batch_segments(snapshot, start_turn, end_turn)
+                if not segments or not any(batch.strip() for _, _, batch in segments):
+                    _record_story_state_error(pid, "empty story batch during ledger rebuild")
+                    return previous if previous else {}
+                merged = rebuilt_state
+                for segment_start, segment_end, batch in segments:
+                    prefix = _story_messages_through_turn(story, segment_end)
+                    source_tokens = _story_token_estimate(prefix)
+                    merged = _merge_story_state_batch(
+                        merged, batch, segment_start, segment_end, source_tokens, language)
+                    if not merged:
+                        break
+                if not merged:
+                    _record_story_state_error(
+                        pid, f"ledger rebuild failed for turns {start_turn}-{end_turn}")
+                    return previous if previous else {}
+                rebuilt_state = merged
+                rebuilt_turns = end_turn
+            if not rebuilt_turns:
+                return previous if previous else {}
+            preserved_cast = json.loads(json.dumps(cast_state, ensure_ascii=False))
+            expected_cast_revision = int(cast_state.get("revision") or 0)
+            preserved_cast["applied_turn"] = rebuilt_turns
+            preserved_cast["revision"] = expected_cast_revision + 1
+            preserved_cast["updated_at"] = int(time.time())
+            signature = _story_prefix_signature(story, rebuilt_turns)
+            committed = _commit_story_state_batch(
+                pid, rebuilt_state, preserved_cast, rebuilt_turns, signature,
+                expected_cast_revision)
+            if not committed:
+                _record_story_state_error(pid, "story or cast changed during ledger rebuild")
+                return previous if previous else {}
+            return rebuilt_state
+        if int(cast_state.get("applied_turn") or 0) != covered_turns:
+            _record_story_state_error(pid, "cast snapshot and plot ledger checkpoints differ")
+            return previous if previous else {}
         language = _ensure_world_language(snapshot)
 
         while compressible_turns - covered_turns >= STORY_STATE_BATCH_TURNS:
@@ -2912,11 +3829,21 @@ def _summarize_story_state(p, force_full=False):
             if not merged:
                 _record_story_state_error(pid, f"compression failed for turns {start_turn}-{end_turn}")
                 break
-            committed = _commit_story_state_batch(pid, merged, end_turn, signature)
+            complete_batch = _story_lines_for_turns(snapshot, start_turn, end_turn)
+            expected_cast_revision = int(cast_state.get("revision") or 0)
+            merged_cast = _merge_runtime_cast_batch(
+                cast_state, complete_batch, start_turn, end_turn, language,
+                snapshot.get("persona") or {})
+            if not merged_cast:
+                _record_story_state_error(pid, f"cast snapshot failed for turns {start_turn}-{end_turn}")
+                break
+            committed = _commit_story_state_batch(
+                pid, merged, merged_cast, end_turn, signature, expected_cast_revision)
             if not committed:
-                _record_story_state_error(pid, f"story changed while compressing turns {start_turn}-{end_turn}")
+                _record_story_state_error(pid, f"story or cast changed while processing turns {start_turn}-{end_turn}")
                 break
             state = merged
+            cast_state = merged_cast
             covered_turns = end_turn
 
         return state if _story_state_has_memory(state) else (previous if previous else {})
@@ -3030,15 +3957,51 @@ def ev_reflect_preview(ev):
 
 
 def ev_set_persona(ev):
-    persona = {"name": ev.get("name", "我"), "description": ev.get("description", "")}
     pid = ev.get("production_id")
     if pid:
         p = load_production(pid)
         if not p:
             raise ValueError("production not found")
+        source_card_id = str(ev.get("card_id") or "").strip()
+        if source_card_id:
+            source = load_card(source_card_id)
+            if not source:
+                raise ValueError("persona card not found")
+            persona = _normalize_persona({**source, "source_card_id": source_card_id})
+            status = _normalize_persistent_status({})
+        else:
+            current = _normalize_persona(p.get("persona") or {})
+            merged_profile = json.loads(json.dumps(current.get("profile") or {}, ensure_ascii=False))
+            incoming_profile = ev.get("profile") if isinstance(ev.get("profile"), dict) else {}
+            for section, values in incoming_profile.items():
+                if isinstance(values, dict):
+                    merged_profile.setdefault(section, {}).update(values)
+            if "name" in ev:
+                merged_profile.setdefault("identity", {})["name"] = str(ev.get("name") or "").strip()
+            if "description" in ev:
+                merged_profile.setdefault("identity", {})["description"] = str(ev.get("description") or "").strip()
+            persona = _normalize_persona({"profile": merged_profile})
+            current_status = (p.get("runtime_cast") or {}).get("user_status") or {}
+            status = _normalize_persistent_status(
+                ev.get("persistent_status") if isinstance(ev.get("persistent_status"), dict)
+                else current_status)
         p["persona"] = persona
+        runtime_cast = _ensure_runtime_cast(p)
+        current_profile = _canonical_profile_snapshot(persona.get("profile") or persona)
+        runtime_cast["user_profile"] = current_profile
+        runtime_cast["user_profile_updated_turn"] = _world_turns(p.get("story") or [])
+        if (source_card_id or not _profile_has_content(runtime_cast.get("origin_user_profile") or {})
+                or _world_turns(p.get("story") or []) == 0):
+            runtime_cast["origin_user_profile"] = json.loads(json.dumps(
+                current_profile, ensure_ascii=False))
+        runtime_cast["user_status"] = status
+        runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
+        runtime_cast["updated_at"] = int(time.time())
+        p["turn_plan"] = {}
+        _hydrate_user_persona(p)
         save_production(p)
-        return {"persona": persona, "production": p}
+        return {"persona": p["persona"], "production": p}
+    persona = _normalize_persona({"name": ev.get("name", "我"), "description": ev.get("description", "")})
     _write(os.path.join(STATE, "persona.json"), persona)
     return {"persona": persona}
 
@@ -3471,7 +4434,7 @@ class H(BaseHTTPRequestHandler):
         if path.startswith("/api/tts/reference/"):
             return self._tts_reference(path.rsplit("/", 1)[-1])
         if path == "/api/cards":
-            return self._json(200, {"cards": _list("cards")})
+            return self._json(200, {"cards": _library_cards()})
         if path == "/api/worldbooks":
             return self._json(200, {"worldbooks": _list("worldbooks")})
         if path == "/api/library/cards":
@@ -3481,6 +4444,17 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/production/worldbooks":
             pid = parse_qs(urlparse(self.path).query).get("production_id", [""])[0]
             return self._json(200, {"worldbooks": _production_worldbooks(pid)})
+        if path == "/api/production/state-sync":
+            q = parse_qs(urlparse(self.path).query)
+            pid = q.get("production_id", [""])[0]
+            try:
+                since_revision = int(q.get("since", ["0"])[0] or 0)
+            except (TypeError, ValueError):
+                since_revision = 0
+            result = _story_state_sync_view(pid, since_revision)
+            if result is None:
+                return self._json(404, {"error": "production not found"})
+            return self._json(200, result)
         if path == "/api/productions":
             return self._json(200, {"productions": _list_productions(),
                                     "active": _get_state().get("active_production_id")})
