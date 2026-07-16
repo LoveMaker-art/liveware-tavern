@@ -184,16 +184,25 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertTrue(report[0]["metadata_normalized"])
         self.assertIn("version: 1.19.8", (output / "tavern-world/SKILL.md").read_text())
 
-    def test_agents_block_update_preserves_instance_content(self):
-        current = "# Local operations\n\nKeep this note.\n\n" + UPDATER.AGENTS_START + "\nold\n" + UPDATER.AGENTS_END + "\n"
-        desired = UPDATER.AGENTS_START + "\nnew routing\n" + UPDATER.AGENTS_END
+    def test_agents_file_is_replaced_in_full(self):
+        unpacked = self.root / "unpacked"
+        plan = self.root / "plan"
+        self.write(self.root / "installed", "AGENTS.md", "# Local operations\n\nKeep this note.\n")
+        desired = "# AGENTS.md\n\nOfficial routing only.\n"
+        self.write(unpacked / "updater/references", "AGENTS.md", desired)
 
-        updated = UPDATER.render_agents(current, desired)
+        staged, report = UPDATER.stage_agents(unpacked, plan)
 
-        self.assertIn("Keep this note.", updated)
-        self.assertIn("new routing", updated)
-        self.assertNotIn("\nold\n", updated)
-        self.assertEqual(UPDATER.render_agents(updated, desired), updated)
+        self.assertEqual(staged.read_text(), desired)
+        self.assertNotIn("Keep this note.", staged.read_text())
+        self.assertEqual(report["status"], "upstream")
+
+    def test_malformed_release_agents_file_is_rejected(self):
+        unpacked = self.root / "unpacked"
+        self.write(unpacked / "updater/references", "AGENTS.md", "not canonical\n")
+
+        with self.assertRaisesRegex(RuntimeError, "malformed"):
+            UPDATER.stage_agents(unpacked, self.root / "plan")
 
     def test_modified_obsolete_skill_file_blocks_retirement(self):
         key = "skills/tavern/references/actor-memory.md"

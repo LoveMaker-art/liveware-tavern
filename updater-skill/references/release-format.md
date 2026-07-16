@@ -70,7 +70,7 @@ skills/
   tavern-ops/
 ```
 
-The skill manifest includes an exact `managed_files` set and an exact, allowlisted `obsolete_files` retirement set. Old single-skill references are removed only when they match the trusted installed Release; modified files block review. Known legacy developer tools are backed up before retirement. The updater also replaces only the marked Tavern block in `/opt/data/AGENTS.md` and preserves all surrounding content.
+The skill manifest includes an exact `managed_files` set and an exact, allowlisted `obsolete_files` retirement set. Old single-skill references are removed only when they match the trusted installed Release; modified files block review. Known legacy developer tools are backed up before retirement. The updater takes the canonical `AGENTS.md` from the verified updater archive, backs up the installed file, and replaces `/opt/data/AGENTS.md` completely.
 
 Only the listed runtime files, the seven official frontend code files, and the seven creative-skill allowlists are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, and credentials are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
 

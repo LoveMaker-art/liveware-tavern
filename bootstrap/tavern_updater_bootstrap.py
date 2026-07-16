@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import shutil
 import subprocess
 import sys
@@ -29,11 +28,14 @@ SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 UPDATER_FILES = (
     "SKILL.md",
     "agents/openai.yaml",
-    "references/agents-block.md",
+    "references/AGENTS.md",
     "references/release-format.md",
     "scripts/update.py",
 )
-OBSOLETE_UPDATER_FILES = ("references/conflict-inspection.md",)
+OBSOLETE_UPDATER_FILES = (
+    "references/conflict-inspection.md",
+    "references/agents-block.md",
+)
 SKILL_FILES = (
     "tavern/SKILL.md",
     "tavern/references/shared-contract.md",
@@ -83,36 +85,7 @@ OBSOLETE_SKILL_FILES = (
     "tavern/scripts/make_test_card.py",
     "tavern/scripts/smoke.py",
 )
-AGENTS_START = "<!-- tavern-updater:start -->"
-AGENTS_END = "<!-- tavern-updater:end -->"
-AGENTS_BLOCK = f"""{AGENTS_START}
-## Tavern Skills And Updates
-
-Use `/opt/data/skills/creative/tavern/SKILL.md` as the lightweight router. Load only the matching specialist workflow:
-
-- `tavern-world`: recommend, plan, create, expand, or rebuild a world.
-- `tavern-cards`: search, import, normalize, audit, or attach character cards.
-- `tavern-worldbooks`: create, import, audit, or repair lore and worldbooks.
-- `tavern-story-profile`: recall stories and manage durable story preferences.
-- `tavern-continuity`: diagnose compression, dynamic cast state, prompts, or generation.
-- `tavern-ops`: configure models, restart, verify, or localize Liveware.
-
-Use `/opt/data/skills/system/tavern-updater` for version checks, review, installation, and rollback. Never improvise `git pull` or overwrite the runtime or skill directories.
-
-```sh
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py check
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py review
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py report --plan <PLAN_ID>
-```
-
-After `report`, show one concise summary and wait for a new explicit approval. Only then run:
-
-```sh
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
-```
-
-The updater manages its explicit runtime, official frontend, seven creative-skill, updater, and marked `AGENTS.md` allowlists as one transaction. It must preserve identity/persona files, assets, starter content, `/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, and every unlisted path. Modified retired skill files are conflicts, not silent deletions. A failed validation, restart, health check, or skill-registration check must restore the complete pre-update backup.
-{AGENTS_END}"""
+AGENTS_RELEASE_FILE = "references/AGENTS.md"
 
 
 def request_json(url):
@@ -300,19 +273,13 @@ def install_updater(staged, target):
             pass
 
 
-def sync_agents(path):
-    current = path.read_text(encoding="utf-8") if path.is_file() else "# AGENTS.md\n"
-    if (current.count(AGENTS_START) != current.count(AGENTS_END)
-            or current.count(AGENTS_START) > 1):
-        raise RuntimeError("installed AGENTS.md has ambiguous Tavern update markers")
-    marked = re.compile(re.escape(AGENTS_START) + r".*?" + re.escape(AGENTS_END), re.DOTALL)
-    if marked.search(current):
-        updated = marked.sub(AGENTS_BLOCK, current, count=1)
-    else:
-        updated = current.rstrip() + "\n\n" + AGENTS_BLOCK + "\n"
-    updated = re.sub(r"(?m)^Current deployed skill version:.*\n?", "", updated)
-    if updated != current:
-        atomic_write(path, updated)
+def replace_agents(path, source):
+    desired = source.read_text(encoding="utf-8")
+    if not desired.strip() or not desired.startswith("# AGENTS.md"):
+        raise RuntimeError("release AGENTS.md is malformed")
+    current = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if desired != current:
+        atomic_write(path, desired)
         return True
     return False
 
@@ -375,7 +342,7 @@ def main():
         extract_updater(archive_path, manifest, staged_updater)
         backup = backup_existing(data_root, updater_target, agents_path)
         install_updater(staged_updater, updater_target)
-        agents_changed = sync_agents(agents_path)
+        agents_changed = replace_agents(agents_path, staged_updater / AGENTS_RELEASE_FILE)
 
     result = {
         "ok": True,
@@ -387,7 +354,7 @@ def main():
         "release_version": manifest["version"],
         "agents_updated": agents_changed,
         "backup": backup,
-        "next_step": "Show one update report and wait for approval. All seven Tavern skills and the managed AGENTS.md block are included in that plan and must not be offered as separate follow-ups.",
+        "next_step": "Show one update report and wait for approval. All seven Tavern skills and the complete release-managed AGENTS.md are included in that plan and must not be offered as separate follow-ups.",
     }
     if not args.skip_report:
         result.update(generate_report(updater_target / "scripts/update.py", data_root))

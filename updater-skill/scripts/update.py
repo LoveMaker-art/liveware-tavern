@@ -51,7 +51,10 @@ VERSION_RE = re.compile(r"^version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
 SKILL_VERSION_LINE_RE = re.compile(r"(?m)^version:[^\r\n]*$")
 IGNORED = ("__pycache__", "*.pyc", "*.log", "*.bak*", "*.before-*", ".DS_Store")
 PROTECTED = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "sessions", "credentials", "backups")
-OBSOLETE_UPDATER_FILES = ("references/conflict-inspection.md",)
+OBSOLETE_UPDATER_FILES = (
+    "references/conflict-inspection.md",
+    "references/agents-block.md",
+)
 HISTORICAL_SKILL_FILES = {
     "scripts/install.sh",
     "scripts/make_test_card.py",
@@ -129,9 +132,7 @@ RETIRE_WITH_BACKUP = {
     "skills/tavern/scripts/make_test_card.py",
     "skills/tavern/scripts/smoke.py",
 }
-AGENTS_START = "<!-- tavern-updater:start -->"
-AGENTS_END = "<!-- tavern-updater:end -->"
-AGENTS_BLOCK_FILE = "references/agents-block.md"
+AGENTS_RELEASE_FILE = "references/AGENTS.md"
 ALLOWED_MANAGED = {
     "runtime": {
         ".tavern-release-version",
@@ -150,7 +151,8 @@ ALLOWED_MANAGED = {
     "updater": {
         "SKILL.md",
         "agents/openai.yaml",
-        AGENTS_BLOCK_FILE,
+        AGENTS_RELEASE_FILE,
+        "references/agents-block.md",
         "references/release-format.md",
         "scripts/update.py",
     },
@@ -293,6 +295,8 @@ def release_material(work, release=None, historical=False):
     }
     if not required_runtime.issubset(set(managed)):
         raise RuntimeError("release is missing required Tavern system files")
+    if not historical and "updater/" + AGENTS_RELEASE_FILE not in set(managed):
+        raise RuntimeError("release is missing the managed AGENTS.md")
     skill_schema = skill_manifest.get("schema")
     skill_scope = skill_manifest.get("scope")
     if (skill_schema, skill_scope) not in (
@@ -461,30 +465,15 @@ def atomic_write_text(path, content):
             pass
 
 
-def render_agents(current, desired_block):
-    current = current if isinstance(current, str) else ""
-    desired_block = str(desired_block or "").strip()
-    if (desired_block.count(AGENTS_START) != 1
-            or desired_block.count(AGENTS_END) != 1
-            or desired_block.find(AGENTS_START) > desired_block.find(AGENTS_END)):
-        raise RuntimeError("release AGENTS block is malformed")
-    start_count = current.count(AGENTS_START)
-    end_count = current.count(AGENTS_END)
-    if start_count != end_count or start_count > 1:
-        raise RuntimeError("installed AGENTS.md has ambiguous Tavern update markers")
-    if start_count == 1:
-        pattern = re.compile(re.escape(AGENTS_START) + r".*?" + re.escape(AGENTS_END), re.DOTALL)
-        return pattern.sub(desired_block, current, count=1)
-    prefix = current.rstrip()
-    return (prefix + "\n\n" if prefix else "") + desired_block + "\n"
-
-
 def stage_agents(unpacked, plan_dir):
-    block_path = unpacked / "updater" / AGENTS_BLOCK_FILE
-    if not block_path.is_file():
-        raise RuntimeError("release is missing the managed AGENTS block")
+    release_path = unpacked / "updater" / AGENTS_RELEASE_FILE
+    if not release_path.is_file():
+        raise RuntimeError("release is missing the managed AGENTS.md")
     current = AGENTS_PATH.read_text(encoding="utf-8") if AGENTS_PATH.is_file() else ""
-    updated = render_agents(current, block_path.read_text(encoding="utf-8"))
+    updated = release_path.read_text(encoding="utf-8")
+    if not updated.strip() or not updated.startswith("# AGENTS.md"):
+        raise RuntimeError("release AGENTS.md is malformed")
+    plan_dir.mkdir(parents=True, exist_ok=True)
     staged = plan_dir / "staged-agents.md"
     staged.write_text(updated, encoding="utf-8")
     return staged, {
@@ -493,7 +482,7 @@ def stage_agents(unpacked, plan_dir):
         "status": "unchanged" if updated == current else "upstream",
         "base_sha256": None,
         "installed_sha256": sha256_file(AGENTS_PATH) if AGENTS_PATH.is_file() else None,
-        "release_sha256": sha256_file(staged),
+        "release_sha256": sha256_file(release_path),
         "metadata_normalized": False,
     }
 
@@ -1171,10 +1160,10 @@ def command_report(args):
             "runtime identity/persona files other than the neutral actor_self.md seed template",
             "starter and fixture content",
             "creative-skill assets, fixtures, and every file outside the seven explicit skill allowlists",
-            "AGENTS.md content outside the Tavern-managed marker block",
             "/opt/data/tavern-state",
             "credentials and model keys",
         ],
+        "agents_policy": "The complete /opt/data/AGENTS.md is release-managed and will be replaced after its current contents are backed up.",
         "next_step": "Report this summary once and wait for approval. Use --details only when the user explicitly requests file hashes or conflict diagnosis.",
     }
     print(json.dumps(report, ensure_ascii=False))

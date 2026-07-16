@@ -54,15 +54,12 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn("skills/tavern/scripts/make_test_card.py", names)
         self.assertEqual(set(manifest["managed_files"]), names)
 
-    def test_bootstrap_and_updater_agents_blocks_match(self):
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "tavern_bootstrap_under_test", ROOT / "bootstrap/tavern_updater_bootstrap.py")
-        bootstrap = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bootstrap)
-        managed = (ROOT / "updater-skill/references/agents-block.md").read_text(encoding="utf-8").strip()
-        self.assertEqual(bootstrap.AGENTS_BLOCK.strip(), managed)
+    def test_release_contains_one_canonical_agents_file(self):
+        canonical = ROOT / "updater-skill/references/AGENTS.md"
+        self.assertTrue(canonical.is_file())
+        self.assertTrue(canonical.read_text(encoding="utf-8").startswith("# AGENTS.md"))
+        self.assertFalse((ROOT / "updater-skill/references/agents-block.md").exists())
+        self.assertNotIn("tavern-updater:start", canonical.read_text(encoding="utf-8"))
 
     def test_persona_profile_has_accessible_detail_entry(self):
         app = (ROOT / "skill/reader/app.js").read_text(encoding="utf-8")

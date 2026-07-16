@@ -34,14 +34,14 @@ dist/install-tavern-updater.sh
 dist/bootstrap-manifest.json
 ```
 
-Create a stable GitHub Release tagged `v<VERSION>` and attach all seven generated assets. Mirrored instances can then update the runtime, all seven creative skills, the updater, and the marked Tavern block in `AGENTS.md` through one reviewed transaction.
+Create a stable GitHub Release tagged `v<VERSION>` and attach all seven generated assets. Mirrored instances can then update the runtime, all seven creative skills, the updater, and the complete release-managed `AGENTS.md` through one reviewed transaction.
 
 ## Bootstrap A Legacy Instance
 
 Download `tavern-updater-bootstrap.py` and `bootstrap-manifest.json` from the
 latest stable GitHub Release. Verify the script SHA256 against the manifest,
 then run it with Python 3. The bootstrap installs only the updater skill,
-replaces or appends the marked Tavern update section in `/opt/data/AGENTS.md`,
+backs up and completely replaces `/opt/data/AGENTS.md` with the verified release file,
 and automatically generates `check`, `review`, and `report` output. It never
 applies the Tavern update without a new explicit user approval.
 

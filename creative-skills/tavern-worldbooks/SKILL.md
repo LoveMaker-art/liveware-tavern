@@ -1,7 +1,7 @@
 ---
 name: tavern-worldbooks
 description: Manage Tavern worldbooks：设定、触发词、审计与修复。
-version: 1.19.8
+version: 1.19.9
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
