@@ -40,8 +40,11 @@ class RepositoryHygieneTests(unittest.TestCase):
                 "skills/tavern/scripts/tavern_cli.py",
             },
         )
-        self.assertEqual(manifest["schema"], 2)
+        self.assertEqual(manifest["schema"], 3)
         self.assertEqual(manifest["scope"], "tavern-creative-skills")
+        self.assertEqual(manifest["install_mode"], "exact-directories")
+        self.assertEqual(len(manifest["directories"]), 7)
+        self.assertNotIn("obsolete_files", manifest)
         for name in (
                 "tavern", "tavern-world", "tavern-cards", "tavern-worldbooks",
                 "tavern-story-profile", "tavern-continuity", "tavern-ops"):

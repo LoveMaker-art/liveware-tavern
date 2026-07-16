@@ -25,4 +25,4 @@ After `report`, show one concise summary and wait for a new explicit approval. O
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
 ```
 
-The updater manages its explicit runtime, official frontend, seven creative skills, updater, and complete `/opt/data/AGENTS.md` as one transaction. It must preserve identity/persona files, assets, starter content, `/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, and every unlisted path. Modified retired skill files are conflicts, not silent deletions. A failed validation, restart, health check, or skill-registration check must restore the complete pre-update backup.
+The updater manages its explicit runtime and official frontend allowlists, exact seven official creative-skill directories, updater, and complete `/opt/data/AGENTS.md` as one transaction. It must preserve custom skill directories, identity/persona files, assets, starter content, `/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, and every unlisted path. A failed validation, restart, health check, or skill-registration check must restore the complete pre-update backup.

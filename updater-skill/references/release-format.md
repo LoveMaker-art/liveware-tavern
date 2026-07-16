@@ -57,7 +57,7 @@ updater/
   agents/
 ```
 
-The separately verified schema-2 skill archive contains the router and six specialist workflows:
+The separately verified skill archive contains the router and six specialist workflows:
 
 ```text
 skills/
@@ -70,9 +70,9 @@ skills/
   tavern-ops/
 ```
 
-The skill manifest includes an exact `managed_files` set and an exact, allowlisted `obsolete_files` retirement set. Old single-skill references are removed only when they match the trusted installed Release; modified files block review. Known legacy developer tools are backed up before retirement. The updater takes the canonical `AGENTS.md` from the verified updater archive, backs up the installed file, and replaces `/opt/data/AGENTS.md` completely.
+The schema-3 skill manifest declares `install_mode: exact-directories`, the exact seven official directory names, and the complete file/hash set. The updater backs up every existing official directory and replaces those directories completely; this migrates the former single `tavern` skill without retaining stale files. Skill directories outside the declared seven are never touched. The updater also takes the canonical `AGENTS.md` from the verified updater archive, backs up the installed file, and replaces `/opt/data/AGENTS.md` completely.
 
-Only the listed runtime files, the seven official frontend code files, and the seven creative-skill allowlists are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, and credentials are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
+Only the listed runtime files, the seven official frontend code files, and the exact contents of the seven declared creative-skill directories are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, credentials, and nonofficial skill directories are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
 
 Every published version intended to serve as a future merge base must retain these
 verified assets. During review, the updater resolves the installed version's tagged

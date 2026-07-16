@@ -36,6 +36,15 @@ OBSOLETE_UPDATER_FILES = (
     "references/conflict-inspection.md",
     "references/agents-block.md",
 )
+CREATIVE_SKILL_NAMES = (
+    "tavern",
+    "tavern-world",
+    "tavern-cards",
+    "tavern-worldbooks",
+    "tavern-story-profile",
+    "tavern-continuity",
+    "tavern-ops",
+)
 SKILL_FILES = (
     "tavern/SKILL.md",
     "tavern/references/shared-contract.md",
@@ -64,26 +73,6 @@ SKILL_FILES = (
     "tavern-ops/references/i18n.md",
     "tavern-ops/references/liveware-ops.md",
     "tavern-ops/references/model-config.md",
-)
-OBSOLETE_SKILL_FILES = (
-    "tavern/references/actor-memory.md",
-    "tavern/references/card-authoring.md",
-    "tavern/references/card-localization.md",
-    "tavern/references/card-workflow.md",
-    "tavern/references/content-modeling.md",
-    "tavern/references/diagnostics.md",
-    "tavern/references/event-driven-update.md",
-    "tavern/references/i18n.md",
-    "tavern/references/liveware-ops.md",
-    "tavern/references/lore-audit.md",
-    "tavern/references/model-config.md",
-    "tavern/references/recommendation-planning.md",
-    "tavern/references/world-expansion.md",
-    "tavern/references/world-rebuild.md",
-    "tavern/references/worldbook-authoring.md",
-    "tavern/scripts/install.sh",
-    "tavern/scripts/make_test_card.py",
-    "tavern/scripts/smoke.py",
 )
 AGENTS_RELEASE_FILE = "references/AGENTS.md"
 
@@ -174,8 +163,10 @@ def validate_release(release, manifest, archive_path, skill_manifest, skill_arch
     required = {"updater/" + name for name in UPDATER_FILES}
     if not required.issubset(managed) or not required.issubset(hashes):
         raise RuntimeError("release does not contain the complete updater skill")
-    if (skill_manifest.get("schema") != 2
+    if (skill_manifest.get("schema") != 3
             or skill_manifest.get("scope") != "tavern-creative-skills"
+            or skill_manifest.get("install_mode") != "exact-directories"
+            or tuple(skill_manifest.get("directories") or ()) != CREATIVE_SKILL_NAMES
             or skill_manifest.get("archive") != SKILL_ASSET_ARCHIVE):
         raise RuntimeError("unsupported Tavern skill manifest")
     if str(skill_manifest.get("version") or "") != version:
@@ -187,10 +178,6 @@ def validate_release(release, manifest, archive_path, skill_manifest, skill_arch
     allowed = {"skills/" + name for name in SKILL_FILES}
     if skill_managed != allowed or set(skill_hashes) != allowed:
         raise RuntimeError("Tavern skill release does not match the safe allowlist")
-    obsolete = set(skill_manifest.get("obsolete_files") or [])
-    allowed_obsolete = {"skills/" + name for name in OBSOLETE_SKILL_FILES}
-    if obsolete != allowed_obsolete or obsolete & allowed:
-        raise RuntimeError("Tavern skill release has an unsafe retirement list")
 
 
 def extract_updater(archive_path, manifest, destination):
@@ -334,6 +321,7 @@ def main():
     data_root = Path(args.data_root).resolve()
     updater_target = data_root / "skills/system/tavern-updater"
     agents_path = data_root / "AGENTS.md"
+    agents_before = agents_path.read_bytes() if agents_path.is_file() else None
     with tempfile.TemporaryDirectory(prefix="tavern-updater-bootstrap-") as temp:
         work = Path(temp)
         release, manifest, archive_path, skill_manifest, skill_archive_path = fetch_release(work, args.release_dir)
@@ -342,7 +330,9 @@ def main():
         extract_updater(archive_path, manifest, staged_updater)
         backup = backup_existing(data_root, updater_target, agents_path)
         install_updater(staged_updater, updater_target)
-        agents_changed = replace_agents(agents_path, staged_updater / AGENTS_RELEASE_FILE)
+        agents_changed = False
+        if not args.apply:
+            agents_changed = replace_agents(agents_path, staged_updater / AGENTS_RELEASE_FILE)
 
     result = {
         "ok": True,
@@ -365,6 +355,8 @@ def main():
             else:
                 result["apply"] = apply_reported_plan(
                     updater_target / "scripts/update.py", data_root, report)
+            agents_after = agents_path.read_bytes() if agents_path.is_file() else None
+            result["agents_updated"] = agents_after != agents_before
             result["next_step"] = "Report the installed version and health result."
     print(json.dumps(result, ensure_ascii=False))
 

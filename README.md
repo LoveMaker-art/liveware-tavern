@@ -34,7 +34,7 @@ dist/install-tavern-updater.sh
 dist/bootstrap-manifest.json
 ```
 
-Create a stable GitHub Release tagged `v<VERSION>` and attach all seven generated assets. Mirrored instances can then update the runtime, all seven creative skills, the updater, and the complete release-managed `AGENTS.md` through one reviewed transaction.
+Create a stable GitHub Release tagged `v<VERSION>` and attach all seven generated assets. Mirrored instances can then update the runtime, atomically replace the exact seven official creative-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched.
 
 ## Bootstrap A Legacy Instance
 
@@ -71,7 +71,7 @@ Place `updater-skill/` at:
 /opt/data/skills/system/tavern-updater/
 ```
 
-The Agent can then check and install a verified stable release after explicit user confirmation. Legacy updater versions that predate the split-skill manifest must enter through the one-command Bootstrap so the updater is upgraded before review.
+The Agent can then check and install a verified stable release after explicit user confirmation. Any instance whose updater is older than `v1.20.0` must enter this schema-3 transition through the one-command Bootstrap so the updater is upgraded before it reviews the new exact-directory skill manifest.
 
 ## License
 

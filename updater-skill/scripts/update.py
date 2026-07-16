@@ -48,7 +48,6 @@ ASSET_ARCHIVE = "tavern-release.tar.gz"
 SKILL_ASSET_MANIFEST = "skill-manifest.json"
 SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 VERSION_RE = re.compile(r"^version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
-SKILL_VERSION_LINE_RE = re.compile(r"(?m)^version:[^\r\n]*$")
 IGNORED = ("__pycache__", "*.pyc", "*.log", "*.bak*", "*.before-*", ".DS_Store")
 PROTECTED = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "sessions", "credentials", "backups")
 OBSOLETE_UPDATER_FILES = (
@@ -123,11 +122,6 @@ ALLOWED_OBSOLETE = {
     "skills/tavern/" + name
     for name in (LEGACY_SKILL_FILES - {"SKILL.md", "scripts/bringup.sh", "scripts/provision.sh", "scripts/tavern_cli.py"})
 } | {
-    "skills/tavern/scripts/install.sh",
-    "skills/tavern/scripts/make_test_card.py",
-    "skills/tavern/scripts/smoke.py",
-}
-RETIRE_WITH_BACKUP = {
     "skills/tavern/scripts/install.sh",
     "skills/tavern/scripts/make_test_card.py",
     "skills/tavern/scripts/smoke.py",
@@ -302,6 +296,7 @@ def release_material(work, release=None, historical=False):
     if (skill_schema, skill_scope) not in (
             (1, "tavern-creative-skill"),
             (2, "tavern-creative-skills"),
+            (3, "tavern-creative-skills"),
     ) or skill_manifest.get("archive") != SKILL_ASSET_ARCHIVE:
         raise RuntimeError("unsupported Tavern skill manifest")
     if str(skill_manifest.get("version") or "") != version:
@@ -323,9 +318,16 @@ def release_material(work, release=None, historical=False):
         required_skills = {f"skills/{name}/SKILL.md" for name in CREATIVE_SKILL_NAMES}
         if not required_skills.issubset(set(skill_managed)):
             raise RuntimeError("Tavern creative-skill release is incomplete")
-        obsolete = set(skill_obsolete_files(skill_manifest))
-        if not obsolete.issubset(ALLOWED_OBSOLETE) or obsolete & set(skill_managed):
-            raise RuntimeError("Tavern creative-skill release has an unsafe retirement list")
+        if skill_schema == 3:
+            if (skill_manifest.get("install_mode") != "exact-directories"
+                    or tuple(skill_manifest.get("directories") or ()) != CREATIVE_SKILL_NAMES):
+                raise RuntimeError("Tavern creative-skill release has an unsafe install policy")
+            if skill_manifest.get("obsolete_files"):
+                raise RuntimeError("exact-directory skill releases must not list obsolete files")
+        else:
+            obsolete = set(skill_obsolete_files(skill_manifest))
+            if not obsolete.issubset(ALLOWED_OBSOLETE) or obsolete & set(skill_managed):
+                raise RuntimeError("Tavern creative-skill release has an unsafe retirement list")
     return release, manifest, archive_path, skill_manifest, skill_archive_path
 
 
@@ -402,6 +404,14 @@ def tree_hashes(root):
     return {name: sha256_file(path) for name, path in sorted(tree_files(root).items())}
 
 
+def official_skill_hashes(root=None):
+    root = root or TARGETS["skills"]
+    return {
+        name: tree_hashes(root / name)
+        for name in CREATIVE_SKILL_NAMES
+    }
+
+
 def split_managed(managed_files):
     grouped = {area: set() for area in TARGETS}
     for path in managed_files:
@@ -424,6 +434,7 @@ def managed_fingerprint(managed_files, obsolete_files=None, include_agents=True)
         area, _, name = key.partition("/")
         path = TARGETS[area] / name
         payload[key] = sha256_file(path) if path.is_file() else None
+    payload["skills/exact-directories"] = official_skill_hashes()
     if include_agents:
         payload["agents/AGENTS.md"] = sha256_file(AGENTS_PATH) if AGENTS_PATH.is_file() else None
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -487,36 +498,44 @@ def stage_agents(unpacked, plan_dir):
     }
 
 
-def review_obsolete(base_root, obsolete_files):
+def stage_official_skills(incoming_root, output_root, managed_names):
+    expected = set(managed_names)
+    if expected != CREATIVE_SKILL_FILES:
+        raise RuntimeError("release does not contain the exact official Tavern skill set")
+    current = tree_files(TARGETS["skills"])
+    incoming = tree_files(incoming_root)
     report = []
-    conflicts = []
-    for key in sorted(set(obsolete_files or [])):
-        if key not in ALLOWED_OBSOLETE:
-            raise RuntimeError(f"release retires an unsupported path: {key}")
-        area, _, name = key.partition("/")
-        current = TARGETS[area] / name
-        base = base_root / area / name
-        current_hash = sha256_file(current) if current.is_file() else None
-        base_hash = sha256_file(base) if base.is_file() else None
-        if not current_hash:
-            status = "unchanged"
-        elif key in RETIRE_WITH_BACKUP:
-            status = "retired"
-        elif base_hash and current_hash == base_hash:
-            status = "upstream-removed"
-        else:
-            status = "conflict"
-            conflicts.append(key)
+    for name in sorted(expected):
+        source = incoming.get(name)
+        if source is None:
+            raise RuntimeError(f"release is missing official skill file: {name}")
+        installed = current.get(name)
+        current_hash = sha256_file(installed) if installed else None
+        release_hash = sha256_file(source)
+        copy_file(source, output_root / name)
         report.append({
-            "path": key,
+            "path": "skills/" + name,
             "category": "skill",
-            "status": status,
-            "base_sha256": base_hash,
+            "status": "unchanged" if current_hash == release_hash else "upstream",
+            "base_sha256": None,
             "installed_sha256": current_hash,
+            "release_sha256": release_hash,
+            "metadata_normalized": False,
+        })
+    official_prefixes = tuple(name + "/" for name in CREATIVE_SKILL_NAMES)
+    for name, path in sorted(current.items()):
+        if name in expected or not name.startswith(official_prefixes):
+            continue
+        report.append({
+            "path": "skills/" + name,
+            "category": "skill",
+            "status": "replaced",
+            "base_sha256": None,
+            "installed_sha256": sha256_file(path),
             "release_sha256": None,
             "metadata_normalized": False,
         })
-    return report, conflicts
+    return report, []
 
 
 def merge_file(base, current, incoming, output):
@@ -531,44 +550,6 @@ def merge_file(base, current, incoming, output):
         output.write_bytes(result.stdout)
         return True
     return False
-
-
-def merge_tavern_skill(base, current, incoming, output):
-    """Merge SKILL.md after aligning only its release-owned version field."""
-    try:
-        texts = [path.read_text(encoding="utf-8") for path in (base, current, incoming)]
-    except (OSError, UnicodeError):
-        return None
-    matches = [SKILL_VERSION_LINE_RE.search(text) for text in texts]
-    if not all(matches):
-        return None
-    version_lines = [match.group(0) for match in matches]
-    canonical = matches[2].group(0)
-    normalized = [SKILL_VERSION_LINE_RE.sub(canonical, text, count=1) for text in texts]
-    with tempfile.TemporaryDirectory(prefix="tavern-skill-merge-") as temp:
-        root = Path(temp)
-        paths = []
-        for index, text in enumerate(normalized):
-            path = root / str(index)
-            path.write_text(text, encoding="utf-8")
-            paths.append(path)
-        return (
-            merge_file(paths[0], paths[1], paths[2], output),
-            len(set(version_lines)) > 1,
-        )
-
-
-def same_skill_except_version(current, incoming):
-    try:
-        current_text = current.read_text(encoding="utf-8")
-        incoming_text = incoming.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return False
-    incoming_match = SKILL_VERSION_LINE_RE.search(incoming_text)
-    if not incoming_match or not SKILL_VERSION_LINE_RE.search(current_text):
-        return False
-    return SKILL_VERSION_LINE_RE.sub(
-        incoming_match.group(0), current_text, count=1) == incoming_text
 
 
 def merge_area(area, base_root, current_root, incoming_root, output_root, managed_names):
@@ -593,20 +574,8 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
             source, status = c, "local"
         elif not b and n and not c:
             source, status = n, "upstream-added"
-        elif (not b and c and n and area == "skills" and name.endswith("/SKILL.md")
-              and same_skill_except_version(c, n)):
-            copy_file(n, output_root / name)
-            status = "merged"
-            metadata_normalized = True
         elif b and c and n and not any(binary(path) for path in (b, c, n)):
-            merged = None
-            if area == "skills" and name.endswith("/SKILL.md"):
-                skill_merge = merge_tavern_skill(b, c, n, output_root / name)
-                if skill_merge is not None:
-                    merged, version_drift = skill_merge
-                    metadata_normalized = bool(merged and version_drift)
-            if merged is None:
-                merged = merge_file(b, c, n, output_root / name)
+            merged = merge_file(b, c, n, output_root / name)
             if merged:
                 status = "merged"
             else:
@@ -782,6 +751,46 @@ def install_managed(source_root, managed_files, areas=None):
                     pass
 
 
+def remove_path(path):
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def replace_official_skills(staged_root):
+    expected = {
+        name: {
+            path.partition("/")[2]
+            for path in CREATIVE_SKILL_FILES
+            if path.startswith(name + "/")
+        }
+        for name in CREATIVE_SKILL_NAMES
+    }
+    pending = TARGETS["skills"] / (".tavern-skills.next-" + uuid.uuid4().hex[:8])
+    remove_path(pending)
+    pending.mkdir(parents=True)
+    try:
+        for name in CREATIVE_SKILL_NAMES:
+            source = staged_root / name
+            if tree_hashes(source).keys() != expected[name]:
+                raise RuntimeError(f"staged official skill directory is incomplete: {name}")
+            shutil.copytree(source, pending / name)
+        for name in CREATIVE_SKILL_NAMES:
+            target = TARGETS["skills"] / name
+            remove_path(target)
+            os.replace(pending / name, target)
+    finally:
+        remove_path(pending)
+    installed = official_skill_hashes()
+    staged = official_skill_hashes(staged_root)
+    if installed != staged:
+        raise RuntimeError("installed official skill directories do not match the reviewed release")
+
+
 def prune_empty_parents(path, root):
     parent = path.parent
     while parent != root:
@@ -800,25 +809,14 @@ def remove_obsolete_updater_files():
             pass
 
 
-def remove_obsolete_skill_files(obsolete_files):
-    for key in sorted(set(obsolete_files or [])):
-        if key not in ALLOWED_OBSOLETE:
-            raise RuntimeError(f"release retires an unsupported path: {key}")
-        area, _, name = key.partition("/")
-        target = TARGETS[area] / name
-        try:
-            target.unlink()
-        except FileNotFoundError:
-            continue
-        prune_empty_parents(target, TARGETS[area])
-
-
 def backup_current(version, managed_files, obsolete_files=None):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = BACKUPS / f"{version}-{stamp}-{uuid.uuid4().hex[:8]}"
     backup.mkdir(parents=True, exist_ok=False)
     missing = []
     for area, names in split_managed(managed_files).items():
+        if area == "skills":
+            continue
         for name in sorted(names):
             current = TARGETS[area] / name
             if current.is_file():
@@ -827,15 +825,14 @@ def backup_current(version, managed_files, obsolete_files=None):
                 missing.append(f"{area}/{name}")
     if BASELINE.is_dir():
         shutil.copytree(BASELINE, backup / "baseline")
-    retired_present = []
-    for key in sorted(set(obsolete_files or [])):
-        if key not in ALLOWED_OBSOLETE:
-            raise RuntimeError(f"release retires an unsupported path: {key}")
-        area, _, name = key.partition("/")
-        current = TARGETS[area] / name
-        if current.is_file():
-            copy_file(current, backup / "retired" / area / name)
-            retired_present.append(key)
+    skill_directories_present = []
+    for name in CREATIVE_SKILL_NAMES:
+        current = TARGETS["skills"] / name
+        if current.exists() and not current.is_dir():
+            raise RuntimeError(f"official skill path is not a directory: {current}")
+        if current.is_dir():
+            shutil.copytree(current, backup / "skill-directories" / name)
+            skill_directories_present.append(name)
     agents_present = AGENTS_PATH.is_file()
     if agents_present:
         copy_file(AGENTS_PATH, backup / "AGENTS.md")
@@ -846,12 +843,12 @@ def backup_current(version, managed_files, obsolete_files=None):
             copy_file(current, backup / "obsolete/updater" / name)
             obsolete_present.append("updater/" + name)
     metadata = {
+        "schema": 2,
         "managed_files": sorted(managed_files),
         "missing": missing,
         "baseline_present": BASELINE.is_dir(),
         "obsolete_present": obsolete_present,
-        "retired_files": sorted(set(obsolete_files or [])),
-        "retired_present": retired_present,
+        "skill_directories_present": skill_directories_present,
         "agents_present": agents_present,
     }
     (backup / "backup.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -879,6 +876,8 @@ def restore(backup):
     missing = set(metadata.get("missing") or [])
     stop_server()
     for area, names in split_managed(managed_files).items():
+        if area == "skills" and metadata.get("schema") == 2:
+            continue
         for name in sorted(names):
             key = f"{area}/{name}"
             target = TARGETS[area] / name
@@ -902,20 +901,28 @@ def restore(backup):
             except FileNotFoundError:
                 pass
             prune_empty_parents(target, TARGETS["updater"])
-    retired_present = set(metadata.get("retired_present") or [])
-    for key in metadata.get("retired_files") or []:
-        if key not in ALLOWED_OBSOLETE:
-            continue
-        area, _, name = key.partition("/")
-        target = TARGETS[area] / name
-        if key in retired_present:
-            copy_file(backup / "retired" / area / name, target)
-        else:
-            try:
-                target.unlink()
-            except FileNotFoundError:
-                pass
-            prune_empty_parents(target, TARGETS[area])
+    if metadata.get("schema") == 2:
+        present = set(metadata.get("skill_directories_present") or [])
+        for name in CREATIVE_SKILL_NAMES:
+            target = TARGETS["skills"] / name
+            remove_path(target)
+            if name in present:
+                shutil.copytree(backup / "skill-directories" / name, target)
+    else:
+        retired_present = set(metadata.get("retired_present") or [])
+        for key in metadata.get("retired_files") or []:
+            if key not in ALLOWED_OBSOLETE:
+                continue
+            area, _, name = key.partition("/")
+            target = TARGETS[area] / name
+            if key in retired_present:
+                copy_file(backup / "retired" / area / name, target)
+            else:
+                try:
+                    target.unlink()
+                except FileNotFoundError:
+                    pass
+                prune_empty_parents(target, TARGETS[area])
     if metadata.get("agents_present"):
         copy_file(backup / "AGENTS.md", AGENTS_PATH)
     else:
@@ -1003,7 +1010,7 @@ def command_review(_args):
         target_work = work / "target"
         release, manifest, archive, skill_manifest, skill_archive = release_material(target_work)
         managed_files = sorted(set(manifest["managed_files"] + canonical_skill_managed(skill_manifest)))
-        obsolete_files = sorted(set(skill_obsolete_files(skill_manifest)))
+        obsolete_files = []
         if version_key(manifest["version"]) < version_key(installed):
             raise RuntimeError("latest release is older than the installed version")
         unpacked = target_work / "unpacked"
@@ -1039,7 +1046,7 @@ def command_review(_args):
                     baseline_source = "unavailable"
                     baseline_warning = (
                         "No verified official baseline is available for installed version "
-                        f"{installed}: {exc}. Existing files that differ from the target "
+                        f"{installed}: {exc}. Existing runtime or updater files that differ from the target "
                         "are treated as conflicts and will not be overwritten."
                     )
                     base_root = work / "untrusted-empty-base"
@@ -1057,13 +1064,14 @@ def command_review(_args):
         managed_by_area = split_managed(managed_files)
         for area, target in TARGETS.items():
             incoming = unpacked / area
-            area_files, area_conflicts = merge_area(
-                area, base_root / area, target, incoming, staged / area, managed_by_area[area])
+            if area == "skills":
+                area_files, area_conflicts = stage_official_skills(
+                    incoming, staged / area, managed_by_area[area])
+            else:
+                area_files, area_conflicts = merge_area(
+                    area, base_root / area, target, incoming, staged / area, managed_by_area[area])
             files.extend(area_files)
             conflicts.extend(area_conflicts)
-        obsolete_report, obsolete_conflicts = review_obsolete(base_root, obsolete_files)
-        files.extend(obsolete_report)
-        conflicts.extend(obsolete_conflicts)
         staged_agents, agents_report = stage_agents(unpacked, plan_dir)
         files.append(agents_report)
         counts = {}
@@ -1073,7 +1081,8 @@ def command_review(_args):
             if item["status"] != "unchanged":
                 categories[item["category"]] = categories.get(item["category"], 0) + 1
         plan = {
-            "schema": 1,
+            "schema": 2,
+            "skill_install_mode": "exact-directories",
             "plan_id": plan_id,
             "installed": installed,
             "target": manifest["version"],
@@ -1154,12 +1163,13 @@ def command_report(args):
             ]
         ),
         "details": bool(args.details),
+        "skills_policy": "The seven official Tavern skill directories are backed up and replaced exactly; every other skill directory is excluded.",
         "excluded": [
             "runtime/web files outside the seven official managed code files",
             "runtime/assets",
             "runtime identity/persona files other than the neutral actor_self.md seed template",
             "starter and fixture content",
-            "creative-skill assets, fixtures, and every file outside the seven explicit skill allowlists",
+            "every skill directory outside the seven exact official Tavern skill directories",
             "/opt/data/tavern-state",
             "credentials and model keys",
         ],
@@ -1174,6 +1184,8 @@ def load_plan(plan_id):
     if not plan_path.is_file():
         raise RuntimeError("review plan does not exist")
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if plan.get("schema") != 2 or plan.get("skill_install_mode") != "exact-directories":
+        raise RuntimeError("review plan does not use the required exact-directory skill policy")
     staged = plan_path.parent / "staged"
     upstream = plan_path.parent / "upstream"
     if not plan.get("ready"):
@@ -1210,8 +1222,8 @@ def command_apply(args):
     backup = backup_current(installed, managed_files, obsolete_files)
     try:
         stop_server()
-        install_managed(staged, managed_files, areas={"runtime", "skills"})
-        remove_obsolete_skill_files(obsolete_files)
+        install_managed(staged, managed_files, areas={"runtime"})
+        replace_official_skills(staged / "skills")
         atomic_write_text(AGENTS_PATH, staged_agents.read_text(encoding="utf-8"))
         skill_report = validate_installed_skills()
         start_server()

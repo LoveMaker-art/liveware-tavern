@@ -41,28 +41,6 @@ CREATIVE_SKILL_NAMES = (
     "tavern-continuity",
     "tavern-ops",
 )
-OBSOLETE_SKILL_FILES = (
-    "skills/tavern/references/actor-memory.md",
-    "skills/tavern/references/card-authoring.md",
-    "skills/tavern/references/card-localization.md",
-    "skills/tavern/references/card-workflow.md",
-    "skills/tavern/references/content-modeling.md",
-    "skills/tavern/references/diagnostics.md",
-    "skills/tavern/references/event-driven-update.md",
-    "skills/tavern/references/i18n.md",
-    "skills/tavern/references/liveware-ops.md",
-    "skills/tavern/references/lore-audit.md",
-    "skills/tavern/references/model-config.md",
-    "skills/tavern/references/recommendation-planning.md",
-    "skills/tavern/references/world-expansion.md",
-    "skills/tavern/references/world-rebuild.md",
-    "skills/tavern/references/worldbook-authoring.md",
-    "skills/tavern/scripts/install.sh",
-    "skills/tavern/scripts/make_test_card.py",
-    "skills/tavern/scripts/smoke.py",
-)
-
-
 def copy(source, destination):
     if source.is_dir():
         shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.bak*", "*.before-*", "*.log"))
@@ -117,14 +95,15 @@ def main():
     with tarfile.open(SKILL_ARCHIVE, "w:gz", format=tarfile.PAX_FORMAT) as package:
         package.add(SKILL_STAGE / "skills", arcname="skills")
     skill_manifest = {
-        "schema": 2,
+        "schema": 3,
         "scope": "tavern-creative-skills",
+        "install_mode": "exact-directories",
+        "directories": list(CREATIVE_SKILL_NAMES),
         "version": version,
         "archive": SKILL_ARCHIVE.name,
         "sha256": hashlib.sha256(SKILL_ARCHIVE.read_bytes()).hexdigest(),
         "managed_files": sorted(skill_files),
         "files": skill_files,
-        "obsolete_files": sorted(OBSOLETE_SKILL_FILES),
     }
     SKILL_MANIFEST.write_text(
         json.dumps(skill_manifest, ensure_ascii=False, indent=2) + "\n",
