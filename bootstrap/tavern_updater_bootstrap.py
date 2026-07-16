@@ -29,41 +29,75 @@ SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 UPDATER_FILES = (
     "SKILL.md",
     "agents/openai.yaml",
+    "references/agents-block.md",
     "references/release-format.md",
     "scripts/update.py",
 )
 OBSOLETE_UPDATER_FILES = ("references/conflict-inspection.md",)
 SKILL_FILES = (
-    "SKILL.md",
-    "references/actor-memory.md",
-    "references/card-authoring.md",
-    "references/card-localization.md",
-    "references/card-workflow.md",
-    "references/content-modeling.md",
-    "references/diagnostics.md",
-    "references/event-driven-update.md",
-    "references/i18n.md",
-    "references/liveware-ops.md",
-    "references/lore-audit.md",
-    "references/model-config.md",
-    "references/recommendation-planning.md",
-    "references/world-expansion.md",
-    "references/world-rebuild.md",
-    "references/worldbook-authoring.md",
-    "scripts/bringup.sh",
-    "scripts/provision.sh",
-    "scripts/tavern_cli.py",
+    "tavern/SKILL.md",
+    "tavern/references/shared-contract.md",
+    "tavern/scripts/bringup.sh",
+    "tavern/scripts/provision.sh",
+    "tavern/scripts/tavern_cli.py",
+    "tavern-world/SKILL.md",
+    "tavern-world/references/content-modeling.md",
+    "tavern-world/references/event-driven-update.md",
+    "tavern-world/references/recommendation-planning.md",
+    "tavern-world/references/world-expansion.md",
+    "tavern-world/references/world-rebuild.md",
+    "tavern-cards/SKILL.md",
+    "tavern-cards/references/card-authoring.md",
+    "tavern-cards/references/card-localization.md",
+    "tavern-cards/references/card-workflow.md",
+    "tavern-worldbooks/SKILL.md",
+    "tavern-worldbooks/references/lore-audit.md",
+    "tavern-worldbooks/references/worldbook-authoring.md",
+    "tavern-story-profile/SKILL.md",
+    "tavern-story-profile/references/actor-memory.md",
+    "tavern-continuity/SKILL.md",
+    "tavern-continuity/references/diagnostics.md",
+    "tavern-continuity/references/runtime-continuity.md",
+    "tavern-ops/SKILL.md",
+    "tavern-ops/references/i18n.md",
+    "tavern-ops/references/liveware-ops.md",
+    "tavern-ops/references/model-config.md",
+)
+OBSOLETE_SKILL_FILES = (
+    "tavern/references/actor-memory.md",
+    "tavern/references/card-authoring.md",
+    "tavern/references/card-localization.md",
+    "tavern/references/card-workflow.md",
+    "tavern/references/content-modeling.md",
+    "tavern/references/diagnostics.md",
+    "tavern/references/event-driven-update.md",
+    "tavern/references/i18n.md",
+    "tavern/references/liveware-ops.md",
+    "tavern/references/lore-audit.md",
+    "tavern/references/model-config.md",
+    "tavern/references/recommendation-planning.md",
+    "tavern/references/world-expansion.md",
+    "tavern/references/world-rebuild.md",
+    "tavern/references/worldbook-authoring.md",
+    "tavern/scripts/install.sh",
+    "tavern/scripts/make_test_card.py",
+    "tavern/scripts/smoke.py",
 )
 AGENTS_START = "<!-- tavern-updater:start -->"
 AGENTS_END = "<!-- tavern-updater:end -->"
 AGENTS_BLOCK = f"""{AGENTS_START}
-## Tavern System Updates
+## Tavern Skills And Updates
 
-Use `/opt/data/skills/system/tavern-updater` for Tavern update checks, reviews,
-installation, and rollback. Never improvise `git pull` or overwrite the runtime
-directory.
+Use `/opt/data/skills/creative/tavern/SKILL.md` as the lightweight router. Load only the matching specialist workflow:
 
-Use this workflow:
+- `tavern-world`: recommend, plan, create, expand, or rebuild a world.
+- `tavern-cards`: search, import, normalize, audit, or attach character cards.
+- `tavern-worldbooks`: create, import, audit, or repair lore and worldbooks.
+- `tavern-story-profile`: recall stories and manage durable story preferences.
+- `tavern-continuity`: diagnose compression, dynamic cast state, prompts, or generation.
+- `tavern-ops`: configure models, restart, verify, or localize Liveware.
+
+Use `/opt/data/skills/system/tavern-updater` for version checks, review, installation, and rollback. Never improvise `git pull` or overwrite the runtime or skill directories.
 
 ```sh
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py check
@@ -71,30 +105,13 @@ python3 /opt/data/skills/system/tavern-updater/scripts/update.py review
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py report --plan <PLAN_ID>
 ```
 
-After `report`, show one concise summary: installed and target versions, changed
-categories, validation, protected data boundaries, metadata normalization, and
-real conflicts. Do not print hashes or exhaustive file details unless the user
-asks. Stop and wait for a new explicit user approval. Only after that approval run:
+After `report`, show one concise summary and wait for a new explicit approval. Only then run:
 
 ```sh
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm
 ```
 
-The updater manages its allowlisted Tavern backend, official frontend,
-operational Tavern skill, release marker, and updater files as one release.
-Do not ask separately whether the Tavern skill should be synchronized. Never
-update identity/persona files, runtime or skill assets, starter content,
-`/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, or
-logs. A failed application update must restore the previous managed files.
-Never use current instance files as an official merge baseline. If the installed
-version has no verified Release or cached baseline, differing files are conflicts
-and must not be overwritten. Validate backend, frontend, and read-only API surfaces
-before committing an update.
-
-Treat a Tavern Skill version mismatch as informational. The updater normalizes
-the release-owned `version:` field during review. Never edit `SKILL.md` only to
-align versions, never search temporary directories for reviewed files, and never
-generate repeated plans unless managed files actually changed.
+The updater manages its explicit runtime, official frontend, seven creative-skill, updater, and marked `AGENTS.md` allowlists as one transaction. It must preserve identity/persona files, assets, starter content, `/opt/data/tavern-state`, `/opt/data/config.yaml`, credentials, sessions, and every unlisted path. Modified retired skill files are conflicts, not silent deletions. A failed validation, restart, health check, or skill-registration check must restore the complete pre-update backup.
 {AGENTS_END}"""
 
 
@@ -184,8 +201,8 @@ def validate_release(release, manifest, archive_path, skill_manifest, skill_arch
     required = {"updater/" + name for name in UPDATER_FILES}
     if not required.issubset(managed) or not required.issubset(hashes):
         raise RuntimeError("release does not contain the complete updater skill")
-    if (skill_manifest.get("schema") != 1
-            or skill_manifest.get("scope") != "tavern-creative-skill"
+    if (skill_manifest.get("schema") != 2
+            or skill_manifest.get("scope") != "tavern-creative-skills"
             or skill_manifest.get("archive") != SKILL_ASSET_ARCHIVE):
         raise RuntimeError("unsupported Tavern skill manifest")
     if str(skill_manifest.get("version") or "") != version:
@@ -194,9 +211,13 @@ def validate_release(release, manifest, archive_path, skill_manifest, skill_arch
         raise RuntimeError("Tavern skill archive SHA256 mismatch")
     skill_managed = set(skill_manifest.get("managed_files") or [])
     skill_hashes = skill_manifest.get("files") or {}
-    allowed = {"skill/" + name for name in SKILL_FILES}
+    allowed = {"skills/" + name for name in SKILL_FILES}
     if skill_managed != allowed or set(skill_hashes) != allowed:
         raise RuntimeError("Tavern skill release does not match the safe allowlist")
+    obsolete = set(skill_manifest.get("obsolete_files") or [])
+    allowed_obsolete = {"skills/" + name for name in OBSOLETE_SKILL_FILES}
+    if obsolete != allowed_obsolete or obsolete & allowed:
+        raise RuntimeError("Tavern skill release has an unsafe retirement list")
 
 
 def extract_updater(archive_path, manifest, destination):
@@ -281,12 +302,12 @@ def install_updater(staged, target):
 
 def sync_agents(path):
     current = path.read_text(encoding="utf-8") if path.is_file() else "# AGENTS.md\n"
+    if (current.count(AGENTS_START) != current.count(AGENTS_END)
+            or current.count(AGENTS_START) > 1):
+        raise RuntimeError("installed AGENTS.md has ambiguous Tavern update markers")
     marked = re.compile(re.escape(AGENTS_START) + r".*?" + re.escape(AGENTS_END), re.DOTALL)
-    legacy = re.compile(r"(?ms)^## Tavern (?:Backend|System) Updates\s*\n.*?(?=^## |\Z)")
     if marked.search(current):
         updated = marked.sub(AGENTS_BLOCK, current, count=1)
-    elif legacy.search(current):
-        updated = legacy.sub(AGENTS_BLOCK + "\n\n", current, count=1)
     else:
         updated = current.rstrip() + "\n\n" + AGENTS_BLOCK + "\n"
     updated = re.sub(r"(?m)^Current deployed skill version:.*\n?", "", updated)
@@ -361,11 +382,12 @@ def main():
         "bootstrap_schema": 1,
         "updater_installed": True,
         "tavern_skill_included": True,
+        "tavern_skills_included": list(SKILL_FILES),
         "release": release["url"],
         "release_version": manifest["version"],
         "agents_updated": agents_changed,
         "backup": backup,
-        "next_step": "Show one update report and wait for approval. The operational Tavern skill is included in that plan and must not be offered as a separate follow-up.",
+        "next_step": "Show one update report and wait for approval. All seven Tavern skills and the managed AGENTS.md block are included in that plan and must not be offered as separate follow-ups.",
     }
     if not args.skip_report:
         result.update(generate_report(updater_target / "scripts/update.py", data_root))

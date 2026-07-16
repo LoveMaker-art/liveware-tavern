@@ -2780,12 +2780,14 @@ def _closest_card_name(value, names):
         return ""
     if s in names:
         return s
+    folded = s.casefold()
+    for n in names:
+        if n and str(n).casefold() == folded:
+            return n
     for n in names:
         if n and (n in s or s in n):
             return n
-    aliases = {"德尔特": "德尔塔", "Delta": "德尔塔", "Alpha": "阿尔法", "Beta": "贝塔", "Gamma": "伽玛", "Epsilon": "伊普西龙", "Zeta": "泽塔", "Eta": "伊塔"}
-    a = aliases.get(s)
-    return a if a in names else ""
+    return ""
 
 def _normalize_scene_state(raw, cards, response_language="zh"):
     if not isinstance(raw, dict):

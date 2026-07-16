@@ -20,7 +20,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         )
         self.assertFalse([str(path.relative_to(ROOT)) for path in forbidden if path.exists()])
 
-    def test_skill_release_contains_only_operational_scripts(self):
+    def test_skill_release_contains_complete_split_skill_suite(self):
         archive = ROOT / "dist/tavern-skill.tar.gz"
         manifest_path = ROOT / "dist/skill-manifest.json"
         if not archive.is_file() or not manifest_path.is_file():
@@ -30,20 +30,39 @@ class RepositoryHygieneTests(unittest.TestCase):
         scripts = {
             path
             for path in manifest["managed_files"]
-            if path.startswith("skill/scripts/")
+            if "/scripts/" in path
         }
         self.assertEqual(
             scripts,
             {
-                "skill/scripts/bringup.sh",
-                "skill/scripts/provision.sh",
-                "skill/scripts/tavern_cli.py",
+                "skills/tavern/scripts/bringup.sh",
+                "skills/tavern/scripts/provision.sh",
+                "skills/tavern/scripts/tavern_cli.py",
             },
         )
+        self.assertEqual(manifest["schema"], 2)
+        self.assertEqual(manifest["scope"], "tavern-creative-skills")
+        for name in (
+                "tavern", "tavern-world", "tavern-cards", "tavern-worldbooks",
+                "tavern-story-profile", "tavern-continuity", "tavern-ops"):
+            self.assertIn(f"skills/{name}/SKILL.md", manifest["managed_files"])
         with tarfile.open(archive, "r:gz") as package:
             names = {member.name for member in package.getmembers() if member.isfile()}
-        self.assertNotIn("skill/SOUL.md", names)
+        self.assertFalse(any(name.endswith("/SOUL.md") for name in names))
+        self.assertNotIn("skills/tavern/scripts/install.sh", names)
+        self.assertNotIn("skills/tavern/scripts/smoke.py", names)
+        self.assertNotIn("skills/tavern/scripts/make_test_card.py", names)
         self.assertEqual(set(manifest["managed_files"]), names)
+
+    def test_bootstrap_and_updater_agents_blocks_match(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "tavern_bootstrap_under_test", ROOT / "bootstrap/tavern_updater_bootstrap.py")
+        bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bootstrap)
+        managed = (ROOT / "updater-skill/references/agents-block.md").read_text(encoding="utf-8").strip()
+        self.assertEqual(bootstrap.AGENTS_BLOCK.strip(), managed)
 
     def test_persona_profile_has_accessible_detail_entry(self):
         app = (ROOT / "skill/reader/app.js").read_text(encoding="utf-8")

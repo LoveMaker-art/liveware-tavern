@@ -4,7 +4,8 @@ Liveware Tavern is a stateful, multi-character story application for Hermes Agen
 
 ## Repository Layout
 
-- `skill/` - Tavern runtime, frontend, Hermes skill, operational scripts, references, and state-free offline starter cards.
+- `skill/` - Tavern runtime, frontend source, and state-free offline starter cards.
+- `creative-skills/` - The lightweight Tavern router plus six specialist Hermes skills.
 - `updater-skill/` - Independent Hermes skill for verified in-place updates from GitHub Releases.
 - `bootstrap/` - One-time installer for legacy instances that do not have `tavern-updater` yet.
 - `scripts/build_release.py` - Builds the signed-by-hash release assets consumed by the updater.
@@ -33,7 +34,7 @@ dist/install-tavern-updater.sh
 dist/bootstrap-manifest.json
 ```
 
-Create a stable GitHub Release tagged `v<SKILL.md version>` and attach all seven generated assets. Mirrored instances can then update through `tavern-updater` without rebuilding the image.
+Create a stable GitHub Release tagged `v<VERSION>` and attach all seven generated assets. Mirrored instances can then update the runtime, all seven creative skills, the updater, and the marked Tavern block in `AGENTS.md` through one reviewed transaction.
 
 ## Bootstrap A Legacy Instance
 
@@ -70,7 +71,7 @@ Place `updater-skill/` at:
 /opt/data/skills/system/tavern-updater/
 ```
 
-The Agent can then check and install a verified stable release after explicit user confirmation.
+The Agent can then check and install a verified stable release after explicit user confirmation. Legacy updater versions that predate the split-skill manifest must enter through the one-command Bootstrap so the updater is upgraded before review.
 
 ## License
 

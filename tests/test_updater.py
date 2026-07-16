@@ -32,11 +32,13 @@ class UpdaterMergeTests(unittest.TestCase):
         UPDATER.LOCK = UPDATER.UPDATE_ROOT / "update.lock"
         UPDATER.TARGETS = {
             area: self.root / "installed" / area
-            for area in ("runtime", "skill", "updater")
+            for area in ("runtime", "skills", "updater")
         }
+        UPDATER.AGENTS_PATH = self.root / "installed/AGENTS.md"
+        UPDATER.SKIP_SERVICE = True
         UPDATER.ALLOWED_MANAGED = {
             "runtime": {"server.py"},
-            "skill": set(),
+            "skills": {"tavern/SKILL.md"},
             "updater": set(),
         }
 
@@ -114,35 +116,35 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertIsNone(UPDATER.cached_baseline("2.0.0", managed))
 
     def test_skill_version_only_drift_is_normalized(self):
-        base = self.root / "base/skill"
-        current = self.root / "current/skill"
-        incoming = self.root / "incoming/skill"
-        output = self.root / "output/skill"
-        self.write(base, "SKILL.md", "---\nname: tavern\nversion: 1.18.8\n---\nBody\n")
-        self.write(current, "SKILL.md", "---\nname: tavern\nversion: 1.19.1\n---\nBody\n")
-        self.write(incoming, "SKILL.md", "---\nname: tavern\nversion: 1.19.3\n---\nBody\n")
+        base = self.root / "base/skills"
+        current = self.root / "current/skills"
+        incoming = self.root / "incoming/skills"
+        output = self.root / "output/skills"
+        self.write(base, "tavern/SKILL.md", "---\nname: tavern\nversion: 1.18.8\n---\nBody\n")
+        self.write(current, "tavern/SKILL.md", "---\nname: tavern\nversion: 1.19.1\n---\nBody\n")
+        self.write(incoming, "tavern/SKILL.md", "---\nname: tavern\nversion: 1.19.3\n---\nBody\n")
 
         report, conflicts = UPDATER.merge_area(
-            "skill", base, current, incoming, output, {"SKILL.md"})
+            "skills", base, current, incoming, output, {"tavern/SKILL.md"})
 
         self.assertFalse(conflicts)
         self.assertEqual(report[0]["status"], "merged")
         self.assertTrue(report[0]["metadata_normalized"])
-        self.assertIn("version: 1.19.3", (output / "SKILL.md").read_text())
+        self.assertIn("version: 1.19.3", (output / "tavern/SKILL.md").read_text())
 
     def test_skill_metadata_merge_preserves_disjoint_local_content(self):
-        base = self.root / "base/skill"
-        current = self.root / "current/skill"
-        incoming = self.root / "incoming/skill"
-        output = self.root / "output/skill"
-        self.write(base, "SKILL.md", "---\nversion: 1.18.8\n---\nBase\n")
-        self.write(current, "SKILL.md", "---\nversion: 1.19.1\n---\nBase\nLocal note\n")
-        self.write(incoming, "SKILL.md", "---\nversion: 1.19.3\n---\nUpstream\nBase\n")
+        base = self.root / "base/skills"
+        current = self.root / "current/skills"
+        incoming = self.root / "incoming/skills"
+        output = self.root / "output/skills"
+        self.write(base, "tavern/SKILL.md", "---\nversion: 1.18.8\n---\nBase\n")
+        self.write(current, "tavern/SKILL.md", "---\nversion: 1.19.1\n---\nBase\nLocal note\n")
+        self.write(incoming, "tavern/SKILL.md", "---\nversion: 1.19.3\n---\nUpstream\nBase\n")
 
         report, conflicts = UPDATER.merge_area(
-            "skill", base, current, incoming, output, {"SKILL.md"})
+            "skills", base, current, incoming, output, {"tavern/SKILL.md"})
 
-        merged = (output / "SKILL.md").read_text()
+        merged = (output / "tavern/SKILL.md").read_text()
         self.assertFalse(conflicts)
         self.assertEqual(report[0]["status"], "merged")
         self.assertIn("version: 1.19.3", merged)
@@ -150,20 +152,73 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertIn("Local note", merged)
 
     def test_skill_real_content_conflict_still_blocks_update(self):
-        base = self.root / "base/skill"
-        current = self.root / "current/skill"
-        incoming = self.root / "incoming/skill"
-        output = self.root / "output/skill"
-        self.write(base, "SKILL.md", "---\nversion: 1.18.8\n---\nMode: base\n")
-        self.write(current, "SKILL.md", "---\nversion: 1.19.1\n---\nMode: local\n")
-        self.write(incoming, "SKILL.md", "---\nversion: 1.19.3\n---\nMode: upstream\n")
+        base = self.root / "base/skills"
+        current = self.root / "current/skills"
+        incoming = self.root / "incoming/skills"
+        output = self.root / "output/skills"
+        self.write(base, "tavern/SKILL.md", "---\nversion: 1.18.8\n---\nMode: base\n")
+        self.write(current, "tavern/SKILL.md", "---\nversion: 1.19.1\n---\nMode: local\n")
+        self.write(incoming, "tavern/SKILL.md", "---\nversion: 1.19.3\n---\nMode: upstream\n")
 
         report, conflicts = UPDATER.merge_area(
-            "skill", base, current, incoming, output, {"SKILL.md"})
+            "skills", base, current, incoming, output, {"tavern/SKILL.md"})
 
-        self.assertEqual(conflicts, ["skill/SKILL.md"])
+        self.assertEqual(conflicts, ["skills/tavern/SKILL.md"])
         self.assertEqual(report[0]["status"], "conflict")
         self.assertFalse(report[0]["metadata_normalized"])
+
+    def test_new_specialist_skill_version_only_drift_is_normalized_without_base(self):
+        base = self.root / "base/skills"
+        current = self.root / "current/skills"
+        incoming = self.root / "incoming/skills"
+        output = self.root / "output/skills"
+        base.mkdir(parents=True)
+        self.write(current, "tavern-world/SKILL.md", "---\nname: tavern-world\nversion: 1.0.0\n---\nBody\n")
+        self.write(incoming, "tavern-world/SKILL.md", "---\nname: tavern-world\nversion: 1.19.8\n---\nBody\n")
+
+        report, conflicts = UPDATER.merge_area(
+            "skills", base, current, incoming, output, {"tavern-world/SKILL.md"})
+
+        self.assertFalse(conflicts)
+        self.assertEqual(report[0]["status"], "merged")
+        self.assertTrue(report[0]["metadata_normalized"])
+        self.assertIn("version: 1.19.8", (output / "tavern-world/SKILL.md").read_text())
+
+    def test_agents_block_update_preserves_instance_content(self):
+        current = "# Local operations\n\nKeep this note.\n\n" + UPDATER.AGENTS_START + "\nold\n" + UPDATER.AGENTS_END + "\n"
+        desired = UPDATER.AGENTS_START + "\nnew routing\n" + UPDATER.AGENTS_END
+
+        updated = UPDATER.render_agents(current, desired)
+
+        self.assertIn("Keep this note.", updated)
+        self.assertIn("new routing", updated)
+        self.assertNotIn("\nold\n", updated)
+        self.assertEqual(UPDATER.render_agents(updated, desired), updated)
+
+    def test_modified_obsolete_skill_file_blocks_retirement(self):
+        key = "skills/tavern/references/actor-memory.md"
+        base = self.root / "base"
+        self.write(base / "skills", "tavern/references/actor-memory.md", "official\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern/references/actor-memory.md", "local edit\n")
+
+        report, conflicts = UPDATER.review_obsolete(base, [key])
+
+        self.assertEqual(conflicts, [key])
+        self.assertEqual(report[0]["status"], "conflict")
+
+    def test_retired_tool_and_agents_are_restored_on_rollback(self):
+        key = "skills/tavern/scripts/smoke.py"
+        self.write(UPDATER.TARGETS["runtime"], "server.py", "runtime\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern/scripts/smoke.py", "legacy\n")
+        self.write(self.root / "installed", "AGENTS.md", "local agents\n")
+        backup = UPDATER.backup_current("1.19.7", ["runtime/server.py"], [key])
+
+        UPDATER.remove_obsolete_skill_files([key])
+        UPDATER.atomic_write_text(UPDATER.AGENTS_PATH, "updated agents\n")
+        UPDATER.restore(backup)
+
+        self.assertEqual((UPDATER.TARGETS["skills"] / "tavern/scripts/smoke.py").read_text(), "legacy\n")
+        self.assertEqual(UPDATER.AGENTS_PATH.read_text(), "local agents\n")
 
     def test_default_report_omits_file_hashes(self):
         managed = ["runtime/server.py"]

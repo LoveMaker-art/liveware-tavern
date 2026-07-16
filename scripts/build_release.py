@@ -9,6 +9,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "skill"
+CREATIVE_SKILLS = ROOT / "creative-skills"
 UPDATER = ROOT / "updater-skill"
 DIST = ROOT / "dist"
 STAGE = DIST / "release"
@@ -31,10 +32,34 @@ FRONTEND_FILES = (
     "i18n.js",
     "index.html",
 )
-SKILL_SCRIPT_FILES = (
-    "bringup.sh",
-    "provision.sh",
-    "tavern_cli.py",
+CREATIVE_SKILL_NAMES = (
+    "tavern",
+    "tavern-world",
+    "tavern-cards",
+    "tavern-worldbooks",
+    "tavern-story-profile",
+    "tavern-continuity",
+    "tavern-ops",
+)
+OBSOLETE_SKILL_FILES = (
+    "skills/tavern/references/actor-memory.md",
+    "skills/tavern/references/card-authoring.md",
+    "skills/tavern/references/card-localization.md",
+    "skills/tavern/references/card-workflow.md",
+    "skills/tavern/references/content-modeling.md",
+    "skills/tavern/references/diagnostics.md",
+    "skills/tavern/references/event-driven-update.md",
+    "skills/tavern/references/i18n.md",
+    "skills/tavern/references/liveware-ops.md",
+    "skills/tavern/references/lore-audit.md",
+    "skills/tavern/references/model-config.md",
+    "skills/tavern/references/recommendation-planning.md",
+    "skills/tavern/references/world-expansion.md",
+    "skills/tavern/references/world-rebuild.md",
+    "skills/tavern/references/worldbook-authoring.md",
+    "skills/tavern/scripts/install.sh",
+    "skills/tavern/scripts/make_test_card.py",
+    "skills/tavern/scripts/smoke.py",
 )
 
 
@@ -81,26 +106,25 @@ def main():
     }
     (DIST / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    (SKILL_STAGE / "skill").mkdir(parents=True)
-    copy(SOURCE / "SKILL.md", SKILL_STAGE / "skill/SKILL.md")
-    copy(SOURCE / "references", SKILL_STAGE / "skill/references")
-    for name in SKILL_SCRIPT_FILES:
-        copy(SOURCE / "tools" / name, SKILL_STAGE / "skill/scripts" / name)
+    (SKILL_STAGE / "skills").mkdir(parents=True)
+    for name in CREATIVE_SKILL_NAMES:
+        copy(CREATIVE_SKILLS / name, SKILL_STAGE / "skills" / name)
     skill_files = {
         path.relative_to(SKILL_STAGE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(SKILL_STAGE.rglob("*"))
         if path.is_file()
     }
     with tarfile.open(SKILL_ARCHIVE, "w:gz", format=tarfile.PAX_FORMAT) as package:
-        package.add(SKILL_STAGE / "skill", arcname="skill")
+        package.add(SKILL_STAGE / "skills", arcname="skills")
     skill_manifest = {
-        "schema": 1,
-        "scope": "tavern-creative-skill",
+        "schema": 2,
+        "scope": "tavern-creative-skills",
         "version": version,
         "archive": SKILL_ARCHIVE.name,
         "sha256": hashlib.sha256(SKILL_ARCHIVE.read_bytes()).hexdigest(),
         "managed_files": sorted(skill_files),
         "files": skill_files,
+        "obsolete_files": sorted(OBSOLETE_SKILL_FILES),
     }
     SKILL_MANIFEST.write_text(
         json.dumps(skill_manifest, ensure_ascii=False, indent=2) + "\n",
