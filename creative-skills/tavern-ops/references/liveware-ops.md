@@ -51,6 +51,28 @@ This file is a prompt to Hermes, not a literal message template. It should instr
 
 Do not add a first-greeting hook; the old hook implementation caused duplicate openers and has been removed.
 
+## Speech Cache
+
+Generated speech is private instance state under:
+
+```
+/opt/data/tavern-state/tts-cache
+```
+
+The runtime keys each MP3 by normalized story text plus the complete active
+voice configuration: model, preset voice or clone ID, speed, and tone
+instructions. Reusing the same text and voice configuration reads the saved
+audio; changing any voice setting creates a different file.
+
+Each cache hit refreshes the file modification time. Startup cleanup and the
+first speech request after each 24-hour interval remove generated MP3 files
+that have not been used for 15 days. `TAVERN_TTS_CACHE_RETENTION_DAYS` may
+override the retention period for a deployment.
+
+Do not apply this cleanup to `/opt/data/tavern-state/tts-references`. Those are
+user-created clone reference files and are deleted only through the explicit
+clone deletion workflow.
+
 ## Server Restart
 
 After modifying runtime code (server.py, app.js, console.css, i18n.js), restart the server.

@@ -45,6 +45,9 @@ TTS_MAX_CHARS = min(4096, max(1, int(os.environ.get("TAVERN_TTS_MAX_CHARS", "409
 TTS_CACHE_LIMIT = max(1, int(os.environ.get("TAVERN_TTS_CACHE_LIMIT", "32")))
 TTS_CONFIG_PATH = os.path.join(STATE, "tts_config.json")
 TTS_REFERENCE_DIR = os.path.join(STATE, "tts-references")
+TTS_CACHE_DIR = os.path.join(STATE, "tts-cache")
+TTS_CACHE_RETENTION_DAYS = max(1, int(os.environ.get("TAVERN_TTS_CACHE_RETENTION_DAYS", "15")))
+TTS_CACHE_CLEANUP_INTERVAL = 24 * 60 * 60
 TTS_REFERENCE_MAX_BYTES = 10 * 1024 * 1024
 TTS_VOICE_CACHE_TTL = 300
 TTS_DEFAULT_SPEED = 0.9
@@ -61,12 +64,20 @@ TTS_FALLBACK_VOICES = (
     {"id": "ono_anna", "name": "Ono_Anna", "model": TTS_MODEL, "description": "轻快灵活的俏皮日语女声。", "language": "japanese"},
     {"id": "sohee", "name": "Sohee", "model": TTS_MODEL, "description": "富含情感的温暖韩语女声。", "language": "korean"},
 )
-os.makedirs(TTS_REFERENCE_DIR, exist_ok=True)
+for directory in (TTS_REFERENCE_DIR, TTS_CACHE_DIR):
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
 _tts_voice_cache = {"at": 0.0, "voices": list(TTS_FALLBACK_VOICES)}
 _tts_voice_cache_lock = threading.Lock()
 _tts_cache = {}
 _tts_cache_order = []
 _tts_cache_lock = threading.Lock()
+_tts_cache_cleanup_lock = threading.Lock()
+_tts_cache_last_cleanup = 0.0
+_tts_generation_locks = tuple(threading.Lock() for _ in range(32))
 
 DESTRUCTIVE_CONFIRM_TTL = 600
 _destructive_confirmations = {}
@@ -488,7 +499,112 @@ def _speech_text(text):
     return text.replace("*", "").strip()
 
 
+def _tts_cache_path(cache_key):
+    if not re.fullmatch(r"[0-9a-f]{64}", str(cache_key or "")):
+        raise ValueError("invalid speech cache key")
+    return os.path.join(TTS_CACHE_DIR, cache_key + ".mp3")
+
+
+def _remember_tts_audio(cache_key, audio):
+    with _tts_cache_lock:
+        _tts_cache[cache_key] = audio
+        try:
+            _tts_cache_order.remove(cache_key)
+        except ValueError:
+            pass
+        _tts_cache_order.append(cache_key)
+        while len(_tts_cache_order) > TTS_CACHE_LIMIT:
+            _tts_cache.pop(_tts_cache_order.pop(0), None)
+
+
+def _store_tts_disk_cache(cache_key, audio):
+    path = _tts_cache_path(cache_key)
+    tmp = path + ".tmp." + secrets.token_hex(4)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as file:
+            file.write(audio)
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _load_tts_disk_cache(cache_key):
+    path = _tts_cache_path(cache_key)
+    try:
+        with open(path, "rb") as file:
+            audio = file.read()
+        if not audio:
+            os.remove(path)
+            return None
+        os.utime(path, None)
+        return audio
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+
+
+def _cached_tts_audio(cache_key):
+    with _tts_cache_lock:
+        audio = _tts_cache.get(cache_key)
+    if audio is not None:
+        path = _tts_cache_path(cache_key)
+        try:
+            os.utime(path, None)
+        except FileNotFoundError:
+            _store_tts_disk_cache(cache_key, audio)
+        except OSError:
+            pass
+        return audio
+    audio = _load_tts_disk_cache(cache_key)
+    if audio is not None:
+        _remember_tts_audio(cache_key, audio)
+    return audio
+
+
+def _cleanup_tts_disk_cache(force=False, now=None):
+    global _tts_cache_last_cleanup
+    now = float(now if now is not None else time.time())
+    with _tts_cache_cleanup_lock:
+        if not force and now - _tts_cache_last_cleanup < TTS_CACHE_CLEANUP_INTERVAL:
+            return 0
+        _tts_cache_last_cleanup = now
+        cutoff = now - TTS_CACHE_RETENTION_DAYS * 24 * 60 * 60
+        removed_keys = []
+        try:
+            entries = list(os.scandir(TTS_CACHE_DIR))
+        except OSError:
+            return 0
+        for entry in entries:
+            match = re.fullmatch(r"([0-9a-f]{64})\.mp3", entry.name)
+            if not match or not entry.is_file(follow_symlinks=False):
+                continue
+            try:
+                if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                    continue
+                os.remove(entry.path)
+                removed_keys.append(match.group(1))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                continue
+        if removed_keys:
+            removed = set(removed_keys)
+            with _tts_cache_lock:
+                for cache_key in removed:
+                    _tts_cache.pop(cache_key, None)
+                _tts_cache_order[:] = [key for key in _tts_cache_order if key not in removed]
+        return len(removed_keys)
+
+
 def _generate_speech(text, voice=None, speed=None, instructions=None, force_preset=False):
+    _cleanup_tts_disk_cache()
     text = _speech_text(text)
     if not text:
         raise ValueError("speech text is empty")
@@ -498,12 +614,6 @@ def _generate_speech(text, voice=None, speed=None, instructions=None, force_pres
     voice = str(voice or settings["active_voice"]).strip().lower()
     if voice not in {item["id"] for item in settings["voices"]}:
         raise ValueError("unsupported voice")
-    key = _tts_key()
-    if not key:
-        raise ValueError("Clawling TTS key is missing")
-    if not TTS_BASE:
-        raise ValueError("TTS service endpoint is missing")
-
     saved = _tts_config()
     clone = _active_tts_clone(saved) if settings["mode"] == "clone" and not force_preset else None
     clone_token = str((clone or {}).get("token") or "")
@@ -519,47 +629,52 @@ def _generate_speech(text, voice=None, speed=None, instructions=None, force_pres
     cache_key = hashlib.sha256(
         f"{TTS_MODEL}\0{request_voice}\0{clone_token}\0{speed}\0{instructions}\0{text}".encode("utf-8")
     ).hexdigest()
-    with _tts_cache_lock:
-        cached = _tts_cache.get(cache_key)
+    cached = _cached_tts_audio(cache_key)
     if cached is not None:
         return cached
 
-    request_data = {
-        "model": TTS_MODEL,
-        "voice": request_voice,
-        "input": text,
-        "response_format": "mp3",
-        "speed": speed,
-    }
-    if clone:
-        request_data["ref_audio"] = _tts_clone_data_url(clone)
-        request_data["ref_text"] = clone["ref_text"]
-    elif instructions:
-        request_data["instructions"] = instructions
-    payload = json.dumps(request_data, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        f"{TTS_BASE}/audio/speech",
-        data=payload,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=TTS_TIMEOUT) as response:
-            audio = response.read()
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
-        raise ValueError(f"TTS request failed (HTTP {e.code}): {detail}") from e
-    except urllib.error.URLError as e:
-        raise ValueError(f"TTS connection failed: {e.reason}") from e
-    if not audio:
-        raise ValueError("TTS returned empty audio")
-
-    with _tts_cache_lock:
-        _tts_cache[cache_key] = audio
-        _tts_cache_order.append(cache_key)
-        while len(_tts_cache_order) > TTS_CACHE_LIMIT:
-            _tts_cache.pop(_tts_cache_order.pop(0), None)
-    return audio
+    generation_lock = _tts_generation_locks[int(cache_key[:8], 16) % len(_tts_generation_locks)]
+    with generation_lock:
+        cached = _cached_tts_audio(cache_key)
+        if cached is not None:
+            return cached
+        key = _tts_key()
+        if not key:
+            raise ValueError("Clawling TTS key is missing")
+        if not TTS_BASE:
+            raise ValueError("TTS service endpoint is missing")
+        request_data = {
+            "model": TTS_MODEL,
+            "voice": request_voice,
+            "input": text,
+            "response_format": "mp3",
+            "speed": speed,
+        }
+        if clone:
+            request_data["ref_audio"] = _tts_clone_data_url(clone)
+            request_data["ref_text"] = clone["ref_text"]
+        elif instructions:
+            request_data["instructions"] = instructions
+        payload = json.dumps(request_data, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            f"{TTS_BASE}/audio/speech",
+            data=payload,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=TTS_TIMEOUT) as response:
+                audio = response.read()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            raise ValueError(f"TTS request failed (HTTP {e.code}): {detail}") from e
+        except urllib.error.URLError as e:
+            raise ValueError(f"TTS connection failed: {e.reason}") from e
+        if not audio:
+            raise ValueError("TTS returned empty audio")
+        _store_tts_disk_cache(cache_key, audio)
+        _remember_tts_audio(cache_key, audio)
+        return audio
 
 
 def _state_path():
@@ -4578,6 +4693,7 @@ def main():
         port = int(os.environ["TAVERN_PORT"])
     host = os.environ.get("TAVERN_HOST", "127.0.0.1")
     _migrate_tts_config()
+    _cleanup_tts_disk_cache(force=True)
     migrated = _migrate_worldbook_storage()
     if migrated:
         print(f"worldbook storage migrated: {migrated} production(s)", flush=True)
