@@ -1,7 +1,7 @@
 ---
 name: tavern-continuity
 description: Diagnose Tavern continuity：压缩、角色状态、提示词与生成。
-version: 1.20.4
+version: 1.20.5
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

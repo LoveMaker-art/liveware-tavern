@@ -1968,7 +1968,6 @@ function renderModelSheet() {
   }).join("");
   box.innerHTML = `<section class="mcGroup">
       <div class="mcGroupHead"><span>${esc(t("modelOfficialGroup"))}</span></div>
-      <p class="mcGroupHelp">${esc(t("modelOfficialHelp"))}</p>
       ${rows(official)}
     </section>
     <section class="mcGroup">

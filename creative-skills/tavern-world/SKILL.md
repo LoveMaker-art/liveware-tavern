@@ -1,7 +1,7 @@
 ---
 name: tavern-world
 description: Build Tavern story worlds：推荐、规划、创建与重构。
-version: 1.20.4
+version: 1.20.5
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
