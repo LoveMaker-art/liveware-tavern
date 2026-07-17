@@ -334,6 +334,14 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .pLink:hover{text-decoration:underline}
 .pLink:active{opacity:.7}
 .pLink svg{flex:0 0 auto;opacity:.85}
+.officialDeveloper{margin-top:auto;padding-top:2px;padding-bottom:max(0px,env(safe-area-inset-bottom,0px))}
+.officialDeveloperLink{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;
+  min-height:34px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;
+  color:var(--muted);background:transparent;font-size:11.5px;text-decoration:none;cursor:pointer}
+.officialDeveloperLink:hover{color:var(--brandink);border-color:var(--line2);background:var(--bg)}
+.officialDeveloperLink:active{opacity:.72}
+.officialDeveloperLink:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.officialDeveloperLink svg{flex:0 0 auto}
 .actorMore{margin-top:10px;font-size:11.5px;color:var(--brandink);background:none;border:0;
   padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .actorMore:hover{text-decoration:underline}

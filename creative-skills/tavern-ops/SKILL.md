@@ -1,7 +1,7 @@
 ---
 name: tavern-ops
 description: Operate Tavern Liveware：模型、启动、健康检查与本地化。
-version: 1.20.7
+version: 1.20.8
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
