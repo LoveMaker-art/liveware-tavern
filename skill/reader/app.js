@@ -35,6 +35,7 @@ function el(tag, cls) { const e = document.createElement(tag); if (cls) e.classN
 // 内联图标(reader 不挂图标字体)——细描边,克制。
 const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
 const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>';
+const PLUS_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
 const CHAT_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12z"/></svg>';
 const CARD_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2"/><path d="M6.5 16c.5-1.6 1.5-2.4 2.5-2.4s2 .8 2.5 2.4M15 10h3.5M15 13.5h3.5"/></svg>';
 const WORLD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>';
@@ -1927,13 +1928,14 @@ async function askDeleteProduction(id) {
   } catch (e) { toast(t("prodDeleteFailed", { err: e.message })); }
 }
 
-// ---- 大模型配置管理(model-config.md):tap 行=切换、trash=删;添加只走「对主理人说」----
+// ---- 文本模型：官方目录由 Tavern 固定提供；自定义 OpenAI-compatible API 由 reader 管理。----
 async function refreshModels() {
   try {
     const mr = await bridge.get("/api/models");
     if (mr && mr.configs) state.models = mr;
   } catch (_) { /* 刷新失败保留旧列表,操作路径各自有 toast */ }
   renderPanel();
+  renderModelSheet();
 }
 
 function openModelSheet() {
@@ -1945,13 +1947,16 @@ function openModelSheet() {
   openModal(card);
   card.querySelector(".sheetClose").onclick = closeModal;
   renderModelSheet();
+  refreshModels();
 }
 
 function renderModelSheet() {
   const box = document.getElementById("mcBody");
   if (!box) return;  // sheet 没开着(如乐观切换回滚时),只有 panel 需要刷
   const ms = state.models || { configs: [], active: "builtin" };
-  const rows = ms.configs.map((c) => {
+  const official = ms.configs.filter((c) => c.kind === "official" || c.builtin);
+  const custom = ms.configs.filter((c) => c.kind === "custom" || !c.builtin);
+  const rows = (configs) => configs.map((c) => {
     const meta = c.builtin
       ? t("modelClawlingMeta", { model: c.model || "" })
       : t("modelKeyMeta", { model: c.model, mask: c.key_masked || "**" });
@@ -1961,11 +1966,68 @@ function renderModelSheet() {
       <div class="mcInfo"><div class="mcName">${esc(modelDisplayName(c))}</div><div class="mcMeta">${esc(meta)}</div></div>
       <span class="mcCheck">✓</span>${del}</div>`;
   }).join("");
-  // 教育文案即「添加入口」:没有表单,配置由主理人代办(实测通过才落盘)——chat 即管理。
-  box.innerHTML = rows + `<p class="mcHint">${t("modelHint")}</p>`;
+  box.innerHTML = `<section class="mcGroup">
+      <div class="mcGroupHead"><span>${esc(t("modelOfficialGroup"))}</span></div>
+      <p class="mcGroupHelp">${esc(t("modelOfficialHelp"))}</p>
+      ${rows(official)}
+    </section>
+    <section class="mcGroup">
+      <div class="mcGroupHead"><span>${esc(t("modelCustomGroup"))}</span>
+        <button class="actorMore mcAdd" id="modelAddCustom">${PLUS_SVG}${esc(t("modelAddCustom"))}</button></div>
+      <p class="mcAgentHint">${esc(t("modelCustomAgentHint"))}</p>
+      ${custom.length ? rows(custom) : `<p class="mcEmpty">${esc(t("modelCustomEmpty"))}</p>`}
+    </section>`;
   box.querySelectorAll("[data-use]").forEach((d) => d.onclick = () => useModel(d.dataset.use));
   box.querySelectorAll("[data-del]").forEach((b) =>
     b.onclick = (e) => { e.stopPropagation(); askDeleteModel(b.dataset.del); });
+  const add = document.getElementById("modelAddCustom");
+  if (add) add.onclick = openModelConfigSheet;
+}
+
+function openModelConfigSheet() {
+  const card = el("div", "modalCard sheetCard modelConfigSheet");
+  card.innerHTML = `<div class="sheetHd"><span class="t">${esc(t("modelConfigTitle"))}</span>
+      <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">✕</button></div>
+    <div class="sheetBody"><form id="modelConfigForm" class="modelConfigForm">
+      <label class="fieldLabel">${esc(t("modelConfigName"))}<input class="formControl" id="modelConfigName" maxlength="60" autocomplete="off" placeholder="${esc(t("modelConfigNamePlaceholder"))}" required></label>
+      <label class="fieldLabel">${esc(t("modelConfigBase"))}<input class="formControl" id="modelConfigBase" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://api.example.com/v1" required></label>
+      <label class="fieldLabel">${esc(t("modelConfigId"))}<input class="formControl" id="modelConfigId" autocomplete="off" spellcheck="false" placeholder="${esc(t("modelConfigIdPlaceholder"))}" required></label>
+      <label class="fieldLabel">${esc(t("modelConfigKey"))}<input class="formControl" id="modelConfigKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-..." required></label>
+      <p class="modelConfigNote">${esc(t("modelConfigNote"))}</p>
+    </form></div>
+    <div class="sheetActions"><button class="btn ghost" id="modelConfigCancel">${esc(t("cancel"))}</button><button class="btn" id="modelConfigSave">${esc(t("modelConfigSave"))}</button></div>`;
+  openModal(card);
+  card.querySelector(".sheetClose").onclick = closeModal;
+  card.querySelector("#modelConfigCancel").onclick = openModelSheet;
+  card.querySelector("#modelConfigSave").onclick = saveCustomModel;
+  card.querySelector("#modelConfigForm").onsubmit = (e) => { e.preventDefault(); saveCustomModel(); };
+  card.querySelector("#modelConfigName").focus();
+}
+
+async function saveCustomModel() {
+  const form = document.getElementById("modelConfigForm");
+  if (!form || !form.reportValidity()) return;
+  const card = form.closest(".modelConfigSheet");
+  const save = document.getElementById("modelConfigSave");
+  const payload = {
+    type: "model_add",
+    name: document.getElementById("modelConfigName").value.trim(),
+    base: document.getElementById("modelConfigBase").value.trim(),
+    model: document.getElementById("modelConfigId").value.trim(),
+    key: document.getElementById("modelConfigKey").value.trim(),
+  };
+  card.classList.add("saving");
+  save.textContent = t("modelConfigTesting");
+  try {
+    const result = await bridge.event(payload);
+    await refreshModels();
+    toast(t("modelConfigSaved", { ms: result.latency_ms }));
+    openModelSheet();
+  } catch (e) {
+    toast(t("modelConfigFailed", { err: e.message }));
+    card.classList.remove("saving");
+    save.textContent = t("modelConfigSave");
+  }
 }
 
 async function useModel(id) {

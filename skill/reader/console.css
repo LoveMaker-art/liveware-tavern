@@ -340,9 +340,7 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .actorMore{margin-top:10px;font-size:11.5px;color:var(--brandink);background:none;border:0;
   padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .actorMore:hover{text-decoration:underline}
-/* 大模型配置：panel 小节展示当前配置，管理操作使用 sheet。
-   列表行 tap=切换、trash=删(prodDel 同款渐进披露);**没有添加表单**——添加只走「对主理人说」,
-   sheet 底部教育文案即入口(chat 即管理)。key 全程脱敏,页面永不见全 key。 */
+/* 文本模型：panel 展示当前配置，sheet 区分官方目录与自定义 API。 */
 .mdlCur{font-size:13px;color:var(--ink);margin:0;font-weight:600}
 .mdlModel{font-size:11px;color:var(--muted);font-weight:400;margin-left:6px}
 .modelGroup{display:grid;gap:15px}
@@ -376,6 +374,13 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .voiceSettingsActions .previewIconBtn svg{width:17px;height:17px}
 .sheetActions{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding:12px 16px 16px}
 .sheetActions .btn{width:100%}
+.mcGroup+.mcGroup{margin-top:20px;padding-top:17px;border-top:1px solid var(--line)}
+.mcGroupHead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin:0 1px 4px;font-size:12px;font-weight:700;color:var(--ink)}
+.mcGroupHead .actorMore{margin:0;flex:0 0 auto}
+.mcGroupHelp{margin:0 1px 6px;color:var(--muted);font-size:11.5px;line-height:1.55}
+.mcAgentHint{margin:0 1px 11px;color:var(--muted);font-size:10.5px;line-height:1.5}
+.mcEmpty{margin:4px 1px 0;color:var(--muted);font-size:12px}
 .mcItem{position:relative;display:flex;align-items:center;gap:8px;padding:10px 12px;
   border:1px solid var(--line);border-radius:var(--radius2);margin-bottom:7px;cursor:pointer}
 .mcItem:hover,.mcItem:active{background:var(--bg)}
@@ -399,8 +404,9 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .mcItem:hover .mcDel{opacity:.5}
 .mcDel:hover{opacity:1;background:var(--surface);color:var(--danger)}
 @media (hover:none){ .mcDel{opacity:.42;width:30px;height:30px} .mcDel:active{color:var(--danger)} }
-.mcHint{font-size:12px;color:var(--muted);line-height:1.7;margin:12px 2px 0}
-.mcHint .q{color:var(--ink2)}
+.modelConfigForm{display:grid;gap:14px;align-content:start}
+.modelConfigNote{margin:0;color:var(--muted);font-size:11.5px;line-height:1.55}
+.modelConfigSheet.saving .formControl,.modelConfigSheet.saving button{opacity:.62;pointer-events:none}
 
 /* 活件版本 = 应用层标记(与演员是两回事),钉在面板最底 */
 .lwFoot{margin-top:auto;padding-top:13px;border-top:1px solid var(--line);

@@ -4021,23 +4021,26 @@ def ev_set_note(ev):
 
 
 # ---------- 大模型配置 ----------
-# 用户自配的大模型（OpenAI-compatible 一种协议）。添加只走「对主理人说」→ CLI → 这里的 event；
-# reader 界面只做管理（选中/删除）+ 教育。key 只落 server 端 state 文件（0600），
-# 任何读端点一律脱敏——bridge「creds 只在 server 端，页面永不见」原则的延伸。
+# 用户自配的大模型使用 OpenAI-compatible 协议。官方目录固定为 Tavern 支持的模型；
+# 自定义配置可由 reader 或 CLI 写入。key 只落 server 端 state 文件（0600），
+# 任何读端点一律脱敏。
 MODELS_PATH = os.path.join(STATE, "model_configs.json")
+HERMES_CONFIG_PATH = os.environ.get("HERMES_CONFIG_PATH", "/opt/data/config.yaml")
+OFFICIAL_MODELS = ("deepseek-v4-flash",)
 
-CLAWLING_MODELS = [
-    "deepseek-v4-flash",
-]
+
+def _official_models():
+    """Return the intentionally small Tavern official model catalog."""
+    return list(OFFICIAL_MODELS)
 
 
 def _clawling_model_id(model_name):
-    return "builtin" if model_name == actor.MODEL_NAME else "clawling:" + model_name
+    return "builtin" if model_name == OFFICIAL_MODELS[0] else "clawling:" + model_name
 
 
 def _clawling_model_name(model_id):
     if model_id == "builtin":
-        return actor.MODEL_NAME
+        return OFFICIAL_MODELS[0]
     if model_id.startswith("clawling:"):
         return model_id.split(":", 1)[1]
     return ""
@@ -4055,7 +4058,6 @@ def _save_models(s):
         pass
 
 
-HERMES_CONFIG_PATH = os.environ.get("HERMES_CONFIG_PATH", "/opt/data/config.yaml")
 MEMORY_PRIMARY_MODEL = "deepseek-v4-flash"
 
 
@@ -4118,7 +4120,7 @@ def _active_model():
     s = _models_state()
     aid = s.get("active") or "builtin"
     cname = _clawling_model_name(aid)
-    if cname in CLAWLING_MODELS:
+    if cname in _official_models():
         if aid == "builtin" and cname == actor.MODEL_NAME:
             return None
         return {"base": actor.MODEL_BASE, "key": actor.MODEL_KEY, "model": cname}
@@ -4141,12 +4143,13 @@ def _public_models():
         "model": m,
         "builtin": True,
         "provider": "Clawling",
-        "default": m == actor.MODEL_NAME,
+        "default": m == OFFICIAL_MODELS[0],
         "key_set": bool(actor.MODEL_KEY),
-    } for m in CLAWLING_MODELS]
+        "kind": "official",
+    } for m in _official_models()]
     custom_configs = [{"id": c["id"], "name": c["name"], "model": c["model"],
                        "base": c["base"], "key_masked": _mask_key(c.get("key")),
-                       "added_at": c.get("added_at")} for c in s["configs"]]
+                       "added_at": c.get("added_at"), "kind": "custom"} for c in s["configs"]]
     configs = builtin_configs + custom_configs
     aid = s.get("active") or "builtin"
     if not any(c["id"] == aid for c in configs):
@@ -4203,10 +4206,10 @@ def ev_model_use(ev):
     ref = ev.get("id") or ""
     s = _models_state()
     cname = _clawling_model_name(ref)
-    if ref in ("内置模型", actor.MODEL_NAME):
+    if ref in ("内置模型", actor.MODEL_NAME, OFFICIAL_MODELS[0]):
         ref = "builtin"
-        cname = actor.MODEL_NAME
-    if cname in CLAWLING_MODELS:
+        cname = OFFICIAL_MODELS[0]
+    if cname in _official_models():
         s["active"] = _clawling_model_id(cname)
         _save_models(s)
         return {"active": s["active"], "name": cname}
