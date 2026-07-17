@@ -244,6 +244,17 @@ def canonical_skill_managed(skill_manifest):
     return managed
 
 
+def validate_split_skill_managed(skill_managed, historical=False):
+    actual = set(skill_managed)
+    allowed = {"skills/" + name for name in CREATIVE_SKILL_FILES}
+    required = {f"skills/{name}/SKILL.md" for name in CREATIVE_SKILL_NAMES}
+    if historical:
+        if not required.issubset(actual) or not actual.issubset(allowed):
+            raise RuntimeError("historical Tavern creative-skill release does not match the safe allowlist")
+    elif actual != allowed:
+        raise RuntimeError("Tavern creative-skill release does not match the safe allowlist")
+
+
 def skill_obsolete_files(skill_manifest):
     return [str(path) for path in (skill_manifest.get("obsolete_files") or [])]
 
@@ -314,11 +325,7 @@ def release_material(work, release=None, historical=False):
         if "skill/SKILL.md" not in skill_managed:
             raise RuntimeError("Tavern skill release is missing SKILL.md")
     else:
-        if set(skill_managed) != {"skills/" + name for name in CREATIVE_SKILL_FILES}:
-            raise RuntimeError("Tavern creative-skill release does not match the safe allowlist")
-        required_skills = {f"skills/{name}/SKILL.md" for name in CREATIVE_SKILL_NAMES}
-        if not required_skills.issubset(set(skill_managed)):
-            raise RuntimeError("Tavern creative-skill release is incomplete")
+        validate_split_skill_managed(skill_managed, historical=historical)
         if skill_schema == 3:
             if (skill_manifest.get("install_mode") != "exact-directories"
                     or tuple(skill_manifest.get("directories") or ()) != CREATIVE_SKILL_NAMES):

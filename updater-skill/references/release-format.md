@@ -81,3 +81,6 @@ verified assets. During review, the updater resolves the installed version's tag
 Release and uses its unmodified managed files as the three-way merge base. After a
 successful update, the unmodified target Release is cached with version and hash
 metadata. Merged instance files are never written into the official baseline cache.
+The target skill manifest must exactly match the current official allowlist. A verified
+historical split-skill manifest may contain a safe subset of that allowlist, but it must
+still include every official skill's `SKILL.md` and may never introduce an unknown path.

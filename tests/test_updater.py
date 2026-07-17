@@ -172,6 +172,16 @@ class UpdaterMergeTests(unittest.TestCase):
                 UPDATER.bundled_baseline(
                     self.root / "tampered", {"assets": assets}, "1.14.12")
 
+    def test_historical_split_skill_manifest_accepts_safe_older_subset(self):
+        current = {"skills/" + name for name in UPDATER.CREATIVE_SKILL_FILES}
+        older = current - {"skills/tavern-cards/references/field-mapping.md"}
+
+        UPDATER.validate_split_skill_managed(older, historical=True)
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            UPDATER.validate_split_skill_managed(older, historical=False)
+        with self.assertRaisesRegex(RuntimeError, "historical"):
+            UPDATER.validate_split_skill_managed(older | {"skills/tavern/unknown.md"}, historical=True)
+
     def test_legacy_review_uses_bundled_baseline_when_tagged_release_is_missing(self):
         dist = ROOT / "dist"
         required_assets = (
