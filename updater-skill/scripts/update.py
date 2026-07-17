@@ -386,6 +386,53 @@ def safe_extract_skill(archive, destination, manifest):
             shutil.copytree(raw / "skills", destination / "skills", dirs_exist_ok=True)
 
 
+def bundled_baseline(work, release, version):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", str(version)):
+        raise RuntimeError("installed version cannot select a bundled historical baseline")
+    work.mkdir(parents=True, exist_ok=True)
+    manifest_name = f"baseline-v{version}-manifest.json"
+    archive_name = f"tavern-baseline-v{version}.tar.gz"
+    assets = release.get("assets") or {}
+    if not assets.get(manifest_name) or not assets.get(archive_name):
+        raise RuntimeError(f"latest release does not include a verified baseline for {version}")
+    manifest_path = work / manifest_name
+    archive_path = work / archive_name
+    download(assets[manifest_name], manifest_path)
+    download(assets[archive_name], archive_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (manifest.get("schema") != 1
+            or manifest.get("scope") != "tavern-historical-baseline"
+            or manifest.get("version") != version
+            or manifest.get("archive") != archive_name):
+        raise RuntimeError("unsupported bundled historical baseline manifest")
+    if sha256_file(archive_path) != manifest.get("sha256"):
+        raise RuntimeError("bundled historical baseline archive SHA256 mismatch")
+    managed = [str(path) for path in (manifest.get("managed_files") or [])]
+    required = {f"runtime/{name}" for name in ALLOWED_MANAGED["runtime"]}
+    if set(managed) != required or set(manifest.get("files") or {}) != required:
+        raise RuntimeError("bundled historical baseline does not match the runtime allowlist")
+    unpacked = work / "unpacked"
+    unpacked.mkdir(parents=True)
+    with tarfile.open(archive_path, "r:gz") as package:
+        for member in package.getmembers():
+            parts = Path(member.name).parts
+            if not parts or parts[0] != "runtime":
+                raise RuntimeError("historical baseline contains an unmanaged top-level path")
+            target = (unpacked / member.name).resolve()
+            if unpacked.resolve() not in target.parents and target != unpacked.resolve():
+                raise RuntimeError("historical baseline contains an unsafe path")
+            if member.issym() or member.islnk() or member.isdev():
+                raise RuntimeError("historical baseline contains an unsupported link or device")
+        package.extractall(unpacked)
+    actual = {f"runtime/{name}": digest for name, digest in tree_hashes(unpacked / "runtime").items()}
+    if actual != manifest.get("files"):
+        raise RuntimeError("bundled historical baseline file manifest mismatch")
+    marker = (unpacked / "runtime/.tavern-release-version").read_text(encoding="utf-8").strip()
+    if marker != version:
+        raise RuntimeError("bundled historical baseline version marker mismatch")
+    return unpacked
+
+
 def ignored(path):
     return any(fnmatch.fnmatch(part, pattern) for part in path.parts for pattern in IGNORED)
 
@@ -566,7 +613,9 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
         status = "unchanged"
         source = None
         metadata_normalized = False
-        if ch == nh:
+        if area == "runtime" and name == ".tavern-release-version" and not c and n:
+            source, status = n, "upstream-added"
+        elif ch == nh:
             source = c
         elif ch == bh:
             source, status = n, "upstream"
@@ -1041,17 +1090,22 @@ def command_review(_args):
                     base_root.mkdir()
                     safe_extract(old_archive, base_root, old_manifest)
                     safe_extract_skill(old_skill_archive, base_root, old_skill_manifest)
-                except Exception as exc:
-                    baseline_trusted = False
-                    baseline_source = "unavailable"
-                    baseline_warning = (
-                        "No verified official baseline is available for installed version "
-                        f"{installed}: {exc}. Existing runtime or updater files that differ from the target "
-                        "are treated as conflicts and will not be overwritten."
-                    )
-                    base_root = work / "untrusted-empty-base"
-                    for area in TARGETS:
-                        (base_root / area).mkdir(parents=True, exist_ok=True)
+                except Exception as tagged_error:
+                    try:
+                        base_root = bundled_baseline(work / "bundled-base", release, installed)
+                        baseline_source = "bundled-historical-baseline"
+                    except Exception as bundled_error:
+                        baseline_trusted = False
+                        baseline_source = "unavailable"
+                        baseline_warning = (
+                            "No verified official baseline is available for installed version "
+                            f"{installed}: tagged release: {tagged_error}; bundled baseline: "
+                            f"{bundled_error}. Existing runtime or updater files that differ from the target "
+                            "are treated as conflicts and will not be overwritten."
+                        )
+                        base_root = work / "untrusted-empty-base"
+                        for area in TARGETS:
+                            (base_root / area).mkdir(parents=True, exist_ok=True)
 
         plan_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
         plan_dir = PLANS / plan_id

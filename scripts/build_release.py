@@ -10,6 +10,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "skill"
 CREATIVE_SKILLS = ROOT / "creative-skills"
+LEGACY_BASELINES = ROOT / "legacy-baselines"
 UPDATER = ROOT / "updater-skill"
 DIST = ROOT / "dist"
 STAGE = DIST / "release"
@@ -31,6 +32,9 @@ FRONTEND_FILES = (
     "console.css",
     "i18n.js",
     "index.html",
+)
+BASELINE_RUNTIME_FILES = tuple(BACKEND_FILES) + tuple(f"web/{name}" for name in FRONTEND_FILES) + (
+    ".tavern-release-version",
 )
 CREATIVE_SKILL_NAMES = (
     "tavern",
@@ -127,9 +131,58 @@ def main():
         json.dumps(bootstrap_manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    baselines = []
+    if LEGACY_BASELINES.is_dir():
+        for baseline_root in sorted(path for path in LEGACY_BASELINES.iterdir() if path.is_dir()):
+            baseline_version = baseline_root.name.removeprefix("v")
+            baseline_source = baseline_root / "runtime"
+            actual_source_files = {
+                path.relative_to(baseline_source).as_posix()
+                for path in baseline_source.rglob("*")
+                if path.is_file()
+            }
+            if actual_source_files != set(BASELINE_RUNTIME_FILES):
+                raise RuntimeError(
+                    f"legacy baseline {baseline_version} does not match the runtime allowlist"
+                )
+            marker = (baseline_source / ".tavern-release-version").read_text(encoding="utf-8").strip()
+            if marker != baseline_version:
+                raise RuntimeError(f"legacy baseline {baseline_version} has a mismatched version marker")
+            baseline_stage = DIST / f"baseline-v{baseline_version}-release"
+            for name in BASELINE_RUNTIME_FILES:
+                copy(baseline_source / name, baseline_stage / "runtime" / name)
+            baseline_files = {
+                path.relative_to(baseline_stage).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in sorted(baseline_stage.rglob("*"))
+                if path.is_file()
+            }
+            baseline_archive = DIST / f"tavern-baseline-v{baseline_version}.tar.gz"
+            with tarfile.open(baseline_archive, "w:gz", format=tarfile.PAX_FORMAT) as package:
+                package.add(baseline_stage / "runtime", arcname="runtime")
+            baseline_manifest = {
+                "schema": 1,
+                "scope": "tavern-historical-baseline",
+                "version": baseline_version,
+                "archive": baseline_archive.name,
+                "sha256": hashlib.sha256(baseline_archive.read_bytes()).hexdigest(),
+                "managed_files": sorted(baseline_files),
+                "files": baseline_files,
+            }
+            baseline_manifest_path = DIST / f"baseline-v{baseline_version}-manifest.json"
+            baseline_manifest_path.write_text(
+                json.dumps(baseline_manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            baselines.append(baseline_manifest)
+            shutil.rmtree(baseline_stage)
     shutil.rmtree(STAGE)
     shutil.rmtree(SKILL_STAGE)
-    print(json.dumps({"release": manifest, "skill": skill_manifest, "bootstrap": bootstrap_manifest}, ensure_ascii=False))
+    print(json.dumps({
+        "release": manifest,
+        "skill": skill_manifest,
+        "bootstrap": bootstrap_manifest,
+        "baselines": baselines,
+    }, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -1,14 +1,18 @@
 import importlib.util
 import contextlib
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +40,7 @@ class UpdaterMergeTests(unittest.TestCase):
         }
         UPDATER.AGENTS_PATH = self.root / "installed/AGENTS.md"
         UPDATER.SKIP_SERVICE = True
+        UPDATER.PYTHON = sys.executable
         UPDATER.ALLOWED_MANAGED = {
             "runtime": {"server.py"},
             "skills": set(UPDATER.CREATIVE_SKILL_FILES),
@@ -108,6 +113,118 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertEqual(conflicts, ["runtime/server.py"])
         self.assertEqual(report[0]["status"], "conflict")
         self.assertFalse((output / "server.py").exists())
+
+    def test_missing_legacy_version_marker_is_added_from_target(self):
+        base = self.root / "base/runtime"
+        current = self.root / "current/runtime"
+        incoming = self.root / "incoming/runtime"
+        output = self.root / "output/runtime"
+        self.write(base, ".tavern-release-version", "1.14.12\n")
+        current.mkdir(parents=True)
+        self.write(incoming, ".tavern-release-version", "1.20.1\n")
+
+        report, conflicts = UPDATER.merge_area(
+            "runtime", base, current, incoming, output, {".tavern-release-version"})
+
+        self.assertFalse(conflicts)
+        self.assertEqual(report[0]["status"], "upstream-added")
+        self.assertEqual((output / ".tavern-release-version").read_text(), "1.20.1\n")
+
+    def test_bundled_historical_baseline_is_hash_verified(self):
+        UPDATER.ALLOWED_MANAGED["runtime"] = {"server.py", ".tavern-release-version"}
+        source = self.root / "baseline-source/runtime"
+        self.write(source, "server.py", "legacy official\n")
+        self.write(source, ".tavern-release-version", "1.14.12\n")
+        archive = self.root / "tavern-baseline-v1.14.12.tar.gz"
+        with tarfile.open(archive, "w:gz") as package:
+            package.add(source, arcname="runtime")
+        files = {
+            "runtime/.tavern-release-version": hashlib.sha256(
+                (source / ".tavern-release-version").read_bytes()).hexdigest(),
+            "runtime/server.py": hashlib.sha256((source / "server.py").read_bytes()).hexdigest(),
+        }
+        manifest = self.root / "baseline-v1.14.12-manifest.json"
+        manifest.write_text(json.dumps({
+            "schema": 1,
+            "scope": "tavern-historical-baseline",
+            "version": "1.14.12",
+            "archive": archive.name,
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            "managed_files": sorted(files),
+            "files": files,
+        }), encoding="utf-8")
+        assets = {
+            manifest.name: str(manifest),
+            archive.name: str(archive),
+        }
+
+        with mock.patch.object(UPDATER, "download", side_effect=lambda src, dst: shutil.copy2(src, dst)):
+            unpacked = UPDATER.bundled_baseline(
+                self.root / "downloaded", {"assets": assets}, "1.14.12")
+
+        self.assertEqual((unpacked / "runtime/server.py").read_text(), "legacy official\n")
+
+        bad_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+        bad_manifest["files"]["runtime/server.py"] = "0" * 64
+        manifest.write_text(json.dumps(bad_manifest), encoding="utf-8")
+        with mock.patch.object(UPDATER, "download", side_effect=lambda src, dst: shutil.copy2(src, dst)):
+            with self.assertRaisesRegex(RuntimeError, "file manifest mismatch"):
+                UPDATER.bundled_baseline(
+                    self.root / "tampered", {"assets": assets}, "1.14.12")
+
+    def test_legacy_review_uses_bundled_baseline_when_tagged_release_is_missing(self):
+        dist = ROOT / "dist"
+        required_assets = (
+            "manifest.json",
+            "tavern-release.tar.gz",
+            "skill-manifest.json",
+            "tavern-skill.tar.gz",
+            "baseline-v1.14.12-manifest.json",
+            "tavern-baseline-v1.14.12.tar.gz",
+        )
+        if not all((dist / name).is_file() for name in required_assets):
+            self.skipTest("build release assets before migration validation")
+        manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+        skill_manifest = json.loads((dist / "skill-manifest.json").read_text(encoding="utf-8"))
+        UPDATER.ALLOWED_MANAGED = {
+            "runtime": {
+                path.partition("/")[2]
+                for path in manifest["managed_files"]
+                if path.startswith("runtime/")
+            },
+            "skills": set(UPDATER.CREATIVE_SKILL_FILES),
+            "updater": {
+                path.partition("/")[2]
+                for path in manifest["managed_files"]
+                if path.startswith("updater/")
+            },
+        }
+        baseline_runtime = ROOT / "legacy-baselines/v1.14.12/runtime"
+        shutil.copytree(baseline_runtime, UPDATER.TARGETS["runtime"])
+        (UPDATER.TARGETS["runtime"] / ".tavern-release-version").unlink()
+        self.write(UPDATER.TARGETS["skills"], "tavern/SKILL.md", "---\nname: tavern\nversion: 1.14.12\n---\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern/references/legacy.md", "old monolith\n")
+        self.write(self.root / "installed", "AGENTS.md", "# Old agent routing\n")
+        release = {
+            "tag": "v" + manifest["version"],
+            "url": "https://example.invalid/releases/latest",
+            "assets": {name: (dist / name).as_uri() for name in required_assets},
+        }
+
+        output = io.StringIO()
+        with mock.patch.object(UPDATER, "latest_release", return_value=release), \
+                mock.patch.object(UPDATER, "tagged_release", side_effect=RuntimeError("404")), \
+                mock.patch.dict(os.environ, {"PYTHONPYCACHEPREFIX": str(self.root / "pycache")}), \
+                contextlib.redirect_stdout(output):
+            UPDATER.command_review.__wrapped__(SimpleNamespace())
+
+        review = json.loads(output.getvalue())
+        plan = json.loads((UPDATER.PLANS / review["plan_id"] / "plan.json").read_text())
+        self.assertTrue(review["ready"])
+        self.assertEqual(review["conflicts"], [])
+        self.assertTrue(plan["baseline_trusted"])
+        self.assertEqual(plan["baseline_source"], "bundled-historical-baseline")
+        self.assertEqual(plan["target"], skill_manifest["version"])
 
     def test_cached_baseline_rejects_tampering(self):
         upstream = self.root / "upstream"

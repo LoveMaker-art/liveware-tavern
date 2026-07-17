@@ -32,9 +32,11 @@ dist/tavern-skill.tar.gz
 dist/tavern-updater-bootstrap.py
 dist/install-tavern-updater.sh
 dist/bootstrap-manifest.json
+dist/baseline-v1.14.12-manifest.json
+dist/tavern-baseline-v1.14.12.tar.gz
 ```
 
-Create a stable GitHub Release tagged `v<VERSION>` and attach all seven generated assets. Mirrored instances can then update the runtime, atomically replace the exact seven official creative-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched.
+Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Mirrored instances can then update the runtime, atomically replace the exact seven official creative-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical-baseline assets let legacy instances complete the same three-way review when their original version predates this repository's stable Releases.
 
 ## Bootstrap A Legacy Instance
 

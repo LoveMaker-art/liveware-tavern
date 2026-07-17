@@ -64,6 +64,23 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse((ROOT / "updater-skill/references/agents-block.md").exists())
         self.assertNotIn("tavern-updater:start", canonical.read_text(encoding="utf-8"))
 
+    def test_legacy_baseline_release_is_runtime_only_and_hash_complete(self):
+        manifest_path = ROOT / "dist/baseline-v1.14.12-manifest.json"
+        archive = ROOT / "dist/tavern-baseline-v1.14.12.tar.gz"
+        if not manifest_path.is_file() or not archive.is_file():
+            self.skipTest("build release assets before baseline validation")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schema"], 1)
+        self.assertEqual(manifest["scope"], "tavern-historical-baseline")
+        self.assertEqual(manifest["version"], "1.14.12")
+        self.assertEqual(len(manifest["managed_files"]), 12)
+        self.assertTrue(all(path.startswith("runtime/") for path in manifest["managed_files"]))
+        self.assertFalse(any("tavern-state" in path for path in manifest["managed_files"]))
+        with tarfile.open(archive, "r:gz") as package:
+            names = {member.name for member in package.getmembers() if member.isfile()}
+        self.assertEqual(set(manifest["managed_files"]), names)
+        self.assertEqual(set(manifest["files"]), names)
+
     def test_persona_profile_has_accessible_detail_entry(self):
         app = (ROOT / "skill/reader/app.js").read_text(encoding="utf-8")
         self.assertIn('data-persona-detail="1"', app)
