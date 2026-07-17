@@ -34,8 +34,8 @@ Rules:
 For cards found on the web, use this path:
 
 1. Fetch/import with `search` + `add`, or `add-original` for explicitly original JSON.
-2. Let the runtime canonicalizer map V1/V2/V3 fields into `profile`, `entry`, and `performance`; do not hand-copy source prose into production JSON.
-3. Run `card-audit <card>` before making the card a core role. Structural normalization is automatic, but semantic quality still requires review.
+2. Apply `field-mapping.md`. Let the runtime canonicalizer create `profile`, `entry`, and `performance`, then inspect semantic alignment and move world lore, Persona, current state, and relationship facts to their proper owners. Do not hand-copy source prose into production JSON.
+3. Run `card-audit <card>` before making the card a core role. Structural normalization is automatic, but semantic quality and fine-grained fields still require evidence-based review.
 4. Attach the library card to the chosen world. The runtime creates an independent `runtime_cast` role with an immutable `origin_profile` and one effective `profile`.
 5. Verify with `diagnose <world>`. Story-local changes remain in that world's effective profile and never mutate the library template.
 

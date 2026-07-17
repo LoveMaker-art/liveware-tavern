@@ -59,6 +59,7 @@ SKILL_FILES = (
     "tavern-world/references/world-rebuild.md",
     "tavern-cards/SKILL.md",
     "tavern-cards/references/card-authoring.md",
+    "tavern-cards/references/field-mapping.md",
     "tavern-cards/references/card-localization.md",
     "tavern-cards/references/card-workflow.md",
     "tavern-worldbooks/SKILL.md",

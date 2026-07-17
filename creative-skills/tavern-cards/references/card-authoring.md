@@ -61,6 +61,21 @@ The user prefers a concise, list-style description format using XML-like section
 - 矛盾或反差可以写，但不要解释为什么
 </性格>
 
+<表达>
+- 说话节奏、称呼习惯、常用语气
+- 只写稳定表达特征
+</表达>
+
+<能力>
+- 技能、力量及明确限制
+- 没有来源依据的能力留空
+</能力>
+
+<背景>
+- 影响当前身份的关键经历
+- 当前剧情事件不要写在这里
+</背景>
+
 <关系>
 - 角色名：关系类型 + 一两个关键事实
 - 不说"他对她很好"，说"他按时接送但从不深入交流"
@@ -74,11 +89,16 @@ The user prefers a concise, list-style description format using XML-like section
 1. **身份**: age, location, role, key background only. One line per fact.
 2. **外观**: concrete numbers (height, weight, measurements). For female characters, always include 三围 and cup size. Describe hairstyle, eyes, skin, clothing — specific, not impressionistic.
 3. **性格**: traits only. No examples. No "she would sometimes..." narrative. No psychological deep-dive. If there's a contradiction, state it plainly.
-4. **关系**: name → relationship + one or two concrete facts. No emotional analysis. "He's kind" → wrong. "He brings gifts on holidays but never asks what she's reading" → right.
-5. No `{{user}}` — use the character's actual name.
-6. The format IS the setting. Don't pad it with narrative prose.
+4. **表达**: stable speech rhythm, address terms, and verbal habits. Do not repeat personality traits.
+5. **能力**: evidence-backed skills, powers, and limitations. Do not infer missing powers.
+6. **背景**: durable key history only. Current events belong in story state.
+7. **关系**: name → relationship + one or two concrete facts. No emotional analysis. "He's kind" → wrong. "He brings gifts on holidays but never asks what she's reading" → right.
+8. No `{{user}}` — use the character's actual name.
+9. The format IS the setting. Don't pad it with narrative prose.
 
 **When to use this format**: when creating original cards, when optimizing existing cards at the user's request, and when the user asks for a card to be "cleaned up" or "精简". Do not force this format on imported public cards unless the user asks.
+
+For portable V2/V3 JSON, mirror evidence-backed fine-grained values into `extensions.tavern.profile` according to `field-mapping.md`. Do not duplicate whole prose blocks there; use the smallest structured values that add information beyond the legacy fields.
 
 **Editing approach**: use `execute_code` with Python's `json.load`/`json.dump` to batch-update card fields (`description`, `personality`, `system_prompt`, `post_history_instructions`, `mes_example`). Do NOT use `patch` on JSON files with multi-line string fields — literal newlines in replacement text will break the JSON structure.
 

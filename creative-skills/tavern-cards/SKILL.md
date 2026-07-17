@@ -1,7 +1,7 @@
 ---
 name: tavern-cards
 description: Manage Tavern character cards：搜索、导入、规范化与审计。
-version: 1.20.1
+version: 1.20.2
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -28,8 +28,9 @@ Do not use it for worldbook trigger design, story compression, or app operations
 5. Distinguish structural normalization from semantic normalization:
    - runtime canonicalization guarantees schema shape;
    - semantic fields still require evidence-based review and repair.
-6. Attach the reusable card to the intended world, producing a world-local runtime copy.
-7. Verify both library source and world-local effective profile.
+6. Apply `references/field-mapping.md`: align source fields with `profile`, `entry`, and `performance`, and route world lore, Persona, current state, and relationships to their separate owners.
+7. Attach the reusable card to the intended world, producing a world-local runtime copy.
+8. Verify both library source and world-local effective profile.
 
 Commands:
 
@@ -46,12 +47,14 @@ Load only the needed reference:
 - references/card-workflow.md
 - references/card-authoring.md
 - references/card-localization.md
+- references/field-mapping.md
 
 Before writing state, load the Tavern shared contract.
 
 ## Pitfalls
 
 - Never treat automatic schema conversion as proof that identity, voice, relationships, or capabilities were semantically extracted.
+- Never duplicate one fact across legacy prose and several canonical fields; canonical fields are the effective structured representation.
 - Never write a found card directly into a production JSON file.
 - Never modify the reusable library card when only one running world's role has changed.
 - Never hand-roll PNG or base64 cards when the importer can handle the source.

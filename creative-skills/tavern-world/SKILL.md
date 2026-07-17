@@ -1,7 +1,7 @@
 ---
 name: tavern-world
 description: Build Tavern story worlds：推荐、规划、创建与重构。
-version: 1.20.1
+version: 1.20.2
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -50,6 +50,7 @@ Before writing state, load the Tavern shared contract.
 ## Pitfalls
 
 - Do not invent an existing or fandom character from memory; hand that step to tavern-cards.
+- Do not author or import character fields inside the world workflow; route the card through tavern-cards and its field-mapping contract before attachment.
 - Do not place character personality or biography in world lore.
 - Do not rewrite an ongoing story opening while rebuilding unless the user explicitly asks.
 - Do not create duplicate temporary worlds merely to import cards.
