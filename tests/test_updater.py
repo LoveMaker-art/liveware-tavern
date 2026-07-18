@@ -114,6 +114,90 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertEqual(report[0]["status"], "conflict")
         self.assertFalse((output / "server.py").exists())
 
+    def test_known_transitional_runtime_is_migrated_to_upstream(self):
+        base = self.root / "base/runtime"
+        current = self.root / "current/runtime"
+        incoming = self.root / "incoming/runtime"
+        output = self.root / "output/runtime"
+        self.write(base, "server.py", "official old\n")
+        transitional = self.write(current, "server.py", "transitional build\n")
+        self.write(incoming, "server.py", "official new\n")
+        digest = hashlib.sha256(transitional.read_bytes()).hexdigest()
+        migrations = {
+            "runtime/server.py": {
+                digest: {"min_target": "1.21.0", "reason": "test-migration"},
+            },
+        }
+
+        with mock.patch.object(UPDATER, "COMPATIBILITY_REPLACEMENTS", migrations):
+            report, conflicts = UPDATER.merge_area(
+                "runtime", base, current, incoming, output, {"server.py"},
+                compatibility_target="1.21.0")
+
+        self.assertFalse(conflicts)
+        self.assertEqual(report[0]["status"], "compatibility-migrated")
+        self.assertEqual(report[0]["compatibility_migration"], "test-migration")
+        self.assertEqual((output / "server.py").read_text(), "official new\n")
+
+    def test_unknown_transitional_runtime_still_conflicts(self):
+        base = self.root / "base/runtime"
+        current = self.root / "current/runtime"
+        incoming = self.root / "incoming/runtime"
+        output = self.root / "output/runtime"
+        self.write(base, "server.py", "same = 'base'\n")
+        self.write(current, "server.py", "same = 'local'\n")
+        self.write(incoming, "server.py", "same = 'upstream'\n")
+
+        report, conflicts = UPDATER.merge_area(
+            "runtime", base, current, incoming, output, {"server.py"},
+            compatibility_target="1.21.0")
+
+        self.assertEqual(conflicts, ["runtime/server.py"])
+        self.assertEqual(report[0]["status"], "conflict")
+
+    def test_index_asset_query_changes_are_metadata_only_during_upgrade(self):
+        base = self.root / "base/runtime"
+        current = self.root / "current/runtime"
+        incoming = self.root / "incoming/runtime"
+        output = self.root / "output/runtime"
+        self.write(
+            base, "web/index.html",
+            '<script src="i18n.js"></script>\n<script src="app.js?v=old"></script>\n',
+        )
+        self.write(
+            current, "web/index.html",
+            '<script src="i18n.js?v=cache"></script>\n<script src="app.js?v=new"></script>\n',
+        )
+        self.write(
+            incoming, "web/index.html",
+            '<script src="i18n.js?v=cache"></script>\n<script src="security.js"></script>\n'
+            '<script src="app.js?v=new"></script>\n',
+        )
+
+        report, conflicts = UPDATER.merge_area(
+            "runtime", base, current, incoming, output, {"web/index.html"},
+            compatibility_target="1.21.0")
+
+        self.assertFalse(conflicts)
+        self.assertEqual(report[0]["status"], "metadata-normalized")
+        self.assertTrue(report[0]["metadata_normalized"])
+        self.assertIn("security.js", (output / "web/index.html").read_text())
+
+    def test_index_asset_query_changes_are_preserved_without_upgrade(self):
+        base = self.root / "base/runtime"
+        current = self.root / "current/runtime"
+        incoming = self.root / "incoming/runtime"
+        output = self.root / "output/runtime"
+        self.write(base, "web/index.html", '<script src="app.js?v=base"></script>\n')
+        self.write(current, "web/index.html", '<script src="app.js?v=local"></script>\n')
+        self.write(incoming, "web/index.html", '<script src="app.js?v=upstream"></script>\n')
+
+        report, conflicts = UPDATER.merge_area(
+            "runtime", base, current, incoming, output, {"web/index.html"})
+
+        self.assertEqual(conflicts, ["runtime/web/index.html"])
+        self.assertEqual(report[0]["status"], "conflict")
+
     def test_missing_legacy_version_marker_is_added_from_target(self):
         base = self.root / "base/runtime"
         current = self.root / "current/runtime"
@@ -361,6 +445,22 @@ class UpdaterMergeTests(unittest.TestCase):
             [{"path": "runtime/server.py", "category": "backend", "status": "upstream"}],
         )
         self.assertNotIn("installed_sha256", output.getvalue())
+
+    def test_apply_rejects_plan_with_hidden_file_conflicts(self):
+        plan_id = "inconsistent-conflict-plan"
+        plan_dir = UPDATER.PLANS / plan_id
+        plan_dir.mkdir(parents=True)
+        plan = {
+            "schema": 2,
+            "skill_install_mode": "exact-directories",
+            "ready": True,
+            "conflicts": [],
+            "files": [{"path": "runtime/server.py", "status": "conflict"}],
+        }
+        (plan_dir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "conflict state is inconsistent"):
+            UPDATER.load_plan(plan_id)
 
 
 class RuntimeStateBoundaryTests(unittest.TestCase):
