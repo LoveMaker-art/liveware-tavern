@@ -4,6 +4,7 @@
 // 由 /api/actor_card?lang= 按语言给(server 端 INTIMACY_*_EN)。
 'use strict';
 const t = I18N.t;
+const { escapeHtml: esc, safeSameOriginTarget } = TavernUI;
 
 async function loadIdentity() {
   try {
@@ -11,9 +12,6 @@ async function loadIdentity() {
     I18N.setIdentity(await r.json());
   } catch (_) {}
 }
-
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
-  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 累计字:zh ≥1万显「X.X万」;en 用 k(12.3k)。整数直显(actor-card §6 数值格式)。
 function fmtWords(n) {
@@ -24,7 +22,7 @@ function fmtWords(n) {
 
 // 值 + 单位小字 + 标签:「3 天 / 出道」连读成词，标签单看也成立（actor-card 数值文案）。
 function stat(v, unit, label) {
-  return `<div class="acStat"><div class="acStatV">${v}${unit ? `<span class="acStatU">${esc(unit)}</span>` : ''}</div><div class="acStatL">${esc(label)}</div></div>`;
+  return `<div class="acStat"><div class="acStatV">${esc(v)}${unit ? `<span class="acStatU">${esc(unit)}</span>` : ''}</div><div class="acStatL">${esc(label)}</div></div>`;
 }
 
 function render(d) {
@@ -42,7 +40,7 @@ function render(d) {
     stat(it.log || 0, t('statTimelineUnit'), t('statTimeline')),
   ].join('');
 
-  const pct = Math.round((it.progress || 0) * 100);
+  const pct = Math.max(0, Math.min(100, Math.round(Number(it.progress || 0) * 100) || 0));
   const sub = t('intimacySub', { n: c.turns || 0, m: it.log || 0 });  // 笔 = 年表条数（非口味）
   // to_next 以「轮」计(1 轮 = 1 分;复盘记一笔年表 = 8 分,会跳级)——给用户可预期的最慢路径
   const foot = it.next
@@ -105,7 +103,8 @@ if (new URLSearchParams(location.search).get('from') === 'console') {
     b.classList.remove('hidden');
     b.onclick = () => {
       const ret = new URLSearchParams(location.search).get('return');
-      if (ret) location.href = ret;
+      const target = safeSameOriginTarget(ret);
+      if (target) location.href = target;
       else if (history.length > 1) history.back();
       else location.href = '/';
     };

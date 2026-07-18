@@ -11,6 +11,11 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "skill"))
+
+from memory_cache import ByteLRUCache  # noqa: E402
+from tts_service import FALLBACK_VOICES  # noqa: E402
+import tts_service  # noqa: E402
 
 
 class _AudioResponse:
@@ -23,8 +28,8 @@ class _AudioResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
-        return self.body
+    def read(self, size=-1):
+        return self.body if size < 0 else self.body[:size]
 
 
 class TtsDiskCacheTests(unittest.TestCase):
@@ -59,19 +64,19 @@ class TtsDiskCacheTests(unittest.TestCase):
         })
         runtime_env.start()
         self.addCleanup(runtime_env.stop)
-        for directory in (self.server.TTS_CACHE_DIR, self.server.TTS_REFERENCE_DIR):
+        self.service = self.server.TTS_SERVICE
+        for directory in (self.service.cache_dir, self.service.reference_dir):
             shutil.rmtree(directory, ignore_errors=True)
             os.makedirs(directory, mode=0o700)
         try:
-            os.remove(self.server.TTS_CONFIG_PATH)
+            os.remove(self.service.config_path)
         except FileNotFoundError:
             pass
-        self.server._tts_cache.clear()
-        self.server._tts_cache_order.clear()
-        self.server._tts_cache_last_cleanup = 0.0
-        self.server._tts_voice_cache.update({
-            "at": time.time(),
-            "voices": list(self.server.TTS_FALLBACK_VOICES),
+        self.service.cache = ByteLRUCache(32, 32 * 1024 * 1024)
+        self.service._last_cleanup = 0.0
+        self.service._voice_cache.update({
+            "at": time.monotonic(),
+            "voices": list(FALLBACK_VOICES),
         })
 
     def test_same_voice_survives_memory_reset_and_voice_change_regenerates(self):
@@ -81,52 +86,51 @@ class TtsDiskCacheTests(unittest.TestCase):
             calls.append(request)
             return _AudioResponse(b"audio-" + str(len(calls)).encode("ascii"))
 
-        with mock.patch.object(self.server.urllib.request, "urlopen", fake_urlopen):
-            first = self.server._generate_speech("同一句话")
-            cache_files = list(Path(self.server.TTS_CACHE_DIR).glob("*.mp3"))
+        with mock.patch.object(tts_service.urllib.request, "urlopen", fake_urlopen):
+            first = self.service.generate("同一句话")
+            cache_files = list(Path(self.service.cache_dir).glob("*.mp3"))
             self.assertEqual(len(calls), 1)
             self.assertEqual(len(cache_files), 1)
             self.assertEqual(stat.S_IMODE(cache_files[0].stat().st_mode), 0o600)
 
             old_time = time.time() - 60
             os.utime(cache_files[0], (old_time, old_time))
-            self.server._tts_cache.clear()
-            self.server._tts_cache_order.clear()
-            second = self.server._generate_speech("同一句话")
+            self.service.cache = ByteLRUCache(32, 32 * 1024 * 1024)
+            second = self.service.generate("同一句话")
             self.assertEqual(second, first)
             self.assertEqual(len(calls), 1)
             self.assertGreater(cache_files[0].stat().st_mtime, old_time)
 
-            self.server._save_tts_voice("serena")
-            changed = self.server._generate_speech("同一句话")
+            self.service.save_voice("serena")
+            changed = self.service.generate("同一句话")
             self.assertNotEqual(changed, first)
             self.assertEqual(len(calls), 2)
-            self.assertEqual(len(list(Path(self.server.TTS_CACHE_DIR).glob("*.mp3"))), 2)
+            self.assertEqual(len(list(Path(self.service.cache_dir).glob("*.mp3"))), 2)
 
     def test_cleanup_uses_last_use_time_and_preserves_clone_references(self):
         now = time.time()
         old_key = "a" * 64
         recent_key = "b" * 64
-        old_cache = Path(self.server._tts_cache_path(old_key))
-        recent_cache = Path(self.server._tts_cache_path(recent_key))
+        old_cache = Path(self.service._cache_path(old_key))
+        recent_cache = Path(self.service._cache_path(recent_key))
         old_cache.write_bytes(b"old")
         recent_cache.write_bytes(b"recent")
-        clone_reference = Path(self.server.TTS_REFERENCE_DIR) / ("c" * 43 + ".mp3")
+        clone_reference = Path(self.service.reference_dir) / ("c" * 43 + ".mp3")
         clone_reference.write_bytes(b"reference")
-        old_time = now - (self.server.TTS_CACHE_RETENTION_DAYS * 86400) - 1
-        recent_time = now - (self.server.TTS_CACHE_RETENTION_DAYS * 86400) + 1
+        old_time = now - (self.service.cache_retention_days * 86400) - 1
+        recent_time = now - (self.service.cache_retention_days * 86400) + 1
         os.utime(old_cache, (old_time, old_time))
         os.utime(recent_cache, (recent_time, recent_time))
         os.utime(clone_reference, (old_time, old_time))
-        self.server._remember_tts_audio(old_key, b"old")
+        self.service.cache.put(old_key, b"old")
 
-        removed = self.server._cleanup_tts_disk_cache(force=True, now=now)
+        removed = self.service.cleanup(force=True, now=now)
 
         self.assertEqual(removed, 1)
         self.assertFalse(old_cache.exists())
         self.assertTrue(recent_cache.exists())
         self.assertTrue(clone_reference.exists())
-        self.assertNotIn(old_key, self.server._tts_cache)
+        self.assertIsNone(self.service.cache.get(old_key))
 
 
 if __name__ == "__main__":

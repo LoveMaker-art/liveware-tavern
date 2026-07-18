@@ -202,11 +202,12 @@ class StoryCompressionTests(unittest.TestCase):
             self.assertTrue(started.wait(2))
             self.assertFalse(server._schedule_story_state("prod_pending"))
             release.set()
+            key = ("story_state", "prod_pending")
             for _ in range(200):
-                with server._STORY_STATE_JOBS_LOCK:
-                    if "prod_pending" not in server._STORY_STATE_JOBS:
-                        break
+                if not server.BACKGROUND_JOBS.is_active(key):
+                    break
                 time.sleep(0.01)
+            self.assertFalse(server.BACKGROUND_JOBS.is_active(key))
             self.assertEqual(calls, ["prod_pending", "prod_pending"])
         finally:
             release.set()

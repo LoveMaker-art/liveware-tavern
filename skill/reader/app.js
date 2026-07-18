@@ -4,8 +4,8 @@ const t = I18N.t;  // 文案一律走 i18n.js 的 STRINGS(locale contract,livewa
 const state = { cards: [], libraryCards: [], cardMap: {}, worldbooks: {}, libraryWorldbooks: [], productions: [], activeId: null, active: null,
   agentUserId: "", models: null, tts: null, busy: false, pendingSend: null, stick: true, _anchor: null,
   persona: {}, _foldChar: true, _foldLore: true, _editPersona: false, _editCast: false, _editLore: false };
+const { escapeHtml: esc, element: el } = TavernUI;
 
-function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function fmt(s) {
   const codes = [];
   let html = esc(s).replace(/`([^`]+)`/g, (_, code) => {
@@ -30,8 +30,6 @@ function loc(obj, field) {
 }
 
 function toast(msg) { const box = $("#toast"); box.textContent = msg; box.classList.remove("hidden"); clearTimeout(box._h); box._h = setTimeout(() => box.classList.add("hidden"), 2600); }
-function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
-
 // 内联图标(reader 不挂图标字体)——细描边,克制。
 const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
 const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>';
@@ -59,9 +57,15 @@ async function loadIdentity() {
 
 // 对话轮数 = 用户出手数(first_mes 是 char 开场,不算)。最近活跃 = story 末条时间。
 function countTurns(story) { return (story || []).filter((m) => m.role === "user").length; }
+function productionTurns(p) {
+  const projected = Number(p && p.turn_count);
+  return Number.isFinite(projected) ? projected : countTurns(p && p.story);
+}
 // 剧组的「最近动静」时间戳 = max(创建, 最新一条消息)——既是「最近活跃」文案的数据源,
 // 也是 rail 排序键(聊天列表式:最近的在最上,反馈 2026-07-02)。
 function lastTs(p) {
+  const projected = Number(p && p.last_ts);
+  if (Number.isFinite(projected) && projected > 0) return projected;
   let last = p.created_at || 0;
   (p.story || []).forEach((m) => { if (m.ts && m.ts > last) last = m.ts; });
   return last;
@@ -155,7 +159,7 @@ function watchStateSync(meta, productionId) {
 
 async function loadAll() {
   const [pr, cr, wr, lwr, mr, tr] = await Promise.all([
-    bridge.get("/api/productions"), bridge.get("/api/cards"), bridge.get("/api/worldbooks"),
+    bridge.get("/api/productions?summary=1"), bridge.get("/api/cards"), bridge.get("/api/worldbooks"),
     bridge.get("/api/library/worldbooks"),
     bridge.get("/api/models"),
     bridge.get("/api/tts/config"),
@@ -172,7 +176,24 @@ async function loadAll() {
   state.tts = (tr && Array.isArray(tr.voices)) ? tr
     : { model: "clawling/qwen-tts", model_name: "Qwen TTS", active_voice: "vivian", active_clone_id: "", mode: "preset", voices: [], preset_settings: {}, clones: [], clone: {} };
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
-  state.active = state.productions.find((p) => p.id === state.activeId) || null;
+  state.active = null;
+  if (state.activeId) {
+    try {
+      const detail = await bridge.get(`/api/production?production_id=${encodeURIComponent(state.activeId)}`);
+      state.active = detail.production || null;
+    } catch (_) {
+      const fallbackId = state.productions[0]?.id || null;
+      if (fallbackId && fallbackId !== state.activeId) {
+        state.activeId = fallbackId;
+        try {
+          const detail = await bridge.get(`/api/production?production_id=${encodeURIComponent(fallbackId)}`);
+          state.active = detail.production || null;
+        } catch (_) { state.active = null; }
+      }
+    }
+    const activeIndex = state.productions.findIndex((p) => p.id === state.activeId);
+    if (activeIndex >= 0 && state.active) state.productions[activeIndex] = state.active;
+  }
   state.persona = (state.active && state.active.persona) || {};
   renderRail(); renderStage(); renderPanel();
 }
@@ -182,7 +203,7 @@ function renderRail() {
   // 最近动静倒序(新建/刚演过的浮顶)——每次渲染现排,发送/导入后重渲即自动上浮
   const prods = [...state.productions].sort((a, b) => lastTs(b) - lastTs(a));
   ul.innerHTML = prods.map((p) => {
-    const turns = countTurns(p.story);
+    const turns = productionTurns(p);
     const meta = [turns > 0 ? t("turnsShort", { n: turns }) : t("newPlay"), lastActivity(p)].filter(Boolean).join(" · ");
     return `<li class="prodItem ${p.id === state.activeId ? "active" : ""}" data-id="${p.id}">
       <div class="prodName2">${esc(loc(p, "name") || p.name)}</div>
@@ -1000,8 +1021,13 @@ function openEditCastSheet(cardId) {
 async function switchProd(id) {
   closeDrawers();
   try {
-    await bridge.event({ type: "switch_loadout", production_id: id, locale: I18N.lang });
-    await loadAll();
+    const result = await bridge.event({ type: "switch_loadout", production_id: id, locale: I18N.lang });
+    state.active = result.production;
+    state.activeId = result.production.id;
+    state.persona = result.production.persona || {};
+    const index = state.productions.findIndex((production) => production.id === result.production.id);
+    if (index >= 0) state.productions[index] = result.production;
+    renderRail(); renderStage(); renderPanel();
   } catch (e) { toast(t("switchFailed", { err: e.message })); }
 }
 

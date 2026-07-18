@@ -131,17 +131,16 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertEqual((output / ".tavern-release-version").read_text(), "1.20.1\n")
 
     def test_bundled_historical_baseline_is_hash_verified(self):
-        UPDATER.ALLOWED_MANAGED["runtime"] = {"server.py", ".tavern-release-version"}
         source = self.root / "baseline-source/runtime"
-        self.write(source, "server.py", "legacy official\n")
-        self.write(source, ".tavern-release-version", "1.14.12\n")
+        for name in UPDATER.LEGACY_RUNTIME_FILES:
+            content = "1.14.12\n" if name == ".tavern-release-version" else f"legacy {name}\n"
+            self.write(source, name, content)
         archive = self.root / "tavern-baseline-v1.14.12.tar.gz"
         with tarfile.open(archive, "w:gz") as package:
             package.add(source, arcname="runtime")
         files = {
-            "runtime/.tavern-release-version": hashlib.sha256(
-                (source / ".tavern-release-version").read_bytes()).hexdigest(),
-            "runtime/server.py": hashlib.sha256((source / "server.py").read_bytes()).hexdigest(),
+            f"runtime/{name}": hashlib.sha256((source / name).read_bytes()).hexdigest()
+            for name in UPDATER.LEGACY_RUNTIME_FILES
         }
         manifest = self.root / "baseline-v1.14.12-manifest.json"
         manifest.write_text(json.dumps({
@@ -162,7 +161,7 @@ class UpdaterMergeTests(unittest.TestCase):
             unpacked = UPDATER.bundled_baseline(
                 self.root / "downloaded", {"assets": assets}, "1.14.12")
 
-        self.assertEqual((unpacked / "runtime/server.py").read_text(), "legacy official\n")
+        self.assertEqual((unpacked / "runtime/server.py").read_text(), "legacy server.py\n")
 
         bad_manifest = json.loads(manifest.read_text(encoding="utf-8"))
         bad_manifest["files"]["runtime/server.py"] = "0" * 64

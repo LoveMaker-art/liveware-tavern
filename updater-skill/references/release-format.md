@@ -39,8 +39,19 @@ The runtime archive contains backend application code and the updater itself:
 ```text
 runtime/
   actor.py
-  server.py
+  actor_self.md
+  background_jobs.py
   card_import.py
+  continuity_model.py
+  memory_cache.py
+  model_registry.py
+  production_views.py
+  request_security.py
+  runtime_http.py
+  server.py
+  state_store.py
+  story_ledger.py
+  tts_service.py
   .tavern-release-version
   web/
     actor.html
@@ -50,6 +61,7 @@ runtime/
     console.css
     i18n.js
     index.html
+    security.js
 updater/
   SKILL.md
   scripts/
@@ -74,7 +86,9 @@ The schema-3 skill manifest declares `install_mode: exact-directories`, the exac
 
 Legacy versions without their own GitHub Release may be represented by two additional assets on the latest stable Release: `baseline-v<VERSION>-manifest.json` and `tavern-baseline-v<VERSION>.tar.gz`. The archive contains only the exact allowlisted runtime tree. Its schema-1 manifest binds the version, archive SHA256, complete file list, every file hash, and embedded `.tavern-release-version` marker. It is a merge base only; it is never installed directly and never contains skills, updater code, credentials, identity state, or Tavern user data.
 
-Only the listed runtime files, the seven official frontend code files, and the exact contents of the seven declared creative-skill directories are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, credentials, and nonofficial skill directories are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
+`v1.21.0` expands the managed runtime allowlist with the refactored service modules and `web/security.js`. Installations carrying an older updater must use the verified one-command Bootstrap, which installs the target release's updater before it reviews or applies the expanded runtime manifest. Historical releases and the `v1.14.12` bundled baseline continue to validate against their original 4-backend/7-frontend runtime allowlist.
+
+Only the listed runtime files, the eight official frontend code files, and the exact contents of the seven declared creative-skill directories are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, credentials, and nonofficial skill directories are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
 
 Every published version intended to serve as a future merge base must retain these
 verified assets. During review, the updater resolves the installed version's tagged
