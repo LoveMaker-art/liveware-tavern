@@ -9,7 +9,13 @@
         body: JSON.stringify(ev),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || data.ok === false) throw new Error(data.error || ("HTTP " + r.status));
+      if (!r.ok || data.ok === false) {
+        const error = new Error(data.error || ("HTTP " + r.status));
+        error.status = r.status;
+        error.code = data.code || "";
+        error.data = data;
+        throw error;
+      }
       return data;
     } catch (err) {
       console.error("[bridge] event failed:", ev.type, err);

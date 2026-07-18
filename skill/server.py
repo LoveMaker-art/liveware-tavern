@@ -937,6 +937,12 @@ _PRODUCTION_LOCKS = {}
 _PRODUCTION_LOCKS_GUARD = threading.Lock()
 
 
+class ProductionRevisionConflict(Exception):
+    def __init__(self, current_revision):
+        super().__init__("character state changed")
+        self.current_revision = int(current_revision or 0)
+
+
 def _production_lock(pid):
     with _PRODUCTION_LOCKS_GUARD:
         return _PRODUCTION_LOCKS.setdefault(pid, threading.RLock())
@@ -1459,8 +1465,8 @@ def _classify_lore_entry(text, p, cards):
         "text": text,
         "characters": names,
         "response_language": language,
-        "scene_state": p.get("scene_state") or {},
-        "story_state": p.get("story_state") or {},
+        "story_state": _effective_story_state(p),
+        "recent_story": _scene_story_excerpt(p, response_language=language),
     }, ensure_ascii=False)
     try:
         out = actor.chat([{ "role": "system", "content": sys }, { "role": "user", "content": user }],
@@ -1670,11 +1676,30 @@ def ev_attach_card(ev):
 
 
 def ev_update_cast(ev):
+    pid = ev["production_id"]
+    with _production_lock(pid):
+        result = _ev_update_cast_locked(ev)
+    # If a state job was already processing the old revision, make it retry
+    # from the newly saved character state instead of leaving the batch due.
+    _schedule_story_state(pid)
+    return result
+
+
+def _ev_update_cast_locked(ev):
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
     cid = ev.get("card_id")
     runtime_cast = _ensure_runtime_cast(p)
+    expected_revision = ev.get("expected_revision")
+    current_revision = int(runtime_cast.get("revision") or 0)
+    if expected_revision is not None:
+        try:
+            expected_revision = int(expected_revision)
+        except (TypeError, ValueError):
+            raise ValueError("invalid expected_revision")
+        if expected_revision != current_revision:
+            raise ProductionRevisionConflict(current_revision)
     card = next((c for c in (runtime_cast.get("characters") or []) if c.get("id") == cid), None)
     if not card:
         raise ValueError("character not found in current world")
@@ -2395,8 +2420,6 @@ def _mark_context_state_stale(p, reason="context_changed"):
     p["turn_plan"] = {}
     p.setdefault("runtime", {})["state_stale_reason"] = reason
     p["runtime"].pop("last_prompt_debug", None)
-    if isinstance(p.get("scene_state"), dict):
-        p["scene_state"]["stale"] = True
 
 
 def _mark_story_state_stale(p, reason="history_changed"):
@@ -2421,7 +2444,7 @@ def _perform_into(p):
     language = _ensure_world_language(p)
     return actor.perform(cards, wbs, persona, p["story"], note,
                          model=_active_model(), story_state=_effective_story_state(p),
-                         scene_state=p.get("scene_state"), turn_plan=turn_plan,
+                         turn_plan=turn_plan,
                          response_language=language)  # 用户自配大模型;None=内置模型
 
 
@@ -2441,7 +2464,6 @@ def ev_send_message(ev):
     _commit_foreground_story(p, expected_story_signature)
     state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
-    _schedule_scene_state(p["id"])
     return {"reply": reply, "message": m, "user_message": user_msg,
             "production_id": p["id"], "state_sync": state_sync}
 
@@ -2470,7 +2492,6 @@ def ev_regenerate(ev):
     _commit_foreground_story(p, expected_story_signature)
     state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
-    _schedule_scene_state(p["id"])
     return {"message": last, "production_id": p["id"], "state_sync": state_sync}
 
 
@@ -2539,7 +2560,7 @@ def _ensure_actor_reply(p, cards, wbs, persona, note, text):
     try:
         text = _normalize_actor_reply(actor.perform(cards, wbs, persona, p["story"], retry_note,
                                                     model=_active_model(), story_state=_effective_story_state(p),
-                                                    scene_state=p.get("scene_state"), turn_plan=_prepare_turn_plan(p, cards),
+                                                    turn_plan=_prepare_turn_plan(p, cards),
                                                     response_language=language))
     except Exception as e:
         print("actor retry failed:", repr(e), file=sys.stderr, flush=True)
@@ -2559,11 +2580,11 @@ def ev_continue(ev):
     user_msg = _msg("user", ev.get("text") or ("*Continue the story.*" if language == "en" else "*剧情继续*"))
     p["story"].append(user_msg)
     cards, wbs, persona, note = _loadout(p)
-    turn_plan = _prepare_turn_plan(p, cards)
     continue_note = _continue_note(note, language)
+    turn_plan = _prepare_turn_plan(p, cards)
     reply = actor.perform(cards, wbs, persona, p["story"], continue_note,
                           model=_active_model(), story_state=_effective_story_state(p),
-                          scene_state=p.get("scene_state"), turn_plan=turn_plan,
+                          turn_plan=turn_plan,
                           response_language=language)
     reply = _ensure_actor_reply(p, cards, wbs, persona, continue_note, reply)
     _raise_if_generation_cancelled(ev)
@@ -2572,7 +2593,6 @@ def ev_continue(ev):
     _commit_foreground_story(p, expected_story_signature)
     state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
-    _schedule_scene_state(p["id"])
     return {"reply": reply, "user_message": user_msg, "message": m,
             "production_id": p["id"], "state_sync": state_sync}
 
@@ -2786,7 +2806,6 @@ def ev_edit_message(ev):
             if reply_msg:
                 state_sync = _story_state_sync_trigger(p["id"])
                 _schedule_story_state(p["id"])
-                _schedule_scene_state(p["id"])
             return {"message": m, "reply": reply_msg, "story": p["story"],
                     "truncated": removed, "state_sync": state_sync}
     raise ValueError("message not found")
@@ -2904,46 +2923,6 @@ def _closest_card_name(value, names):
             return n
     return ""
 
-def _normalize_scene_state(raw, cards, response_language="zh"):
-    if not isinstance(raw, dict):
-        raw = {}
-
-    def text(key, fallback=""):
-        return str(raw.get(key) or fallback or "").strip()[:160]
-
-    def arr(key, fallback=None, limit=8, normalize_names=False):
-        vals = raw.get(key)
-        if vals is None:
-            vals = fallback or []
-        if isinstance(vals, str):
-            vals = [vals]
-        out = []
-        for v in vals or []:
-            x = str(v).strip().lstrip("-•").strip()
-            if normalize_names:
-                x = _closest_card_name(x, names)
-            if x and x not in out:
-                out.append(x[:120])
-        return out[:limit]
-
-    valid_ids = {str(c.get("id")) for c in cards or [] if c.get("id")}
-    participants = []
-    for value in raw.get("participants") or []:
-        participant = _normalize_scene_participant(value, valid_ids)
-        if participant:
-            participants.append(participant)
-    unknown = "Unspecified" if _locale_code(response_language) == "en" else "未明确"
-    return {
-        "location": text("location", unknown),
-        "time": text("time", unknown),
-        "mood": text("mood", unknown),
-        "current_focus": text("current_focus"),
-        "open_threads": arr("open_threads", limit=10),
-        "participants": participants[:24],
-        "updated_at": int(time.time()),
-    }
-
-
 def _scene_story_excerpt(p, max_items=12, response_language=None):
     language = response_language or _ensure_world_language(p)
     en = language == "en"
@@ -2973,15 +2952,12 @@ def _build_turn_plan(p, cards):
         "narration_goal、do_not。primary_speaker 是字符串，其余是字符串数组或字符串。"
         "原则：不要求所有角色说话；优先回应被用户点名或最有动机的人；保护角色知识边界。"
     ))
-    scene = p.get("scene_state") or {}
     plot = _effective_story_state(p)
     user = json.dumps({
         "characters": [{"id": c.get("id"), "name": c.get("name"),
                         "profile": c.get("profile") or {},
                         "persistent_status": c.get("persistent_status") or {},
                         "relationships": c.get("relationships") or []} for c in cards],
-        "scene_state": {key: scene.get(key) for key in
-                        ("location", "time", "mood", "current_focus", "open_threads")},
         "story_state": {key: plot.get(key) for key in
                         ("timeline", "facts", "open_threads", "objects", "secrets", "scene", "style_notes")},
         "response_language": language,
@@ -3017,54 +2993,6 @@ def _prepare_turn_plan(p, cards):
         return _build_turn_plan(p, cards)
     except Exception:
         return {}
-
-
-def _update_scene_state(p):
-    cards, _, _, _ = _loadout(p)
-    if not cards:
-        return p.get("scene_state") or {}
-    revision = _story_revision(p)
-    language = _ensure_world_language(p)
-    en = language == "en"
-    sys = ((
-        "You are the continuity recorder for an interactive story. Update the current scene state from the recent story and write all textual values in English. "
-        "Record only events that clearly happened or are strongly established; do not add literary commentary. Output strict JSON with only location, time, mood, current_focus, open_threads, and participants. "
-        "participants contains character_id, location, activity, and condition for characters clearly present or recently tracked. Do not record personality, identity, relationships, or learned facts."
-    ) if en else (
-        "你是互动故事的场记。根据最近剧情更新当前场景状态，所有文本值使用简体中文。"
-        "只记录已经明确发生或强烈成立的内容，不要写文学点评。"
-        "输出严格 JSON，字段只有 location、time、mood、current_focus、open_threads、participants。"
-        "participants 记录明确在场或刚被追踪角色的 character_id、location、activity、condition。不要记录人物性格、身份、关系或已知事实。"
-    ))
-    user = json.dumps({
-        "previous_scene_state": p.get("scene_state") or {},
-        "roster": [{"id": c.get("id"), "name": c.get("name")} for c in cards],
-        "response_language": language,
-        "recent_story": _scene_story_excerpt(p, response_language=language),
-    }, ensure_ascii=False)
-    out = actor.chat([{"role": "system", "content": sys}, {"role": "user", "content": user}],
-                     temperature=0.1, model=_memory_model()).strip()
-    state = _normalize_scene_state(_json_from_model_text(out), cards, language)
-    updated = _merge_production_fields(
-        p["id"], expected_story_revision=revision, scene_state=state)
-    if updated is None:
-        return p.get("scene_state") or {}
-    p["scene_state"] = state
-    return state
-
-
-def _maybe_update_scene_state(pid):
-    p = load_production(pid)
-    if not p:
-        return
-    try:
-        _update_scene_state(p)
-    except Exception:
-        pass
-
-
-def _schedule_scene_state(pid):
-    threading.Thread(target=_maybe_update_scene_state, args=(pid,), daemon=True).start()
 
 
 def _world_turns(story):
@@ -3165,16 +3093,10 @@ def _clip_memory_text(value, limit):
     if not text:
         return ""
     text = re.sub(r"\s+", " ", text)
-    # Drop obvious generated loops before they become permanent memory.
-    for pat in ("痛苦煎熬", "天道好轮回", "源头治理", "越来越"):
-        if text.count(pat) >= 4:
-            i = text.find(pat)
-            text = text[:i + len(pat)]
-            break
     return text[:limit].rstrip()
 
 
-def _normalize_story_state(raw, turns, source_tokens):
+def _normalize_story_state(raw, turns, source_tokens, valid_ids=None):
     if not isinstance(raw, dict):
         raw = {}
 
@@ -3204,7 +3126,7 @@ def _normalize_story_state(raw, turns, source_tokens):
         "open_threads": arr("open_threads"),
         "objects": [],
         "secrets": [],
-        "scene": _normalize_ledger_scene(raw.get("scene")),
+        "scene": _normalize_ledger_scene(raw.get("scene"), valid_ids),
         "style_notes": arr("style_notes"),
         "turns": turns,
         "source_tokens": source_tokens,
@@ -3214,7 +3136,7 @@ def _normalize_story_state(raw, turns, source_tokens):
     if isinstance(fact_values, (str, dict)):
         fact_values = [fact_values]
     for value in fact_values:
-        fact = _normalize_fact_entry(value)
+        fact = _normalize_fact_entry(value, valid_ids)
         if fact and fact["id"] not in {item["id"] for item in state["facts"]}:
             state["facts"].append(fact)
         if len(state["facts"]) >= 24:
@@ -3223,7 +3145,7 @@ def _normalize_story_state(raw, turns, source_tokens):
     if isinstance(object_values, (str, dict)):
         object_values = [object_values]
     for value in object_values:
-        obj = _normalize_object_entry(value)
+        obj = _normalize_object_entry(value, valid_ids)
         if obj and obj["id"] not in {item["id"] for item in state["objects"]}:
             state["objects"].append(obj)
         if len(state["objects"]) >= 16:
@@ -3232,7 +3154,7 @@ def _normalize_story_state(raw, turns, source_tokens):
     if isinstance(secret_values, (str, dict)):
         secret_values = [secret_values]
     for value in secret_values:
-        secret = _normalize_fact_entry(value, secret=True)
+        secret = _normalize_fact_entry(value, valid_ids, secret=True)
         if secret and secret["id"] not in {item["id"] for item in state["secrets"]}:
             state["secrets"].append(secret)
         if len(state["secrets"]) >= 16:
@@ -3323,99 +3245,262 @@ def _effective_story_state(p):
         (p or {}).get("story_state") or {}, (p or {}).get("story") or [])
 
 
+def _story_state_reference_error(raw, valid_ids):
+    """Reject model output that uses names or unknown ids in ledger references."""
+    raw = raw if isinstance(raw, dict) else {}
+    allowed = {str(value) for value in (valid_ids or set()) if value}
+    if not allowed:
+        return ""
+    invalid = []
+    for key in ("facts", "secrets"):
+        values = raw.get(key) or []
+        values = values if isinstance(values, list) else [values]
+        for entry in values:
+            if isinstance(entry, dict):
+                invalid.extend("%s.known_by=%s" % (key, value)
+                               for value in (entry.get("known_by") or [])
+                               if str(value) not in allowed)
+    values = raw.get("objects") or []
+    values = values if isinstance(values, list) else [values]
+    for entry in values:
+        if isinstance(entry, dict):
+            holder = str(entry.get("holder") or "").strip()
+            if holder and holder not in allowed:
+                invalid.append("objects.holder=%s" % holder)
+    scene = raw.get("scene") if isinstance(raw.get("scene"), dict) else {}
+    for entry in scene.get("participants") or []:
+        if isinstance(entry, dict):
+            cid = str(entry.get("character_id") or entry.get("id") or "").strip()
+            if not cid or cid not in allowed:
+                invalid.append("scene.character_id=%s" % (cid or "<empty>"))
+    return "invalid story ledger references: %s" % invalid[:8] if invalid else ""
+
+
+def _story_state_shape_error(raw):
+    """Keep the model contract and the normalized ledger schema in lockstep."""
+    if not isinstance(raw, dict):
+        return "story ledger must be an object"
+    required = {
+        "timeline", "facts", "open_threads", "objects", "secrets",
+        "scene", "style_notes",
+    }
+    if set(raw) != required:
+        return "story ledger has an invalid top-level field set"
+    for key in ("timeline", "facts", "open_threads", "objects", "secrets", "style_notes"):
+        if not isinstance(raw.get(key), list):
+            return "%s must be an array" % key
+    for key in ("timeline", "open_threads", "style_notes"):
+        if any(not isinstance(item, str) or not item.strip() for item in raw.get(key)):
+            return "%s items must be non-empty strings" % key
+    for key in ("facts", "secrets"):
+        for item in raw.get(key):
+            if not isinstance(item, dict) or set(item) != {"id", "content", "known_by"}:
+                return "%s items must contain exactly id, content, and known_by" % key
+            if not str(item.get("id") or "").strip() or not str(item.get("content") or "").strip():
+                return "%s items require non-empty id and content" % key
+            if (not isinstance(item.get("known_by"), list)
+                    or any(not isinstance(value, str) or not value.strip()
+                           for value in item.get("known_by"))):
+                return "%s.known_by must be an array" % key
+    for item in raw.get("objects"):
+        if not isinstance(item, dict) or set(item) != {
+                "id", "name", "status", "holder", "location"}:
+            return "objects items must contain exactly id, name, status, holder, and location"
+        if not str(item.get("id") or "").strip() or not str(item.get("name") or "").strip():
+            return "objects items require non-empty id and name"
+        if any(not isinstance(item.get(key), str) for key in ("status", "holder", "location")):
+            return "objects status, holder, and location must be strings"
+    scene = raw.get("scene")
+    if not isinstance(scene, dict) or set(scene) != {"time", "place", "participants"}:
+        return "scene must contain exactly time, place, and participants"
+    if not isinstance(scene.get("participants"), list):
+        return "scene.participants must be an array"
+    if any(not isinstance(scene.get(key), str) for key in ("time", "place")):
+        return "scene time and place must be strings"
+    for item in scene.get("participants"):
+        if not isinstance(item, dict) or set(item) != {
+                "character_id", "location", "activity", "condition"}:
+            return "scene participants have an invalid field set"
+        if any(not isinstance(item.get(key), str) for key in (
+                "character_id", "location", "activity", "condition")):
+            return "scene participant values must be strings"
+    return ""
+
+
+def _validated_model_call(messages, temperature, model, max_tokens,
+                          validator, language, task_name):
+    """Validate one model response and allow one same-model contract retry."""
+    base_messages = list(messages)
+    current_messages = base_messages
+    for attempt in range(2):
+        try:
+            output = actor.chat(
+                current_messages,
+                temperature=temperature,
+                model=model,
+                max_tokens=max_tokens,
+            ).strip()
+        except Exception as error:
+            return "upstream_error", None, error
+        try:
+            return "ok", validator(output), None
+        except Exception as error:
+            if attempt:
+                return "output_rejected", None, error
+            if language == "en":
+                correction = (
+                    "Your previous JSON was rejected by the deterministic validator: %s. "
+                    "Using the original input, return one complete corrected replacement JSON "
+                    "that follows the system schema exactly. Do not explain or wrap the JSON."
+                ) % error
+            else:
+                correction = (
+                    "你上一份 JSON 未通过程序校验：%s。请根据原始输入重新输出一份完整的替代 JSON，"
+                    "严格遵守系统字段结构。不要解释，不要添加代码块。"
+                ) % error
+            current_messages = base_messages + [
+                {"role": "assistant", "content": output},
+                {"role": "user", "content": correction},
+            ]
+            print("%s output retry with same model %s:" % (
+                task_name, model.get("model")), repr(error),
+                file=sys.stderr, flush=True)
+    return "output_rejected", None, RuntimeError("unreachable validation state")
+
+
 def _merge_story_state_batch(prev, batch, start_turn, end_turn,
-                             source_tokens, response_language="zh"):
+                             source_tokens, response_language="zh", roster=None):
     language = _locale_code(response_language)
+    roster = [item for item in (roster or []) if isinstance(item, dict) and item.get("id")]
+    valid_ids = {str(item.get("id")) for item in roster}
+    valid_ids.add("__user__")
     plot_keys = ("timeline", "facts", "open_threads", "objects", "secrets", "style_notes", "scene")
     prev = {key: (prev or {}).get(key) or ({} if key == "scene" else []) for key in plot_keys}
+    ledger_schema = r'''{
+  "timeline": ["<major event in chronological order>"],
+  "facts": [
+    {"id": "<stable_fact_id>", "content": "<current canonical fact>", "known_by": ["<entity_id>"]}
+  ],
+  "open_threads": ["<specific unresolved question, promise, conflict, or goal>"],
+  "objects": [
+    {"id": "<stable_object_id>", "name": "<name>", "status": "<current status>", "holder": "<entity_id_or_empty>", "location": "<current location>"}
+  ],
+  "secrets": [
+    {"id": "<stable_secret_id>", "content": "<hidden truth>", "known_by": ["<entity_id>"]}
+  ],
+  "scene": {
+    "time": "<current time>",
+    "place": "<current place>",
+    "participants": [
+      {"character_id": "<entity_id>", "location": "<position>", "activity": "<current activity>", "condition": "<current scene condition>"}
+    ]
+  },
+  "style_notes": ["<established point-of-view, tense, or continuity convention>"]
+}'''
     if language == "en":
         sys_prompt = (
-            "You are the high-fidelity continuity recorder for an interactive story. Merge previous_state and the complete new_story_batch into an updated story ledger. "
-            "Write every textual value in English, translating older ledger values when necessary while preserving names and facts. Record only completed or ongoing plot events, causal facts, secrets, key objects, open threads, major promises, conflicts, turning points, and consequential choices. "
-            "The ledger is the sole owner of scene location, participant positions and activities, story facts, knowledge boundaries, and object custody. "
-            "Do not store personality, identity, abilities, durable identity changes, long-term conditions, or current relationship conclusions; those belong to the character registry. Relationship changes may appear only as timeline events. "
-            "Output strict JSON using only timeline, facts, open_threads, objects, secrets, scene, and style_notes. facts and secrets contain objects with id, content, and known_by character ids. objects contain id, name, status, holder character id, and location. scene contains time, place, and participants; every participant has character_id, location, activity, and condition. "
-            "Keep entries short, concrete, unique, and non-prose. Keep at most 12 entries per major array. Keep timeline/facts under 20 words and open_threads under 28 words. "
-            "Never drop unresolved threads, unrevealed secrets, key objects, identity revelations, major promises, major conflicts, turning points, or consequential user choices unless the new batch explicitly resolves or changes them. "
-            "Remove duplicates, expired scene details, completed minor actions, and details that cannot affect continuation before removing protected memory. Keep the complete JSON ledger within 15000 characters. "
-            "The batch contains complete conversational turns and must be treated as one continuous semantic unit. "
-            "If new_story_batch is non-empty, never return an entirely empty JSON object."
-        )
+            "# Task\n\n"
+            "Merge previous_state and the complete new_story_batch into one high-fidelity story ledger. "
+            "Treat the batch as one continuous semantic unit. Use the latest confirmed event when facts change inside the batch. "
+            "Write all textual values in English while preserving proper names and established facts. Never continue, explain, critique, or invent the story.\n\n"
+            "# Ownership\n\n"
+            "This ledger is the sole source for plot events, current scene, knowledge boundaries, unresolved threads, and key-object custody. "
+            "The cast registry is the sole source for a character's current durable identity, personality, abilities, physical condition, and relationship conclusion. "
+            "An identity revelation may remain here only as an event and as a knowledge boundary; the character's current identity value belongs in the cast registry. "
+            "A relationship change may remain in timeline as an event, but its current durable conclusion belongs in the cast registry.\n\n"
+            "# Field semantics\n\n"
+            "timeline: up to 12 major events in chronological order. Keep an event only when its consequence remains relevant at the end of the batch; omit a minor incident that is fully resolved in the same batch and has no later effect.\n"
+            "facts: up to 24 current canonical causal facts. Do not duplicate timeline wording.\n"
+            "open_threads: up to 12 unresolved questions, promises, conflicts, threats, or goals; remove an item when explicitly resolved.\n"
+            "objects: up to 16 consequential objects with their latest status, holder, and location.\n"
+            "secrets: up to 16 hidden or selectively known truths with precise known_by boundaries.\n"
+            "scene: replace it with the single current scene at the end of this batch. Carry forward the latest explicitly established scene value until the story explicitly changes it. Never invent a new time, place, participant location, activity, or condition; use an empty string when no value has ever been established.\n"
+            "style_notes: up to 6 already-established POV, tense, or continuity conventions; never use it for plot facts or new writing instructions.\n\n"
+            "# Merge rules\n\n"
+            "Reuse an existing id whenever an existing fact, object, or secret is updated. Create a new stable id only for a genuinely new item. "
+            "Do not create a second id for a paraphrase of the same item. Keep unresolved threads, unrevealed secrets, consequential objects, major promises, conflicts, turning points, and user choices until the batch explicitly resolves or changes them. A resolved temporary injury or other minor incident belongs nowhere in the updated ledger unless it creates a continuing consequence. "
+            "When space is limited, remove duplicates, expired scene detail, completed minor actions, and low-consequence history first. "
+            "Keep timeline entries within 120 characters, facts and secrets content within 220 characters, open_threads within 140 characters, and the complete JSON within %d characters. "
+            "Use only allowed_entities ids or __user__ in known_by, holder, and scene.character_id; use an empty string when no holder is established.\n\n"
+            "# Output contract\n\n"
+            "Return exactly one JSON object matching the schema below. Include every top-level field, use no additional fields, and return no prose or code fence. "
+            "If new_story_batch is non-empty, the ledger must not be entirely empty.\n\n"
+            "# Exact JSON schema\n\n" + ledger_schema
+        ) % STORY_STATE_MAX_CHARS
     else:
         sys_prompt = (
-            "你是互动故事的高保真场记。把 previous_state 与完整的 new_story_batch 合并成新的剧情账本，所有文本值使用简体中文；必要时翻译旧账本内容，同时保留姓名与事实。"
-            "只记录已经发生或仍在推进的剧情事件、因果事实、秘密、关键物件、伏笔、重大承诺、冲突、转折与关键选择。"
-            "剧情账本是场景地点、角色所处位置与行动、剧情事实、角色认知边界和物品归属的唯一来源。"
-            "不要保存人物性格、身份、能力、长期身份变化、长期身体情况或当前关系结论；这些属于角色档案。关系变化只能作为时间线事件记录。"
-            "不要文学点评，不猜测未发生内容。输出严格 JSON，对象字段只能是 timeline、facts、open_threads、objects、secrets、scene、style_notes。"
-            "facts 与 secrets 的每项包含 id、content、known_by；known_by 只能填写角色 id 或 __user__。objects 的每项包含 id、name、status、holder、location。scene 包含 time、place、participants；每名参与者包含 character_id、location、activity、condition。"
-            "所有数组条目必须短而具体，禁止长篇散文，禁止重复。"
-            "主要数组最多保留 12 条；timeline/facts 每条不超过 60 个汉字；open_threads 每条不超过 80 个汉字。"
-            "未解决线索、未揭露秘密、关键物品、身份揭露、重大承诺、核心冲突、剧情转折和用户关键选择，在新批次明确解决或改变之前不得删除。"
-            "容量不足时，先删除重复表述、过时场景、已完成的小动作和不影响后续的细节，再考虑其他内容；完整 JSON 账本不得超过 15000 字符。"
-            "这一批包含完整连续的对话轮次，必须作为一个语义整体理解，不得在事件中间切断。"
-            "如果 new_story_batch 非空，严禁返回全空 JSON。"
-        )
+            "# 任务\n\n"
+            "将 previous_state 与完整的 new_story_batch 合并为一份高保真剧情账本。把这一批视为连续的语义整体；批次内事实发生变化时，以最后确认的事件为准。"
+            "所有文本值使用简体中文，并保留专有姓名和既有事实。不得续写、解释、点评或编造剧情。\n\n"
+            "# 数据职责\n\n"
+            "剧情账本是剧情事件、当前场景、认知边界、未解决线索和关键物品归属的唯一来源。"
+            "角色档案是人物当前长期身份、性格、能力、身体情况和关系结论的唯一来源。"
+            "身份揭露可以在账本中保留为事件及知情边界，但人物当前身份值归角色档案；关系变化可以在 timeline 保留为事件，但当前长期关系结论归角色档案。\n\n"
+            "# 字段语义\n\n"
+            "timeline：按时间顺序保留最多 12 条重大事件。只有事件后果在本批结束时仍影响后续，才保留该事件；同一批内已经完整解决且没有后续影响的轻微插曲必须省略。\n"
+            "facts：保留最多 24 条当前仍然成立的因果事实，不要重复 timeline 的表述。\n"
+            "open_threads：保留最多 12 条尚未解决的问题、承诺、冲突、威胁或目标；明确解决后删除。\n"
+            "objects：保留最多 16 件会影响后续的关键物品及其最新状态、持有人和地点。\n"
+            "secrets：保留最多 16 条隐藏或仅部分角色知晓的事实，并准确维护 known_by。\n"
+            "scene：完整替换为本批结束时唯一有效的当前场景。最近一次明确建立的场景值在剧情明确改变前继续沿用；不得自行补写新的时间、地点、角色位置、行动或状态，从未明确过的值使用空字符串。\n"
+            "style_notes：最多 6 条已经形成的视角、时态或连续性约定，不得存放剧情事实，也不得新增写作指令。\n\n"
+            "# 合并规则\n\n"
+            "更新既有事实、物品或秘密时必须沿用原 id；只有真正新增的项目才创建新 id，不得为同一内容的改写创建第二个 id。"
+            "未解决线索、未揭露秘密、关键物品、重大承诺、核心冲突、转折和用户关键选择，在本批明确解决或改变前不得删除。同一批内已经恢复且没有持续影响的轻微伤势或其他临时插曲，不得进入更新后的账本。"
+            "容量不足时，依次优先删除重复表述、过期场景细节、已完成的小动作和不影响后续的低价值历史。"
+            "timeline 每条不超过 120 个字符，facts 与 secrets 的 content 不超过 220 个字符，open_threads 每条不超过 140 个字符，完整 JSON 不超过 %d 字符。"
+            "known_by、holder 和 scene.character_id 只能使用 allowed_entities 中的 id 或 __user__；持有人未明确时 holder 使用空字符串。\n\n"
+            "# 输出契约\n\n"
+            "只返回一个严格符合下方模板的 JSON 对象。必须包含全部顶层字段，不得增加字段，不得输出解释或代码块。"
+            "new_story_batch 非空时，账本不得全部为空。\n\n"
+            "# 唯一 JSON 结构\n\n" + ledger_schema
+        ) % STORY_STATE_MAX_CHARS
     user = json.dumps({
         "previous_state": prev or {},
         "new_story_batch": batch,
+        "allowed_entities": roster + [{"id": "__user__", "name": "user"}],
         "response_language": language,
         "range": {
             "start_turn": start_turn,
             "end_turn": end_turn,
         },
     }, ensure_ascii=False)
-    out = ""
     last_error = None
     for mem_model in _memory_models():
-        try:
-            out = actor.chat([
+        def validate_story_state(out):
+            if not out:
+                raise ValueError("empty story ledger output")
+            raw = _json_from_model_text(out)
+            shape_error = _story_state_shape_error(raw)
+            if shape_error:
+                raise ValueError(shape_error)
+            reference_error = _story_state_reference_error(raw, valid_ids)
+            if reference_error:
+                raise ValueError(reference_error)
+            state = _normalize_story_state(raw, end_turn, source_tokens, valid_ids)
+            state["response_language"] = language
+            if not _story_state_has_memory(state):
+                raise ValueError("empty normalized story ledger")
+            if not _story_state_quality_ok(prev or {}, state):
+                raise ValueError("story ledger lost protected memory")
+            return state
+
+        status, state, error = _validated_model_call([
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user},
-            ], temperature=0.1, model=mem_model, max_tokens=6000).strip()
-            if out:
-                break
-        except Exception as e:
-            last_error = e
-            print("story_state batch model failed with %s:" % mem_model.get("model"), repr(e), file=sys.stderr, flush=True)
-    if not out:
-        print("story_state batch model failed:", repr(last_error), file=sys.stderr, flush=True)
+            ], 0.1, mem_model, 6000, validate_story_state, language, "story_state")
+        if status == "ok":
+            return state
+        last_error = error
+        if status == "upstream_error":
+            print("story_state upstream failed with %s:" % mem_model.get("model"),
+                  repr(error), file=sys.stderr, flush=True)
+            continue
+        print("story_state output rejected from %s after same-model retry:" %
+              mem_model.get("model"), repr(error), file=sys.stderr, flush=True)
         return None
-
-    try:
-        raw = _json_from_model_text(out)
-    except Exception:
-        raw = None
-        last_error = None
-        for mem_model in _memory_models():
-            try:
-                repair_prompt = ((
-                    "Repair the user's content into strict JSON and write all textual values in English. Output only a JSON object using timeline, facts, open_threads, objects, secrets, scene, and style_notes."
-                ) if language == "en" else (
-                    "把用户给出的内容修复为严格 JSON，所有文本值使用简体中文。只输出 JSON 对象。"
-                    "字段只能是 timeline、facts、open_threads、objects、secrets、scene、style_notes。"
-                ))
-                repair = actor.chat([
-                    {"role": "system", "content": repair_prompt},
-                    {"role": "user", "content": out[:9000]},
-                ], temperature=0.0, model=mem_model, max_tokens=2500).strip()
-                raw = _json_from_model_text(repair)
-                break
-            except Exception as e:
-                last_error = e
-                print("story_state batch parse repair failed with %s:" % mem_model.get("model"), repr(e), file=sys.stderr, flush=True)
-        if raw is None:
-            print("story_state batch parse failed:", repr(last_error), file=sys.stderr, flush=True)
-            return None
-    state = _normalize_story_state(raw, end_turn, source_tokens)
-    state["response_language"] = language
-    if not _story_state_has_memory(state):
-        print("story_state batch empty; keeping previous memory", file=sys.stderr, flush=True)
-        return None
-    if not _story_state_quality_ok(prev or {}, state):
-        print("story_state batch lost protected memory; keeping previous memory", file=sys.stderr, flush=True)
-        return None
-    return state
+    print("story_state batch failed:", repr(last_error), file=sys.stderr, flush=True)
+    return None
 
 
 _PROFILE_CHANGE_FIELDS = {
@@ -3446,8 +3531,17 @@ def _validated_change_evidence(value, start_turn, end_turn):
             continue
         fact = _clip_memory_text(raw.get("fact"), 300)
         reason = _clip_memory_text(raw.get("reason"), 300)
-        if start_turn <= turn <= end_turn and fact and reason:
-            out.append({"turn": turn, "fact": fact, "reason": reason})
+        if start_turn <= turn <= end_turn and fact:
+            item = {"turn": turn, "fact": fact}
+            fields = raw.get("fields") or []
+            if isinstance(fields, str):
+                fields = [fields]
+            fields = [str(field).strip() for field in fields if str(field).strip()]
+            if fields:
+                item["fields"] = list(dict.fromkeys(fields))[:12]
+            if reason:
+                item["reason"] = reason
+            out.append(item)
     return out[:6]
 
 
@@ -3510,41 +3604,382 @@ def _merge_persistent_status_changes(current, changes):
     return result, result != before
 
 
-def _runtime_cast_missing_fields(raw):
-    """List fields named by evidence but omitted from the emitted change payload."""
+def _runtime_user_change(raw):
+    """Accept the canonical user change object and the common __user__ wrapper."""
     raw = raw if isinstance(raw, dict) else {}
-    candidates = []
-    character_changes = raw.get("character_changes")
-    if isinstance(character_changes, dict):
-        candidates.extend(value for value in character_changes.values() if isinstance(value, dict))
-    if isinstance(raw.get("user_changes"), dict):
-        candidates.append(raw["user_changes"])
-    field_names = set().union(*_PROFILE_CHANGE_FIELDS.values()) | {
-        "life_status", "physical_condition",
+    candidate = raw.get("user_changes")
+    if not isinstance(candidate, dict):
+        return {}
+    wrapped = candidate.get("__user__")
+    return wrapped if isinstance(wrapped, dict) else candidate
+
+
+def _model_evidence(value, start_turn, end_turn):
+    """Normalize compact model evidence strings into canonical turn evidence."""
+    if isinstance(value, list):
+        return value
+    text = _clip_memory_text(value, 500)
+    if not text:
+        return []
+    turns = []
+    for match in re.finditer(r"第\s*(\d+)(?:\s*[-—至]\s*(\d+))?\s*轮", text):
+        for raw_turn in (match.group(1), match.group(2)):
+            if raw_turn:
+                turn = int(raw_turn)
+                if start_turn <= turn <= end_turn and turn not in turns:
+                    turns.append(turn)
+    return [{"turn": turn, "fact": text} for turn in turns[:6]]
+
+
+def _canonicalize_runtime_cast_output(raw, start_turn, end_turn):
+    """Accept the prompt's compact field-diff form and convert it for storage."""
+    raw = dict(raw) if isinstance(raw, dict) else {}
+
+    def profile_path(field):
+        if "." in field:
+            return field.split(".", 1)
+        matches = [section for section, fields in _PROFILE_CHANGE_FIELDS.items()
+                   if field in fields]
+        return (matches[0], field) if len(matches) == 1 else ("identity", field)
+
+    def add_field(result, entity_id, field, value, evidence):
+        if not entity_id or not field:
+            return
+        section, name = profile_path(field)
+        candidate = result.setdefault(entity_id, {"profile": {}, "evidence": []})
+        if section == "persistent_status":
+            candidate.setdefault("persistent_status", {})[name] = value
+        elif section in _PROFILE_CHANGE_FIELDS and name in _PROFILE_CHANGE_FIELDS[section]:
+            candidate.setdefault("profile", {}).setdefault(section, {})[name] = value
+        candidate["evidence"].extend(_model_evidence(evidence, start_turn, end_turn))
+
+    def grouped(value, user=False):
+        result = {}
+        if isinstance(value, dict):
+            if user:
+                wrapped = value.get("__user__")
+                return {"__user__": wrapped} if isinstance(wrapped, dict) else {"__user__": value}
+            # The canonical contract uses character ids as object keys. Preserve it
+            # exactly; list handling below exists only for older model responses.
+            return value
+        for item in value if isinstance(value, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = "__user__" if user else str(
+                item.get("id") or item.get("character_id") or "").strip()
+            if not entity_id:
+                continue
+            nested = item.get("changes")
+            if isinstance(nested, dict):
+                if set(nested).issubset(set(_PROFILE_CHANGE_FIELDS) | {"persistent_status"}):
+                    candidate = result.setdefault(
+                        entity_id, {"profile": {}, "evidence": []})
+                    for section, fields in nested.items():
+                        if not isinstance(fields, dict):
+                            continue
+                        if section == "persistent_status":
+                            candidate.setdefault("persistent_status", {}).update(fields)
+                        elif section in _PROFILE_CHANGE_FIELDS:
+                            candidate.setdefault("profile", {}).setdefault(
+                                section, {}).update(fields)
+                    candidate["evidence"].extend(
+                        _model_evidence(item.get("evidence"), start_turn, end_turn))
+                    continue
+                for field, detail in nested.items():
+                    if isinstance(detail, dict):
+                        add_field(result, entity_id, field, detail.get("new_value"),
+                                  detail.get("evidence"))
+                continue
+            field = str(item.get("field") or "").strip()
+            add_field(result, entity_id, field, item.get("new_value"), item.get("evidence"))
+        for candidate in result.values():
+            evidence = []
+            for item in candidate.get("evidence") or []:
+                if item not in evidence:
+                    evidence.append(item)
+            candidate["evidence"] = evidence[:6]
+        return result
+
+    characters = grouped(raw.get("character_changes"))
+    users = grouped(raw.get("user_changes"), user=True)
+    embedded_user = characters.pop("__user__", None)
+    if embedded_user:
+        target = users.setdefault("__user__", {"profile": {}, "evidence": []})
+        for section, fields in (embedded_user.get("profile") or {}).items():
+            target.setdefault("profile", {}).setdefault(section, {}).update(fields)
+        target["evidence"] = (target.get("evidence") or []) + (
+            embedded_user.get("evidence") or [])
+    raw["character_changes"] = characters
+    raw["user_changes"] = users.get("__user__", {})
+
+    relationships = []
+    for item in raw.get("relationship_changes") or []:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        normalized["action"] = str(item.get("action") or "upsert")
+        normalized["evidence"] = _model_evidence(
+            item.get("evidence"), start_turn, end_turn)
+        relationships.append(normalized)
+    raw["relationship_changes"] = relationships
+    return raw
+
+
+def _runtime_cast_evidence_shape_error(value, expected_fields=None):
+    if not isinstance(value, list) or not value:
+        return "evidence must be a non-empty array"
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"turn", "fact", "fields"}:
+            return "evidence items must contain exactly turn, fact, and fields"
+        if not isinstance(item.get("turn"), int):
+            return "evidence.turn must be an integer"
+        if not isinstance(item.get("fact"), str) or not item.get("fact").strip():
+            return "evidence.fact must be a non-empty string"
+        fields = item.get("fields")
+        if (not isinstance(fields, list) or not fields
+                or any(not isinstance(field, str) or not field.strip() for field in fields)):
+            return "evidence.fields must be a non-empty string array"
+        if expected_fields is not None and set(fields) != set(expected_fields):
+            return "evidence.fields does not match the required field set"
+    return ""
+
+
+_RUNTIME_CAST_AUDIT_FIELDS = {
+    "name": "profile.identity.name",
+    "description": "profile.identity.description",
+    "age": "profile.identity.age",
+    "occupation": "profile.identity.occupation",
+    "affiliations": "profile.identity.affiliations",
+    "story_role": "profile.identity.story_role",
+    "life_status": "persistent_status.life_status",
+    "physical_condition": "persistent_status.physical_condition",
+}
+_RUNTIME_CAST_AUDIT_DECISIONS = {"update", "keep", "unknown"}
+
+
+def _runtime_cast_review_error(raw, roster, start_turn, end_turn):
+    """Require one complete, conflict-free audit before accepting a cast change set."""
+    raw = raw if isinstance(raw, dict) else {}
+    expected = {str(item.get("id")) for item in roster if item.get("id")}
+    reviewed_raw = raw.get("reviewed_character_ids")
+    reviewed = ({str(value) for value in reviewed_raw}
+                if isinstance(reviewed_raw, list) else set())
+    if reviewed != expected or len(reviewed_raw or []) != len(expected):
+        missing = sorted(expected - reviewed)
+        extra = sorted(reviewed - expected)
+        return "incomplete cast review; missing=%s extra=%s" % (missing, extra)
+    if raw.get("user_reviewed") is not True:
+        return "user profile was not reviewed"
+    audit = raw.get("field_audit")
+    expected_audit_ids = expected | {"__user__"}
+    if not isinstance(audit, dict) or set(audit) != expected_audit_ids:
+        return "field_audit must contain every roster id and __user__ exactly once"
+    changes = raw.get("character_changes") if isinstance(
+        raw.get("character_changes"), dict) else {}
+    audited_paths = set(_RUNTIME_CAST_AUDIT_FIELDS.values())
+    for entity_id in sorted(expected_audit_ids):
+        decisions = audit.get(entity_id)
+        if not isinstance(decisions, dict) or set(decisions) != set(
+                _RUNTIME_CAST_AUDIT_FIELDS):
+            return "field_audit has an invalid field set for %s" % entity_id
+        if any(value not in _RUNTIME_CAST_AUDIT_DECISIONS
+               for value in decisions.values()):
+            return "field_audit has an invalid decision for %s" % entity_id
+        candidate = (_runtime_user_change(raw) if entity_id == "__user__"
+                     else changes.get(entity_id) or {})
+        emitted = _runtime_cast_changed_field_paths(candidate) & audited_paths
+        declared = {
+            path for field, path in _RUNTIME_CAST_AUDIT_FIELDS.items()
+            if decisions.get(field) == "update"
+        }
+        if emitted != declared:
+            return "field_audit updates do not match emitted changes for %s" % entity_id
+        identity_updates = {
+            decisions.get(field) for field in (
+                "name", "age", "occupation", "affiliations")
+        }
+        if "update" in identity_updates and decisions.get("description") != "update":
+            return "identity changes require an updated description for %s" % entity_id
+    conflicts = raw.get("unresolved_conflicts")
+    if not isinstance(conflicts, list):
+        return "unresolved_conflicts must be an array"
+    valid_ids = expected | {"__user__"}
+    for conflict in conflicts:
+        if not isinstance(conflict, dict):
+            return "every unresolved conflict must be an object"
+        if set(conflict) != {"entity_id", "field", "description", "evidence"}:
+            return "unresolved conflict has an invalid field set"
+        if str(conflict.get("entity_id") or "") not in valid_ids:
+            return "unresolved conflict has an unknown entity_id"
+        if not str(conflict.get("field") or "").strip():
+            return "unresolved conflict must name one field"
+        if not str(conflict.get("description") or "").strip():
+            return "unresolved conflict requires a description"
+        evidence_shape_error = _runtime_cast_evidence_shape_error(
+            conflict.get("evidence"), {str(conflict.get("field"))})
+        if evidence_shape_error:
+            return evidence_shape_error
+        if not _validated_change_evidence(
+                conflict.get("evidence"), start_turn, end_turn):
+            return "unresolved conflict requires valid evidence"
+    return ""
+
+
+def _runtime_cast_changed_field_paths(candidate):
+    """Return the canonical field paths emitted by one profile change object."""
+    candidate = candidate if isinstance(candidate, dict) else {}
+    paths = set()
+    profile = candidate.get("profile") if isinstance(candidate.get("profile"), dict) else {}
+    for section, values in profile.items():
+        if isinstance(values, dict):
+            paths.update("profile.%s.%s" % (section, field) for field in values)
+    status = candidate.get("persistent_status")
+    if isinstance(status, dict):
+        paths.update("persistent_status.%s" % field for field in status)
+    return paths
+
+
+def _runtime_cast_shape_error(raw, roster, start_turn, end_turn):
+    raw = raw if isinstance(raw, dict) else {}
+    required_top_level = {
+        "reviewed_character_ids", "user_reviewed", "field_audit",
+        "unresolved_conflicts",
+        "character_changes", "user_changes", "relationship_changes",
     }
-    missing = []
+    if set(raw) != required_top_level:
+        return "runtime cast output has an invalid top-level field set"
+    valid_ids = {str(item.get("id")) for item in roster if item.get("id")}
+    changes = raw.get("character_changes")
+    if not isinstance(changes, dict):
+        return "character_changes must be an object"
+    unknown_ids = sorted(set(changes) - valid_ids)
+    if unknown_ids:
+        return "unknown character ids: %s" % unknown_ids
+    candidates = list(changes.values())
+    raw_user_change = raw.get("user_changes")
+    if not isinstance(raw_user_change, dict):
+        return "user_changes must be an object"
+    user_change = _runtime_user_change(raw)
+    if user_change:
+        candidates.append(user_change)
     for candidate in candidates:
-        emitted = set()
-        profile = candidate.get("profile") if isinstance(candidate.get("profile"), dict) else {}
-        for values in profile.values():
-            if isinstance(values, dict):
-                emitted.update(str(key) for key in values)
+        if not isinstance(candidate, dict):
+            return "every change must be an object"
+        if not candidate:
+            continue
+        if set(candidate) - {"profile", "persistent_status", "evidence"}:
+            return "change object has unknown fields"
+        profile = candidate.get("profile")
+        if profile is not None:
+            if not isinstance(profile, dict):
+                return "profile must be an object"
+            if set(profile) - set(_PROFILE_CHANGE_FIELDS):
+                return "unknown profile section"
+            for section, fields in profile.items():
+                if not isinstance(fields, dict) or set(fields) - _PROFILE_CHANGE_FIELDS[section]:
+                    return "invalid fields in profile.%s" % section
+                for field, value in fields.items():
+                    if field in _PROFILE_LIST_FIELDS:
+                        if (not isinstance(value, list)
+                                or any(not isinstance(item, str) or not item.strip()
+                                       for item in value)):
+                            return "profile.%s.%s must be a non-empty string array" % (
+                                section, field)
+                    elif not isinstance(value, str) or not value.strip():
+                        return "profile.%s.%s must be a non-empty string" % (section, field)
         status = candidate.get("persistent_status")
-        if isinstance(status, dict):
-            emitted.update(str(key) for key in status)
-        evidence_values = candidate.get("evidence")
-        evidence_values = evidence_values if isinstance(evidence_values, list) else [evidence_values]
-        evidence_text = " ".join(
-            str(item.get("reason") or "") for item in evidence_values if isinstance(item, dict))
-        for field in field_names:
-            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(field) + r"(?![A-Za-z0-9_])",
-                         evidence_text) and field not in emitted:
-                missing.append(field)
-    return sorted(set(missing))
+        if status is not None and (
+                not isinstance(status, dict)
+                or set(status) - {"life_status", "physical_condition"}):
+            return "invalid persistent_status"
+        if isinstance(status, dict) and any(
+                not isinstance(value, str) or not value.strip() for value in status.values()):
+            return "persistent_status values must be non-empty strings"
+        if not _validated_change_evidence(candidate.get("evidence"), start_turn, end_turn):
+            return "every non-empty change needs valid evidence"
+        emitted_fields = _runtime_cast_changed_field_paths(candidate)
+        evidence_shape_error = _runtime_cast_evidence_shape_error(
+            candidate.get("evidence"))
+        if evidence_shape_error:
+            return evidence_shape_error
+        evidence_fields = {
+            field
+            for evidence in _validated_change_evidence(
+                candidate.get("evidence"), start_turn, end_turn)
+            for field in evidence.get("fields") or []
+        }
+        if emitted_fields != evidence_fields:
+            return "change evidence fields must exactly match emitted fields"
+    if not isinstance(raw.get("relationship_changes"), list):
+        return "relationship_changes must be an array"
+    for change in raw.get("relationship_changes") or []:
+        if not isinstance(change, dict):
+            return "every relationship change must be an object"
+        if set(change) != {"participants", "action", "description", "evidence"}:
+            return "relationship change has an invalid field set"
+        participants = change.get("participants")
+        normalized_participants = ([str(value) for value in participants]
+                                   if isinstance(participants, list) else [])
+        if (len(normalized_participants) != 2 or len(set(normalized_participants)) != 2
+                or any(str(value) not in valid_ids | {"__user__"} for value in participants)):
+            return "relationship changes require two valid participant ids"
+        action = str(change.get("action") or "").strip().lower()
+        if action not in {"upsert", "remove"}:
+            return "relationship action must be upsert or remove"
+        if action == "upsert" and not str(change.get("description") or "").strip():
+            return "upsert relationship changes require description"
+        evidence_shape_error = _runtime_cast_evidence_shape_error(
+            change.get("evidence"), {"relationship"})
+        if evidence_shape_error:
+            return evidence_shape_error
+        if not _validated_change_evidence(change.get("evidence"), start_turn, end_turn):
+            return "relationship changes require valid evidence"
+    return ""
 
 
-def _runtime_cast_change_set_consistent(raw):
-    return not _runtime_cast_missing_fields(raw)
+def _runtime_cast_noop_error(raw, previous, persona=None):
+    """Reject claimed updates that do not change the current authoritative cast."""
+    raw = raw if isinstance(raw, dict) else {}
+    previous = previous if isinstance(previous, dict) else {}
+    persona = persona if isinstance(persona, dict) else {}
+    changes = raw.get("character_changes") or {}
+    current_by_id = {
+        str(item.get("id")): item
+        for item in previous.get("characters") or [] if isinstance(item, dict)
+    }
+    for entity_id, candidate in changes.items():
+        current = current_by_id.get(str(entity_id)) or {}
+        _, profile_changed = _merge_profile_changes(
+            current.get("profile") or {}, candidate.get("profile") or {})
+        _, status_changed = _merge_persistent_status_changes(
+            current.get("persistent_status") or {}, candidate.get("persistent_status") or {})
+        if not profile_changed and not status_changed:
+            return "character change does not alter current_cast: %s" % entity_id
+
+    user_change = _runtime_user_change(raw)
+    if user_change:
+        current_user_profile = previous.get("user_profile") or persona.get("profile") or {}
+        _, profile_changed = _merge_profile_changes(
+            current_user_profile, user_change.get("profile") or {})
+        _, status_changed = _merge_persistent_status_changes(
+            previous.get("user_status") or {}, user_change.get("persistent_status") or {})
+        if not profile_changed and not status_changed:
+            return "user change does not alter current_cast"
+
+    relationships = {
+        "|".join(sorted(str(value) for value in item.get("participants") or [])):
+            str(item.get("description") or "").strip()
+        for item in previous.get("relationships") or [] if isinstance(item, dict)
+    }
+    for change in raw.get("relationship_changes") or []:
+        key = "|".join(sorted(str(value) for value in change.get("participants") or []))
+        action = str(change.get("action") or "").strip().lower()
+        if action == "remove" and key not in relationships:
+            return "relationship removal does not alter current_cast: %s" % key
+        if action == "upsert" and relationships.get(key) == str(
+                change.get("description") or "").strip():
+            return "relationship update does not alter current_cast: %s" % key
+    return ""
 
 
 def _normalize_runtime_cast_result(raw, previous, start_turn, end_turn, persona=None):
@@ -3585,7 +4020,7 @@ def _normalize_runtime_cast_result(raw, previous, start_turn, end_turn, persona=
     user_profile = previous_user_profile
     user_status = previous_user_status
     user_profile_changed = user_status_changed = False
-    user_candidate = raw.get("user_changes") if isinstance(raw.get("user_changes"), dict) else {}
+    user_candidate = _runtime_user_change(raw)
     user_evidence = _validated_change_evidence(user_candidate.get("evidence"), start_turn, end_turn)
     if user_evidence:
         user_profile, user_profile_changed = _merge_profile_changes(
@@ -3651,8 +4086,172 @@ def _normalize_runtime_cast_result(raw, previous, start_turn, end_turn, persona=
     return result
 
 
+def _runtime_cast_system_prompt(language):
+    """Return the single semantic and serialization contract for cast updates."""
+    schema = r'''{
+  "reviewed_character_ids": ["<character_id>"],
+  "user_reviewed": true,
+  "field_audit": {
+    "<character_id>": {
+      "name": "update|keep|unknown",
+      "description": "update|keep|unknown",
+      "age": "update|keep|unknown",
+      "occupation": "update|keep|unknown",
+      "affiliations": "update|keep|unknown",
+      "story_role": "update|keep|unknown",
+      "life_status": "update|keep|unknown",
+      "physical_condition": "update|keep|unknown"
+    },
+    "__user__": {
+      "name": "update|keep|unknown",
+      "description": "update|keep|unknown",
+      "age": "update|keep|unknown",
+      "occupation": "update|keep|unknown",
+      "affiliations": "update|keep|unknown",
+      "story_role": "update|keep|unknown",
+      "life_status": "update|keep|unknown",
+      "physical_condition": "update|keep|unknown"
+    }
+  },
+  "unresolved_conflicts": [
+    {
+      "entity_id": "<character_id>|__user__",
+      "field": "<canonical_field_path>",
+      "description": "<conflicting facts>",
+      "evidence": [
+        {"turn": 1, "fact": "<fact from this batch>", "fields": ["<canonical_field_path>"]}
+      ]
+    }
+  ],
+  "character_changes": {
+    "<character_id>": {
+      "profile": {
+        "identity": {"occupation": "<new confirmed value>"}
+      },
+      "evidence": [
+        {
+          "turn": 1,
+          "fact": "<fact from this batch>",
+          "fields": ["profile.identity.occupation"]
+        }
+      ]
+    }
+  },
+  "user_changes": {
+    "profile": {
+      "identity": {"affiliations": ["<new confirmed value>"]}
+    },
+    "evidence": [
+      {
+        "turn": 1,
+        "fact": "<fact from this batch>",
+        "fields": ["profile.identity.affiliations"]
+      }
+    ]
+  },
+  "relationship_changes": [
+    {
+      "participants": ["<character_id>|__user__", "<character_id>|__user__"],
+      "action": "upsert|remove",
+      "description": "<current durable relationship; required for upsert>",
+      "evidence": [
+        {"turn": 1, "fact": "<fact from this batch>", "fields": ["relationship"]}
+      ]
+    }
+  ]
+}'''
+    if language == "en":
+        return (
+            "# Task\n\n"
+            "Maintain the single effective long-term cast registry for an interactive story. "
+            "Compare current_cast with the complete new_story_batch and output only confirmed durable changes. "
+            "Never continue, summarize, explain, or judge the story.\n\n"
+            "# Sources and authority\n\n"
+            "current_cast is the sole current truth. origin_profile is read-only historical reference. "
+            "new_story_batch is the only source that may establish a new change. story_ledger may cross-check continuity but cannot independently prove a change. "
+            "Within the batch, a later explicit confirmation supersedes an earlier intermediate state. "
+            "Every field is optional and may remain empty. Never infer, fabricate, or fill a field merely to complete a profile.\n\n"
+            "# What belongs here\n\n"
+            "Store only facts expected to remain true beyond the current scene. Temporary emotion, action, location, clothing, short-term goal, knowledge, inventory, and scene activity belong to the story ledger. "
+            "A name, identity, affiliation, status, or ability may change only when the batch explicitly establishes the new durable fact. "
+            "A personality or expression field may change only after an explicit lasting transformation or consistent evidence across multiple independent turns. "
+            "For __user__, record only explicit user statements, choices, or objectively completed facts; never infer feelings, intent, personality, or decisions.\n\n"
+            "# Field catalog\n\n"
+            "profile.identity: name (current official name, string); aliases (confirmed durable alternate names, string[]); "
+            "description (optional display summary consistent with structured fields, string); gender (explicit durable gender identity, string); "
+            "age (confirmed age, string); species (confirmed species, string); occupation (confirmed profession or student stage, string); "
+            "affiliations (school, class, employer, faction, or organization, string[]); story_role (narrative function such as protagonist or mentor, string).\n"
+            "profile.appearance: summary (durable overall appearance, string); features (durable distinctive features, string[]).\n"
+            "profile.personality: summary (durable personality summary, string); traits, values, fears, boundaries (durable string[]); motivation (durable long-term motivation, string).\n"
+            "profile.expression: speech_style (stable speaking style, string); habits and mannerisms (stable string[]).\n"
+            "profile.capabilities: skills, powers, limitations (durable string[]).\n"
+            "persistent_status: life_status (durable living/dead/missing state, string); physical_condition (long-term or irreversible physical condition, string).\n\n"
+            "# Review and change rules\n\n"
+            "Review every roster id and __user__. reviewed_character_ids contains every roster id exactly once and never __user__; user_reviewed is true. "
+            "field_audit contains every roster id and __user__ exactly once. For each audited field use update only when this batch proves a new durable value, keep when current_cast remains accurate, and unknown when evidence is insufficient. "
+            "An update decision must emit that exact canonical field with evidence; keep and unknown must not emit it. Whenever name, age, occupation, or affiliations is updated, description must also be updated to a compact display summary consistent with all resulting structured identity fields. "
+            "Output only values that differ from current_cast. Empty current fields are valid and do not require completion. "
+            "identity.description is display text, not an authoritative substitute for structured fields. "
+            "Put a genuine unresolved contradiction in unresolved_conflicts and omit only the disputed field. "
+            "Update a relationship only when the batch explicitly establishes or ends a durable bond, commitment, alliance, kinship, social role, or power relationship. "
+            "A single affectionate moment, argument, conversation, cooperation, suspicion, or temporary emotion is not a durable relationship change.\n\n"
+            "# Serialization contract\n\n"
+            "Return one JSON object matching the exact schema below. Do not rename keys, use arrays in place of objects, add wrapper objects, or add keys not shown. "
+            "field_audit must use exactly the eight shown keys for every entity, with only update, keep, or unknown as values. "
+            "character_changes is an object keyed by roster character id; do not place id or character_id inside an item. user_changes is one object, never an array. "
+            "Omit unchanged profile sections and fields. Use {} and [] when there are no changes. Every non-empty entity change has evidence. "
+            "Each evidence item uses a turn inside range, a verbatim factual paraphrase, and fields containing canonical paths for exactly the fields supported by that evidence. "
+            "Across an entity, evidence.fields must cover every emitted changed field exactly; examples are profile.identity.age and persistent_status.life_status. "
+            "A durable fact written in identity.description must also be present in its canonical structured field; description is never a substitute for name, aliases, age, occupation, or affiliations. "
+            "All evidence objects use exactly turn, fact, and fields. Conflict evidence names the disputed field; relationship evidence uses fields=[\"relationship\"]. Relationships use exactly two valid ids and action upsert or remove. Output JSON only.\n\n"
+            "# Exact JSON schema template\n\n" + schema
+        )
+    return (
+        "# 任务\n\n"
+        "你负责维护互动故事中唯一生效的长期角色档案。对照 current_cast 审查完整的 new_story_batch，只输出已经确认的长期变化。"
+        "不得续写、总结、解释或评价剧情。\n\n"
+        "# 数据来源与权威\n\n"
+        "current_cast 是当前唯一事实，origin_profile 只是只读的初始参考。只有 new_story_batch 能建立新的变化；story_ledger 只能交叉核对连续性，不能单独证明角色变化。"
+        "同一批内较晚明确确认的事实覆盖较早的中间状态。所有字段均为可选并允许为空，不得为了补全档案而推断、编造或填写。\n\n"
+        "# 收录边界\n\n"
+        "只保存预计在当前场景结束后仍然成立的事实。临时情绪、动作、地点、着装、短期目标、认知、持有物和场景活动归剧情账本。"
+        "姓名、身份、所属、状态或能力只有在本批明确建立新的长期事实时才能改变。性格与表达方式只有在原文明示长期转变，或多个独立回合持续证明时才能改变。"
+        "用户角色只记录用户明确陈述、明确选择或剧情中客观完成的事实；不得推断用户的感受、意图、性格或决定。\n\n"
+        "# 字段目录\n\n"
+        "profile.identity：name=当前正式姓名，字符串；aliases=已经确认且会持续使用的别名或代号，字符串数组；"
+        "description=与结构字段一致的可选展示摘要，字符串；gender=原文明示的长期性别身份，字符串；"
+        "age=已经确认的具体年龄，字符串；species=已经确认的种族，字符串；occupation=已经确认的职业或学业阶段，字符串；"
+        "affiliations=学校、班级、单位、阵营或组织，字符串数组；story_role=主角、对手、导师等剧情职能，字符串。\n"
+        "profile.appearance：summary=长期整体外貌，字符串；features=稳定且有辨识度的外貌特征，字符串数组。\n"
+        "profile.personality：summary=长期性格概述，字符串；traits=性格特质，values=价值观，fears=长期恐惧，boundaries=稳定边界，均为字符串数组；motivation=长期动机，字符串。\n"
+        "profile.expression：speech_style=稳定说话方式，字符串；habits=稳定习惯，mannerisms=稳定行为特征，均为字符串数组。\n"
+        "profile.capabilities：skills=技能，powers=特殊能力，limitations=长期限制，均为字符串数组。\n"
+        "persistent_status：life_status=存活、死亡、失踪等长期生命状态，字符串；physical_condition=长期或不可逆身体情况，字符串。\n\n"
+        "# 审查与变化规则\n\n"
+        "逐一审查 roster 中每个角色和 __user__。reviewed_character_ids 必须且只能包含全部 roster 角色 id，每个一次，不包含 __user__；user_reviewed 固定为 true。"
+        "field_audit 必须且只能包含全部 roster 角色 id 和 __user__，每个一次。每个审查字段只能填写 update、keep 或 unknown：本批明确证明新的长期值时填 update；current_cast 仍准确时填 keep；证据不足时填 unknown。"
+        "填 update 的字段必须在变更对象中输出对应规范字段并附证据；填 keep 或 unknown 的字段不得输出。name、age、occupation 或 affiliations 任一更新时，description 也必须更新为与最终结构身份一致的简洁展示摘要。"
+        "character_changes 与 user_changes 只能输出相对 current_cast 已经确认的差异。当前字段为空也是合法状态，不要求补全。"
+        "identity.description 只是展示文本，不是结构事实的替代品。"
+        "真实且尚未解决的冲突写入 unresolved_conflicts，只停止更新有争议的字段。"
+        "只有本批明确建立或结束长期亲属、承诺、结盟、社会身份、权力关系或其他持续关系时，才能更新 relationship_changes。"
+        "单次亲密、争吵、对话、合作、怀疑或临时情绪都不构成长期关系变化。\n\n"
+        "# 序列化契约\n\n"
+        "只返回一个严格符合下方模板的 JSON 对象。不得改名字段，不得用数组代替对象，不得增加包装层，不得增加模板外字段。"
+        "field_audit 必须为每个实体完整输出模板中的八个字段，值只能是 update、keep 或 unknown。"
+        "character_changes 必须是以角色 id 为键的对象，条目内部不得再写 id 或 character_id；user_changes 必须是单个对象，不能是数组。"
+        "未变化的档案分区和字段不要输出；没有内容时使用 {} 或 []。每个非空角色变更都必须包含 evidence。"
+        "每条 evidence 必须包含 range 内的 turn、对该回合事实的准确转述 fact，以及该证据直接支持的规范字段路径 fields。"
+        "同一角色全部 evidence.fields 必须恰好覆盖其输出的每个变更字段；字段路径示例：profile.identity.age、persistent_status.life_status。"
+        "写入 identity.description 的长期身份事实必须同时写入对应结构字段；description 不能代替 name、aliases、age、occupation 或 affiliations。"
+        "所有 evidence 对象必须且只能包含 turn、fact、fields。冲突证据的 fields 填被争议字段；关系证据固定填写 fields=[\"relationship\"]。关系变更必须填写两个有效 id，以及 upsert 或 remove。除 JSON 外不要输出任何内容。\n\n"
+        "# 唯一 JSON 结构模板\n\n" + schema
+    )
+
+
 def _merge_runtime_cast_batch(previous, batch, start_turn, end_turn,
-                              response_language="zh", persona=None):
+                              response_language="zh", persona=None,
+                              story_ledger=None):
     """Build the next cast snapshot from evidence-backed durable changes."""
     previous = previous if isinstance(previous, dict) else {}
     language = _locale_code(response_language)
@@ -3664,40 +4263,11 @@ def _merge_runtime_cast_batch(previous, batch, start_turn, end_turn,
         result["revision"] = int(previous.get("revision") or 0) + 1
         result["updated_at"] = int(time.time())
         return result
-    if language == "en":
-        system_prompt = (
-            "# Responsibility\n"
-            "You maintain the long-lived character profiles for an interactive story. Compare each immutable origin_profile, the previous effective profile and status, and the complete numbered new_story_batch. Submit only durable changes explicitly established in this batch. Do not continue or summarize the story.\n"
-            "# Boundaries\n"
-            "origin_profile is read-only. current_profile is the only effective profile. Never add, remove, merge, or rename character ids. Temporary emotion, action, location, short-term goal, clothing, knowledge, and held objects belong to the story ledger.\n"
-            "Names, aliases, identity, durable appearance, personality, expression, abilities, physical condition, and relationships may change only when the batch clearly establishes a lasting change. A passing mood, disguise, joke, claim, conversation, or co-presence is not enough. Use aliases for temporary codenames; change name only for a formal rename, identity reveal, or lasting adoption. Personality changes require repeated behavior, explicit self-transformation, or a consequential event.\n"
-            "For the user character, record only facts explicitly chosen by the user or objectively completed in the story. Never infer the user's personality, feelings, intent, speech, action, or decision.\n"
-            "# Allowed fields\n"
-            "profile.identity: name, aliases, description, gender, age, species, occupation, affiliations, story_role. profile.appearance: summary, features. profile.personality: summary, traits, values, motivation, fears, boundaries. profile.expression: speech_style, habits, mannerisms. profile.capabilities: skills, powers, limitations. persistent_status: life_status, physical_condition.\n"
-            "# Evidence\n"
-            "Every submitted entity change needs evidence entries with turn, fact, and reason. turn must be within the supplied range and refer to a numbered turn in new_story_batch. If a reason names a field such as occupation, that exact field and its new value must also be present under profile or persistent_status. Never describe a change only in evidence. Without sufficient evidence, omit the change. Never use empty strings or empty arrays to erase existing data.\n"
-            "# Output\n"
-            "Output strict JSON only, with character_changes, user_changes, and relationship_changes. character_changes is keyed only by supplied character id. Each value may contain profile, persistent_status, and evidence. profile must preserve the exact section hierarchy listed above; for example occupation must be under profile.identity, never profile.capabilities. user_changes uses the same shape. Each relationship change contains participants, action (upsert or remove), description, and evidence. Output empty objects or arrays when nothing changed."
-        )
-    else:
-        system_prompt = (
-            "# 职责\n"
-            "你维护互动故事的长期角色档案。对照每名角色不可修改的 origin_profile、上一版唯一生效档案与持续状态，以及带回合编号的完整 new_story_batch，只提交本批剧情已经明确成立的长期变化。不要续写或总结剧情。\n"
-            "# 数据边界\n"
-            "origin_profile 只用于理解和核对，绝不修改；current_profile 是当前唯一生效档案。不得增加、删除、合并角色或修改角色 id。临时情绪、当前动作、所在地点、短期目标、临时着装、认知和持有物属于剧情账本，不写入角色档案。\n"
-            "姓名、别名、身份、长期外貌、性格、表达方式、能力、身体情况和关系可以变化，但必须是本批剧情明确建立且会影响后续演绎的持续变化。单次情绪、伪装、玩笑、单方面声称、交谈或同场均不足以构成长期变化。临时代号写入 aliases；只有正式改名、身份揭露或长期采用新名字时才修改 name。性格变化必须有反复表现、明确自我转变或重大事件作为依据。\n"
-            "用户角色只记录用户明确选择或剧情已经客观完成的变化；不得推断用户的性格、感受、意图、对白、行动或决定。\n"
-            "# 允许更新的字段\n"
-            "profile.identity：name、aliases、description、gender、age、species、occupation、affiliations、story_role。profile.appearance：summary、features。profile.personality：summary、traits、values、motivation、fears、boundaries。profile.expression：speech_style、habits、mannerisms。profile.capabilities：skills、powers、limitations。persistent_status：life_status、physical_condition。\n"
-            "# 证据要求\n"
-            "每个提交的实体变化都必须提供 evidence，其中每项包含 turn、fact、reason。turn 必须位于给定 range 内，并对应 new_story_batch 中标注的回合。reason 如果点名 occupation 等字段，profile 或 persistent_status 中必须同时携带该字段及其新值，禁止只在证据里描述变化。证据不足就省略该变化。不得用空字符串或空数组覆盖已有内容。\n"
-            "# 输出格式\n"
-            "只输出严格 JSON，顶层字段只能是 character_changes、user_changes、relationship_changes。character_changes 只能以给定角色 id 为键，每项可包含 profile、persistent_status、evidence。profile 必须严格保持上文列出的分区层级，例如 occupation 必须位于 profile.identity，绝不能放入 profile.capabilities。user_changes 结构相同。relationship_changes 每项包含 participants、action（upsert 或 remove）、description、evidence。没有变化时输出空对象或空数组。"
-        )
+    system_prompt = _runtime_cast_system_prompt(language)
     payload = json.dumps({
         "roster": roster,
         "user_persona": persona or {},
-        "previous_cast": {
+        "current_cast": {
             "characters": {str(c.get("id")): {
                                "origin_profile": c.get("origin_profile") or c.get("profile") or {},
                                "current_profile": c.get("profile") or {},
@@ -3710,45 +4280,45 @@ def _merge_runtime_cast_batch(previous, batch, start_turn, end_turn,
             "relationships": previous.get("relationships") or [],
         },
         "new_story_batch": batch,
+        "story_ledger": story_ledger or {},
         "range": {"start_turn": start_turn, "end_turn": end_turn},
     }, ensure_ascii=False)
     last_error = None
     for mem_model in _memory_models():
-        try:
-            out = actor.chat([
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": payload},
-            ], temperature=0.1, model=mem_model, max_tokens=4500).strip()
-            raw = _json_from_model_text(out)
-            missing_fields = _runtime_cast_missing_fields(raw)
-            if missing_fields:
-                repair_prompt = ((
-                    "Repair one character change-set JSON without re-analyzing or continuing the story. "
-                    "Some evidence reasons name fields that are missing from the change payload. Put each explicitly established new value under the exact allowed profile hierarchy (for example profile.identity.occupation), or remove only the unsupported evidence. Never invent a value. Preserve valid changes and evidence. Output strict JSON only."
-                ) if language == "en" else (
-                    "修复一份角色变化集 JSON，不要重新分析或续写剧情。部分 evidence.reason 点名了字段，但变化对象漏掉了对应字段。"
-                    "把证据中已经明确成立的新值放回正确的允许层级（例如 profile.identity.occupation）；如果证据无法确定新值，只删除那条无效证据。"
-                    "不得猜测，不得删除其他有效变化。只输出严格 JSON。"
-                ))
-                repair_payload = json.dumps({
-                    "missing_fields": missing_fields,
-                    "change_set": raw,
-                }, ensure_ascii=False)
-                repaired = actor.chat([
-                    {"role": "system", "content": repair_prompt},
-                    {"role": "user", "content": repair_payload},
-                ], temperature=0.0, model=mem_model, max_tokens=4500).strip()
-                raw = _json_from_model_text(repaired)
-            if not _runtime_cast_change_set_consistent(raw):
-                raise ValueError("cast change evidence and emitted fields disagree after repair")
+        def validate_runtime_cast(out):
+            raw = _canonicalize_runtime_cast_output(
+                _json_from_model_text(out), start_turn, end_turn)
+            review_error = _runtime_cast_review_error(
+                raw, roster, start_turn, end_turn)
+            if review_error:
+                raise ValueError(review_error)
+            shape_error = _runtime_cast_shape_error(
+                raw, roster, start_turn, end_turn)
+            if shape_error:
+                raise ValueError(shape_error)
+            noop_error = _runtime_cast_noop_error(raw, previous, persona)
+            if noop_error:
+                raise ValueError(noop_error)
             result = _normalize_runtime_cast_result(
                 raw, previous, start_turn, end_turn, persona)
-            if len(result.get("characters") or []) == len(previous.get("characters") or []):
-                return result
-        except Exception as error:
-            last_error = error
-            print("runtime_cast batch failed with %s:" % mem_model.get("model"), repr(error),
-                  file=sys.stderr, flush=True)
+            if len(result.get("characters") or []) != len(previous.get("characters") or []):
+                raise ValueError("normalized cast changed roster size")
+            return result
+
+        status, result, error = _validated_model_call([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": payload},
+        ], 0.0, mem_model, 4500, validate_runtime_cast, language, "runtime_cast")
+        if status == "ok":
+            return result
+        last_error = error
+        if status == "upstream_error":
+            print("runtime_cast upstream failed with %s:" % mem_model.get("model"),
+                  repr(error), file=sys.stderr, flush=True)
+            continue
+        print("runtime_cast output rejected from %s after same-model retry:" %
+              mem_model.get("model"), repr(error), file=sys.stderr, flush=True)
+        return None
     print("runtime_cast batch failed:", repr(last_error), file=sys.stderr, flush=True)
     return None
 
@@ -3776,8 +4346,10 @@ def _story_state_sync_trigger(pid):
     compressible_turns, covered_turns = _story_state_progress(p)
     runtime_cast = _ensure_runtime_cast(p)
     due = compressible_turns - covered_turns >= STORY_STATE_BATCH_TURNS
+    with _STORY_STATE_JOBS_LOCK:
+        pending = pid in _STORY_STATE_JOBS
     return {
-        "watch": due,
+        "watch": due or pending,
         "revision": int(runtime_cast.get("revision") or 0),
         "target_turn": covered_turns + STORY_STATE_BATCH_TURNS if due else covered_turns,
     }
@@ -3879,6 +4451,11 @@ def _summarize_story_state(p, force_full=False):
         state = {} if rebuild else dict(previous)
         covered_turns = 0 if rebuild else int(previous.get("turns") or 0)
         cast_state = _ensure_runtime_cast(snapshot)
+        ledger_roster = [
+            {"id": item.get("id"), "name": item.get("name")}
+            for item in (cast_state.get("characters") or [])
+            if isinstance(item, dict) and item.get("id")
+        ]
         if rebuild:
             # A plot-ledger rebuild must never replay or reset character evolution.
             # Rebuild the ledger in memory, then atomically move the preserved cast
@@ -3898,7 +4475,8 @@ def _summarize_story_state(p, force_full=False):
                     prefix = _story_messages_through_turn(story, segment_end)
                     source_tokens = _story_token_estimate(prefix)
                     merged = _merge_story_state_batch(
-                        merged, batch, segment_start, segment_end, source_tokens, language)
+                        merged, batch, segment_start, segment_end, source_tokens,
+                        language, ledger_roster)
                     if not merged:
                         break
                 if not merged:
@@ -3940,7 +4518,8 @@ def _summarize_story_state(p, force_full=False):
                 prefix = _story_messages_through_turn(story, segment_end)
                 source_tokens = _story_token_estimate(prefix)
                 merged = _merge_story_state_batch(
-                    merged, batch, segment_start, segment_end, source_tokens, language)
+                    merged, batch, segment_start, segment_end, source_tokens,
+                    language, ledger_roster)
                 if not merged:
                     break
             if not merged:
@@ -3950,7 +4529,7 @@ def _summarize_story_state(p, force_full=False):
             expected_cast_revision = int(cast_state.get("revision") or 0)
             merged_cast = _merge_runtime_cast_batch(
                 cast_state, complete_batch, start_turn, end_turn, language,
-                snapshot.get("persona") or {})
+                snapshot.get("persona") or {}, merged)
             if not merged_cast:
                 _record_story_state_error(pid, f"cast snapshot failed for turns {start_turn}-{end_turn}")
                 break
@@ -4014,6 +4593,12 @@ def _story_state_job(pid):
 
 
 def _schedule_story_state(pid):
+    p = load_production(pid)
+    if not p:
+        return False
+    compressible_turns, covered_turns = _story_state_progress(p)
+    if compressible_turns - covered_turns < STORY_STATE_BATCH_TURNS:
+        return False
     with _STORY_STATE_JOBS_LOCK:
         if pid in _STORY_STATE_JOBS:
             _STORY_STATE_PENDING.add(pid)
@@ -4681,6 +5266,13 @@ class H(BaseHTTPRequestHandler):
             return self._json(400, {"error": "unknown event type: %s" % ev.get("type")})
         try:
             return self._json(200, {"ok": True, **fn(ev)})
+        except ProductionRevisionConflict as e:
+            return self._json(409, {
+                "ok": False,
+                "code": "state_conflict",
+                "error": "character state changed",
+                "current_revision": e.current_revision,
+            })
         except Exception as e:
             return self._json(500, {"ok": False, "error": str(e)})
 

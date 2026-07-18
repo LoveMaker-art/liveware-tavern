@@ -66,7 +66,7 @@ class StoryCompressionTests(unittest.TestCase):
     def test_thirty_one_turns_commit_two_batches_and_keep_latest_raw(self):
         calls = []
 
-        def merge(previous, batch, start, end, source_tokens, language):
+        def merge(previous, batch, start, end, source_tokens, language, roster):
             calls.append((start, end, batch.count("Long semantic turn.") == 1000 if end == 15 else True))
             return {
                 "facts": [f"Covered through turn {end}."],
@@ -89,7 +89,7 @@ class StoryCompressionTests(unittest.TestCase):
         self.assertEqual(raw[-1]["id"], "a31")
 
     def test_failed_second_batch_keeps_first_ledger_and_remaining_raw_turns(self):
-        def merge(previous, _batch, start, end, source_tokens, language):
+        def merge(previous, _batch, start, end, source_tokens, language, roster):
             if start == 16:
                 return None
             return {
@@ -196,6 +196,8 @@ class StoryCompressionTests(unittest.TestCase):
 
         server._maybe_auto_story_state = fake_maybe
         try:
+            production = self.production("prod_pending", turns=16)
+            server.save_production(production)
             self.assertTrue(server._schedule_story_state("prod_pending"))
             self.assertTrue(started.wait(2))
             self.assertFalse(server._schedule_story_state("prod_pending"))
@@ -322,6 +324,78 @@ class StoryCompressionTests(unittest.TestCase):
         result = server._normalize_runtime_cast_result(raw, previous, 1, 15)
 
         self.assertEqual(result["characters"][0]["profile"]["identity"]["occupation"], "")
+
+    @staticmethod
+    def runtime_cast_audit(decision="unknown"):
+        return {
+            field: decision
+            for field in server._RUNTIME_CAST_AUDIT_FIELDS
+        }
+
+    def test_runtime_cast_review_allows_empty_fields_to_remain_unknown(self):
+        roster = [{"id": "card_a", "name": "A"}]
+        raw = {
+            "reviewed_character_ids": ["card_a"],
+            "user_reviewed": True,
+            "field_audit": {
+                "card_a": self.runtime_cast_audit(),
+                "__user__": self.runtime_cast_audit(),
+            },
+            "unresolved_conflicts": [],
+            "character_changes": {},
+            "user_changes": {},
+            "relationship_changes": [],
+        }
+
+        self.assertEqual(server._runtime_cast_review_error(raw, roster, 1, 15), "")
+
+    def test_runtime_cast_review_rejects_audit_update_without_change(self):
+        roster = [{"id": "card_a", "name": "A"}]
+        card_a_audit = self.runtime_cast_audit()
+        card_a_audit["occupation"] = "update"
+        raw = {
+            "reviewed_character_ids": ["card_a"],
+            "user_reviewed": True,
+            "field_audit": {
+                "card_a": card_a_audit,
+                "__user__": self.runtime_cast_audit(),
+            },
+            "unresolved_conflicts": [],
+            "character_changes": {},
+            "user_changes": {},
+            "relationship_changes": [],
+        }
+
+        self.assertIn(
+            "field_audit updates do not match emitted changes",
+            server._runtime_cast_review_error(raw, roster, 1, 15),
+        )
+
+    def test_runtime_cast_review_requires_description_with_identity_change(self):
+        roster = [{"id": "card_a", "name": "A"}]
+        card_a_audit = self.runtime_cast_audit()
+        card_a_audit["occupation"] = "update"
+        raw = {
+            "reviewed_character_ids": ["card_a"],
+            "user_reviewed": True,
+            "field_audit": {
+                "card_a": card_a_audit,
+                "__user__": self.runtime_cast_audit(),
+            },
+            "unresolved_conflicts": [],
+            "character_changes": {
+                "card_a": {
+                    "profile": {"identity": {"occupation": "Captain"}},
+                },
+            },
+            "user_changes": {},
+            "relationship_changes": [],
+        }
+
+        self.assertIn(
+            "identity changes require an updated description",
+            server._runtime_cast_review_error(raw, roster, 1, 15),
+        )
 
 
 if __name__ == "__main__":

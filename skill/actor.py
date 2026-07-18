@@ -145,7 +145,7 @@ def _entry_probability_allows(e: dict, seed_text: str) -> bool:
     return roll <= chance
 
 
-def _lore_extra_text(scene_state=None, story_state=None, turn_plan=None) -> str:
+def _lore_extra_text(story_state=None, turn_plan=None) -> str:
     parts = []
 
     def add_obj(obj):
@@ -160,7 +160,6 @@ def _lore_extra_text(scene_state=None, story_state=None, turn_plan=None) -> str:
             if x:
                 parts.append(x)
 
-    add_obj(scene_state)
     if isinstance(story_state, dict):
         add_obj({key: story_state.get(key) for key in
                  ("timeline", "facts", "open_threads", "objects", "secrets", "scene", "style_notes")})
@@ -626,34 +625,6 @@ def _story_state_block(story_state: dict, response_language: str = "zh") -> str:
     return ("## Story state" if en else "## 故事状态") + suffix + "\n" + "\n\n".join(parts)
 
 
-def _scene_state_block(scene_state: dict, response_language: str = "zh") -> str:
-    if not isinstance(scene_state, dict) or not scene_state:
-        return ""
-    en = _language_code(response_language) == "en"
-
-    def line(title, key):
-        val = scene_state.get(key)
-        if isinstance(val, list):
-            val = "、".join(str(x).strip() for x in val if str(x).strip())
-        else:
-            val = str(val or "").strip()
-        return f"- {title}：{val}" if val else ""
-
-    labels = (("Location", "location"), ("Time", "time"), ("Mood", "mood"), ("Current focus", "current_focus"), ("Open threads", "open_threads")) if en else (("地点", "location"), ("时间", "time"), ("氛围", "mood"), ("当前焦点", "current_focus"), ("未解决线索", "open_threads"))
-    rows = [line(title, key) for title, key in labels]
-    rows = [r for r in rows if r]
-    for participant in scene_state.get("participants") or []:
-        if not isinstance(participant, dict) or not participant.get("character_id"):
-            continue
-        details = [str(participant.get(key) or "").strip()
-                   for key in ("location", "activity", "condition")]
-        details = [value for value in details if value]
-        if details:
-            rows.append(("- Participant " if en else "- 场中角色 ") +
-                        str(participant["character_id"]) + "：" + "；".join(details))
-    return ("## Current scene\n" if en else "## 当前场景\n") + "\n".join(rows) if rows else ""
-
-
 def _turn_plan_block(turn_plan: dict, response_language: str = "zh") -> str:
     if not isinstance(turn_plan, dict) or not turn_plan:
         return ""
@@ -691,13 +662,13 @@ def _multi_character_rules_zh(names: str) -> str:
 
 
 def _system_prompt_en(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
-                      scene_state_txt: str, story_state_txt: str,
+                      story_state_txt: str,
                       turn_plan_txt: str, multi_rule: str) -> str:
     return f"""# Task
 Write the next response by the active character or characters to the user's latest action in this fictional story.
 
-Use the character profiles, world lore, current scene, story state, turn plan, and conversation history below. Continue the story directly.
-Character profiles own identity, personality, abilities, and current status. The user character is context only: never write the user's actions, speech, thoughts, feelings, or decisions. The relationship graph is the sole source of character relationships. Story state and current scene own locations, activities, knowledge boundaries, and object custody.
+Use the character profiles, world lore, story state, turn plan, and conversation history below. Continue the story directly.
+Character profiles own identity, personality, abilities, and current status. The user character is context only: never write the user's actions, speech, thoughts, feelings, or decisions. The relationship graph is the sole source of character relationships. Story state and the raw conversation that follows it own locations, activities, knowledge boundaries, and object custody; newer raw conversation takes precedence.
 
 <characters>
 {roles_txt}
@@ -714,10 +685,6 @@ Character profiles own identity, personality, abilities, and current status. The
 <user_character>
 {persona_txt or '(None)'}
 </user_character>
-
-<current_scene>
-{html.escape(scene_state_txt or '(None)', quote=False)}
-</current_scene>
 
 <story_state>
 {html.escape(story_state_txt or '(None)', quote=False)}
@@ -736,7 +703,7 @@ Character profiles own identity, personality, abilities, and current status. The
 
 
 def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
-                      scene_state_txt: str, story_state_txt: str,
+                      story_state_txt: str,
                       turn_plan_txt: str, multi_rule: str) -> str:
     return f"""# 任务
 写出当前登场角色在这场虚构故事中对用户最后行动的下一段回应。
@@ -744,13 +711,12 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 你会收到：
 - 登场角色资料
 - 世界设定
-- 当前场景
 - 故事状态
 - 本轮调度
 - 历史对话
 
 输出当前故事的下一段内容。
-角色档案只决定身份、性格、能力与当前状态；用户角色资料只作为上下文，不得替用户书写行动、对白、想法、感受或决定；人物关系图是角色关系的唯一来源；故事状态和当前场景决定位置、行动、认知边界与物品归属。
+角色档案只决定身份、性格、能力与当前状态；用户角色资料只作为上下文，不得替用户书写行动、对白、想法、感受或决定；人物关系图是角色关系的唯一来源；故事状态与其后的原始对话决定位置、行动、认知边界与物品归属，较新的原始对话优先。
 
 <characters>
 {roles_txt}
@@ -767,10 +733,6 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 <user_character>
 {persona_txt or '（无）'}
 </user_character>
-
-<current_scene>
-{html.escape(scene_state_txt or '（无）', quote=False)}
-</current_scene>
 
 <story_state>
 {html.escape(story_state_txt or '（无）', quote=False)}
@@ -789,7 +751,7 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 
 
 def build_messages(card: dict, lore: list, persona: dict, story: list,
-                   note: str = "", story_state: dict = None, scene_state: dict = None,
+                   note: str = "", story_state: dict = None,
                    turn_plan: dict = None, response_language: str = "zh") -> list:
     """组成 chat-completion 消息序列。card 可为单角色 dict，也可为多角色 list。"""
     lang = _language_code(response_language)
@@ -803,7 +765,6 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
 
     roles_txt = _role_blocks(cards, lang) or ("(No active characters configured)" if en else "（未设置登场角色）")
     relationships_txt = _relationships_block(cards, lang)
-    scene_state_txt = _scene_state_block(scene_state or {}, lang)
     effective_story_state = _validated_story_state(story_state, story)
     story_state_txt = _story_state_block(effective_story_state or {}, lang)
     turn_plan_txt = _turn_plan_block(turn_plan or {}, lang)
@@ -813,9 +774,9 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
         multi_rule = (_multi_character_rules_en(names) if en
                       else _multi_character_rules_zh(names))
 
-    sys = (_system_prompt_en(roles_txt, relationships_txt, lore_top_txt, persona_txt, scene_state_txt,
+    sys = (_system_prompt_en(roles_txt, relationships_txt, lore_top_txt, persona_txt,
                              story_state_txt, turn_plan_txt, multi_rule) if en else
-           _system_prompt_zh(roles_txt, relationships_txt, lore_top_txt, persona_txt, scene_state_txt,
+           _system_prompt_zh(roles_txt, relationships_txt, lore_top_txt, persona_txt,
                              story_state_txt, turn_plan_txt, multi_rule))
     msgs = [{"role": "system", "content": sys}]
     covered_turns = int((effective_story_state or {}).get("turns") or 0)
@@ -935,12 +896,12 @@ def chat(messages: list, temperature: float = None, model: dict = None, max_toke
 
 def perform(card: dict, worldbooks: list, persona: dict, story: list,
             note: str = "", model: dict = None, story_state: dict = None,
-            scene_state: dict = None, turn_plan: dict = None,
+            turn_plan: dict = None,
             response_language: str = "zh") -> str:
     """一回合演出：选世界书 → 拼 prompt → 生成。model = 用户自配 override（None=内置模型）。"""
-    lore = select_lore(worldbooks, story, extra_text=_lore_extra_text(scene_state, story_state, turn_plan))
+    lore = select_lore(worldbooks, story, extra_text=_lore_extra_text(story_state, turn_plan))
     msgs = build_messages(card, lore, persona, story, note, story_state=story_state,
-                          scene_state=scene_state, turn_plan=turn_plan,
+                          turn_plan=turn_plan,
                           response_language=response_language)
     return chat(msgs, model=model, max_tokens=ACTOR_MAX_TOKENS)
 
@@ -949,7 +910,7 @@ def ping(model: dict = None) -> int:
     """极小请求实测一份配置通不通（add 落盘前的验证）。返回耗时 ms，失败抛异常。"""
     t0 = time.time()
     ov = model or {}
-    payload = _payload([{"role": "user", "content": "hi"}], 0.0, False,
+    payload = _payload([{"role": "user", "content": "hi"}], 1.0, False,
                        ov.get("model"), max_tokens=8)
     with urllib.request.urlopen(_request(payload, ov.get("base"), ov.get("key")), timeout=20) as r:
         json.loads(r.read())

@@ -106,6 +106,10 @@ function applyStateProjection(result) {
   production.runtime_cast = result.runtime_cast || production.runtime_cast;
   production.cards = Array.isArray(result.cards) ? result.cards : production.cards;
   production.persona = result.persona || production.persona;
+  // 同步更新全局 cardMap，确保编辑/详情面板也能拿到最新卡片
+  if (Array.isArray(result.cards)) {
+    result.cards.forEach((c) => { if (c && c.id) state.cardMap[c.id] = c; });
+  }
   if (state.activeId !== production.id) return;
   state.active = production;
   state.persona = production.persona || {};
@@ -118,24 +122,29 @@ function watchStateSync(meta, productionId) {
   const since = Number(meta.revision || 0);
   stateSyncWatchers.set(productionId, token);
   void (async () => {
-    const deadline = Date.now() + 180000;
+    const deadline = Date.now() + 300000;
     let failures = 0;
     let idle = 0;
+    let delayMs = 1000;
     while (Date.now() < deadline && stateSyncWatchers.get(productionId) === token) {
-      await wait(1000);
+      await wait(delayMs);
       try {
         const result = await bridge.get(`/api/production/state-sync?production_id=${encodeURIComponent(productionId)}&since=${since}`);
         failures = 0;
+        delayMs = Math.min(delayMs * 2, 10000);
         if (result.ready) {
           applyStateProjection(result);
           break;
         }
+        if (result.error) break;
         if (result.pending) {
           idle = 0;
           continue;
         }
-        if (result.error || !result.due || ++idle >= 3) break;
+        if (result.due && ++idle < 5) continue;
+        break;
       } catch (_) {
+        delayMs = Math.min(delayMs * 2, 10000);
         if (++failures >= 5) break;
       }
     }
@@ -851,6 +860,7 @@ function openCastDetailSheet(cardId) {
 function openEditCastSheet(cardId) {
   const character = productionCards(state.active).find((c) => c.id === cardId);
   if (!character) return;
+  let baseRevision = Number(((state.active || {}).runtime_cast || {}).revision || 0);
   const profile = castProfile(character);
   const status = character.persistent_status || {};
   const lines = (value) => Array.isArray(value) ? value.join("\n") : (value || "");
@@ -940,12 +950,16 @@ function openEditCastSheet(cardId) {
       card.querySelector(".editEntityBody").scrollTop = 0;
     };
   });
-  card.querySelector(".primary").onclick = async () => {
+  const saveButton = card.querySelector(".primary");
+  saveButton.onclick = async () => {
     const name = card.querySelector("#castEditName").value.trim();
     if (!name) { toast(t("castNameRequired")); return; }
     try {
       card.classList.add("saving");
+      saveButton.disabled = true;
+      saveButton.textContent = t("saving");
       await bridge.event({ type: "update_cast", production_id: state.active.id, card_id: cardId,
+        expected_revision: baseRevision,
         profile: {
           identity: { name, description: card.querySelector("#castEditDescription").value.trim(),
             occupation: card.querySelector("#castEditOccupation").value.trim(), story_role: card.querySelector("#castEditStoryRole").value.trim() },
@@ -969,6 +983,14 @@ function openEditCastSheet(cardId) {
       closeModal(); await loadAll(); toast(t("castUpdated"));
     } catch (e) {
       card.classList.remove("saving");
+      saveButton.disabled = false;
+      saveButton.textContent = t("save");
+      if (e.code === "state_conflict") {
+        const latestRevision = Number(e.data && e.data.current_revision);
+        if (Number.isFinite(latestRevision)) baseRevision = latestRevision;
+        toast(t("castStateChanged"));
+        return;
+      }
       toast(t("castUpdateFailed", { err: e.message }));
     }
   };
