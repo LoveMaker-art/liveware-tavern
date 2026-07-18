@@ -39,6 +39,11 @@ updater's `review` or `apply` directly against those manifests.
 
 Use `report --details` only when the user explicitly requests file hashes or conflict diagnosis. The default report is intentionally concise.
 
+During a version upgrade, the updater may automatically migrate exact known fingerprints from
+transitional pre-release deployments and may ignore query-string-only changes to local JS/CSS
+references in `runtime/web/index.html`. Report these as compatibility migrations or metadata
+normalization, not conflicts. Unknown local code remains subject to three-way merge review.
+
 ## Boundaries
 
 - Install only a non-draft, non-prerelease GitHub Release from the configured repository.
@@ -49,6 +54,7 @@ Use `report --details` only when the user explicitly requests file hashes or con
 - Resolve the installed version's official Release as the trusted merge base. A verified cached official baseline may be used only when its version, managed-file list, and hashes all match. Never treat current instance files as an official baseline.
 - If the installed version predates its own GitHub Release, use only the matching hash-verified historical baseline bundled with the latest stable Release. Never infer a baseline from the current instance or from an arbitrary branch.
 - Preserve local frontend and backend edits with a three-way merge against the trusted official baseline. Store the unmodified target Release, not the merged installation, as the next baseline. If no trusted baseline exists, differing runtime or updater files are conflicts.
+- Accept an automatic compatibility migration only for an exact updater-owned fingerprint and its declared minimum target version. Never generalize a recognized migration to unknown local content.
 - Update only allowlisted backend modules, the eight official `runtime/web` code files, the seven creative skills, the complete release-managed `/opt/data/AGENTS.md`, and this updater; update the updater last.
 - Back up the complete existing official skill directories, then replace exactly `tavern`, `tavern-world`, `tavern-cards`, `tavern-worldbooks`, `tavern-story-profile`, `tavern-continuity`, and `tavern-ops`. This cleanly migrates the former single `tavern` skill and removes every stale file inside official directories. Never touch any other skill directory.
 - Preserve instance-local edits to managed frontend and backend files with the same three-way review and conflict rules.

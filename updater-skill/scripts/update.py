@@ -48,12 +48,34 @@ ASSET_ARCHIVE = "tavern-release.tar.gz"
 SKILL_ASSET_MANIFEST = "skill-manifest.json"
 SKILL_ASSET_ARCHIVE = "tavern-skill.tar.gz"
 VERSION_RE = re.compile(r"^version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
+LOCAL_ASSET_QUERY_RE = re.compile(
+    r"(?P<prefix>\b(?:src|href)=[\"'](?:\./)?[A-Za-z0-9_./-]+\.(?:js|css))\?[^\"']*",
+    re.IGNORECASE,
+)
 IGNORED = ("__pycache__", "*.pyc", "*.log", "*.bak*", "*.before-*", ".DS_Store")
 PROTECTED = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "sessions", "credentials", "backups")
 OBSOLETE_UPDATER_FILES = (
     "references/conflict-inspection.md",
     "references/agents-block.md",
 )
+# Exact fingerprints of transitional runtime builds that were deployed to some
+# instances before the equivalent implementation was published as a Release.
+# Only these known bytes may be replaced automatically; unknown local edits must
+# continue through the normal three-way merge and conflict review.
+COMPATIBILITY_REPLACEMENTS = {
+    "runtime/server.py": {
+        "c0ec128edbba6fb6e9ddd16a30c48ff68d3beba7a2ba0b87de6e74e1859ea79b": {
+            "min_target": "1.21.0",
+            "reason": "story-state-watch-policy",
+        },
+    },
+    "runtime/web/app.js": {
+        "38ba6dc28b092b92d88367cfc35f5b69e8417be662a80b794263585a78cf7165": {
+            "min_target": "1.21.0",
+            "reason": "state-sync-bounded-polling",
+        },
+    },
+}
 HISTORICAL_SKILL_FILES = {
     "scripts/install.sh",
     "scripts/make_test_card.py",
@@ -616,7 +638,34 @@ def merge_file(base, current, incoming, output):
     return False
 
 
-def merge_area(area, base_root, current_root, incoming_root, output_root, managed_names):
+def normalize_local_asset_queries(path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    return LOCAL_ASSET_QUERY_RE.sub(r"\g<prefix>", text)
+
+
+def metadata_only_upgrade(area, name, base, current, target_version):
+    if not target_version or area != "runtime" or name != "web/index.html":
+        return False
+    normalized_base = normalize_local_asset_queries(base)
+    normalized_current = normalize_local_asset_queries(current)
+    return normalized_base is not None and normalized_base == normalized_current
+
+
+def compatibility_replacement(area, name, current_hash, target_version):
+    if not target_version or not current_hash:
+        return None
+    migration = COMPATIBILITY_REPLACEMENTS.get(f"{area}/{name}", {}).get(current_hash)
+    if not migration or version_key(target_version) < version_key(migration["min_target"]):
+        return None
+    return migration["reason"]
+
+
+def merge_area(
+        area, base_root, current_root, incoming_root, output_root, managed_names,
+        compatibility_target=None):
     base = tree_files(base_root)
     current = tree_files(current_root)
     incoming = tree_files(incoming_root)
@@ -630,6 +679,7 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
         status = "unchanged"
         source = None
         metadata_normalized = False
+        compatibility_migration = None
         if area == "runtime" and name == ".tavern-release-version" and not c and n:
             source, status = n, "upstream-added"
         elif ch == nh:
@@ -638,14 +688,25 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
             source, status = n, "upstream"
         elif nh == bh:
             source, status = c, "local"
-        elif not b and n and not c:
-            source, status = n, "upstream-added"
-        elif b and c and n and not any(binary(path) for path in (b, c, n)):
-            merged = merge_file(b, c, n, output_root / name)
-            if merged:
-                status = "merged"
+        elif b and c and n and metadata_only_upgrade(
+                area, name, b, c, compatibility_target):
+            source, status = n, "metadata-normalized"
+            metadata_normalized = True
+        elif b and c and n:
+            compatibility_migration = compatibility_replacement(
+                area, name, ch, compatibility_target)
+            if compatibility_migration:
+                source, status = n, "compatibility-migrated"
+            elif not any(binary(path) for path in (b, c, n)):
+                merged = merge_file(b, c, n, output_root / name)
+                if merged:
+                    status = "merged"
+                else:
+                    status = "conflict"
             else:
                 status = "conflict"
+        elif not b and n and not c:
+            source, status = n, "upstream-added"
         else:
             status = "conflict"
         if status == "conflict":
@@ -660,6 +721,7 @@ def merge_area(area, base_root, current_root, incoming_root, output_root, manage
             "installed_sha256": ch,
             "release_sha256": nh,
             "metadata_normalized": metadata_normalized,
+            "compatibility_migration": compatibility_migration,
         })
     return report, conflicts
 
@@ -1140,7 +1202,12 @@ def command_review(_args):
                     incoming, staged / area, managed_by_area[area])
             else:
                 area_files, area_conflicts = merge_area(
-                    area, base_root / area, target, incoming, staged / area, managed_by_area[area])
+                    area, base_root / area, target, incoming, staged / area,
+                    managed_by_area[area],
+                    compatibility_target=(
+                        manifest["version"] if manifest["version"] != installed else None
+                    ),
+                )
             files.extend(area_files)
             conflicts.extend(area_conflicts)
         staged_agents, agents_report = stage_agents(unpacked, plan_dir)
@@ -1179,6 +1246,13 @@ def command_review(_args):
             "metadata_normalized": [
                 item["path"] for item in files if item.get("metadata_normalized")
             ],
+            "compatibility_migrations": [
+                {
+                    "path": item["path"],
+                    "reason": item["compatibility_migration"],
+                }
+                for item in files if item.get("compatibility_migration")
+            ],
             "files": files,
         }
         atomic_write_text(
@@ -1198,6 +1272,7 @@ def command_review(_args):
         "categories": plan["categories"],
         "conflicts": plan["conflicts"],
         "metadata_normalized": plan["metadata_normalized"],
+        "compatibility_migrations": plan["compatibility_migrations"],
     }, ensure_ascii=False))
 
 
@@ -1227,6 +1302,7 @@ def command_report(args):
         "categories": plan["categories"],
         "conflicts": plan["conflicts"],
         "metadata_normalized": plan.get("metadata_normalized") or [],
+        "compatibility_migrations": plan.get("compatibility_migrations") or [],
         "changes": (
             changes if args.details else [
                 {key: item[key] for key in ("path", "category", "status")}
@@ -1257,6 +1333,14 @@ def load_plan(plan_id):
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     if plan.get("schema") != 2 or plan.get("skill_install_mode") != "exact-directories":
         raise RuntimeError("review plan does not use the required exact-directory skill policy")
+    file_conflicts = {
+        item.get("path")
+        for item in (plan.get("files") or [])
+        if item.get("status") == "conflict"
+    }
+    declared_conflicts = set(plan.get("conflicts") or [])
+    if declared_conflicts != file_conflicts or bool(plan.get("ready")) == bool(file_conflicts):
+        raise RuntimeError("review plan conflict state is inconsistent; run review again")
     staged = plan_path.parent / "staged"
     upstream = plan_path.parent / "upstream"
     if not plan.get("ready"):
