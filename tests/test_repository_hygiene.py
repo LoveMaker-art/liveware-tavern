@@ -8,6 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RepositoryHygieneTests(unittest.TestCase):
+    def test_bootstrap_transition_guidance_is_consistent(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        updater_skill = (ROOT / "updater-skill/SKILL.md").read_text(encoding="utf-8")
+        updater_source = (ROOT / "updater-skill/scripts/update.py").read_text(encoding="utf-8")
+
+        self.assertIn("older than `v1.21.0`", readme)
+        self.assertRegex(updater_skill, r"older\s+than `v1\.21\.0`")
+        self.assertNotIn("older than `v1.20.0`", updater_skill)
+        self.assertIn("EXPANDED_RUNTIME_VERSION = (1, 21, 0)", updater_source)
+        self.assertNotIn(">= (1, 21, 0)", updater_source)
+
     def test_runtime_release_contains_refactored_modules(self):
         archive = ROOT / "dist/tavern-release.tar.gz"
         manifest_path = ROOT / "dist/manifest.json"
