@@ -155,6 +155,7 @@ RUNTIME_FILES = LEGACY_RUNTIME_FILES | {
     "tts_service.py",
     "web/security.js",
 }
+EXPANDED_RUNTIME_VERSION = (1, 21, 0)
 ALLOWED_MANAGED = {
     "runtime": RUNTIME_FILES,
     "updater": {
@@ -301,7 +302,7 @@ def release_material(work, release=None, historical=False):
         if not separator or name not in ALLOWED_MANAGED.get(area, set()):
             raise RuntimeError(f"release attempts to manage a forbidden path: {path}")
     release_runtime_files = (
-        RUNTIME_FILES if version_key(version) >= (1, 21, 0) else LEGACY_RUNTIME_FILES
+        RUNTIME_FILES if version_key(version) >= EXPANDED_RUNTIME_VERSION else LEGACY_RUNTIME_FILES
     )
     required_runtime = {f"runtime/{name}" for name in release_runtime_files}
     if not required_runtime.issubset(set(managed)):
@@ -422,7 +423,7 @@ def bundled_baseline(work, release, version):
         raise RuntimeError("bundled historical baseline archive SHA256 mismatch")
     managed = [str(path) for path in (manifest.get("managed_files") or [])]
     baseline_files = (
-        RUNTIME_FILES if version_key(version) >= (1, 21, 0) else LEGACY_RUNTIME_FILES
+        RUNTIME_FILES if version_key(version) >= EXPANDED_RUNTIME_VERSION else LEGACY_RUNTIME_FILES
     )
     required = {f"runtime/{name}" for name in baseline_files}
     if set(managed) != required or set(manifest.get("files") or {}) != required:

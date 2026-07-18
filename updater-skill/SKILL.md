@@ -17,14 +17,15 @@ python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <P
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py rollback --confirm
 ```
 
-Legacy instances without this skill may use the official one-command
-Bootstrap from the latest stable Release. An explicit
+Legacy instances without this skill, and installations whose updater is older
+than `v1.21.0`, must use the official one-command Bootstrap from the latest
+stable Release. An explicit
 `install-tavern-updater.sh | sh -s -- --apply --confirm` invocation authorizes
 that single Bootstrap run to install the skill, report the plan, and apply it.
 Conflicts still stop the update and failures still roll back automatically.
-Instances whose updater is older than `v1.20.0` must also use this Bootstrap
-entrypoint for the schema-3 exact-directory skill transition; do not run an old
-updater directly against the new skill manifest.
+This entrypoint installs the latest updater before it reviews the expanded
+runtime allowlist and exact-directory skill manifest; do not run an older
+updater's `review` or `apply` directly against those manifests.
 
 ## Workflow
 
