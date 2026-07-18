@@ -13,15 +13,21 @@ import hashlib
 import re
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
+MAX_PNG_BYTES = 5 * 1024 * 1024
+MAX_METADATA_BYTES = 2 * 1024 * 1024
 
 
 def _iter_png_chunks(raw: bytes):
+    if len(raw) > MAX_PNG_BYTES:
+        raise ValueError("角色卡 PNG 不能超过 5 MB")
     if raw[:8] != PNG_SIG:
         raise ValueError("不是 PNG（角色卡必须是 PNG，像素是装饰、元数据才是载荷）")
     i = 8
     n = len(raw)
     while i + 8 <= n:
         (length,) = struct.unpack(">I", raw[i : i + 4])
+        if length > MAX_METADATA_BYTES or i + 12 + length > n:
+            raise ValueError("PNG chunk 过大或不完整")
         ctype = raw[i + 4 : i + 8]
         data = raw[i + 8 : i + 8 + length]
         yield ctype, data
@@ -50,8 +56,16 @@ def _read_text_chunks(raw: bytes) -> dict:
                 if comp_flag == 1:
                     import zlib
 
-                    text = zlib.decompress(rest).decode("utf-8", "replace")
+                    decompressor = zlib.decompressobj()
+                    decoded = decompressor.decompress(rest, MAX_METADATA_BYTES + 1)
+                    if len(decoded) > MAX_METADATA_BYTES or decompressor.unconsumed_tail:
+                        raise ValueError("角色卡元数据解压后过大")
+                    if not decompressor.eof:
+                        raise ValueError("角色卡压缩元数据不完整")
+                    text = decoded.decode("utf-8", "replace")
                 else:
+                    if len(rest) > MAX_METADATA_BYTES:
+                        raise ValueError("角色卡元数据过大")
                     text = rest.decode("utf-8", "replace")
                 out.setdefault(kw.decode("latin-1"), text)
             except Exception:
@@ -74,6 +88,8 @@ def _decode_card_payload(text_chunks: dict) -> dict:
                 raw = base64.b64decode(raw, validate=True)  # 绝大多数卡 base64(json)
             except Exception:
                 pass  # 个别卡直接塞明文 JSON（raw 已是原始 UTF-8 字节）
+            if len(raw) > MAX_METADATA_BYTES:
+                raise ValueError("角色卡 JSON 过大")
             return json.loads(raw.decode("utf-8"))
     raise ValueError("PNG 里没有 chara/ccv3 角色卡数据")
 
@@ -327,11 +343,15 @@ def normalize_card(card_obj: dict) -> dict:
 
 
 def import_card_bytes(png_bytes: bytes) -> dict:
+    if len(png_bytes) > MAX_PNG_BYTES:
+        raise ValueError("角色卡 PNG 不能超过 5 MB")
     return normalize_card(_decode_card_payload(_read_text_chunks(png_bytes)))
 
 
 def import_card_b64(png_b64: str) -> dict:
-    return import_card_bytes(base64.b64decode(png_b64))
+    if len(str(png_b64 or "")) > (MAX_PNG_BYTES * 4 // 3) + 16:
+        raise ValueError("角色卡 PNG 不能超过 5 MB")
+    return import_card_bytes(base64.b64decode(png_b64, validate=True))
 
 
 if __name__ == "__main__":

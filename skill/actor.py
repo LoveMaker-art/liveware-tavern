@@ -20,6 +20,12 @@ import urllib.request
 
 import yaml
 
+from story_ledger import (
+    story_prefix_signature as _story_prefix_signature,
+    story_state_has_memory as _story_state_has_memory,
+    validated_story_state as _validated_story_state,
+)
+
 def _load_model_base():
     """Resolve the built-in provider endpoint without a service-specific default."""
     base = os.environ.get("TAVERN_MODEL_BASE")
@@ -43,6 +49,11 @@ MODEL_BASE = _load_model_base()
 MODEL_NAME = os.environ.get("TAVERN_MODEL", "deepseek-v4-flash")
 MODEL_TEMP = float(os.environ.get("TAVERN_MODEL_TEMP", "0.85"))
 ACTOR_MAX_TOKENS = int(os.environ.get('TAVERN_ACTOR_MAX_TOKENS', '2000'))
+MODEL_TIMEOUT = min(300, max(10, int(os.environ.get("TAVERN_MODEL_TIMEOUT", "120"))))
+MODEL_MAX_RESPONSE_BYTES = min(
+    32 * 1024 * 1024,
+    max(256 * 1024, int(os.environ.get("TAVERN_MODEL_MAX_RESPONSE_BYTES", str(8 * 1024 * 1024)))),
+)
 # 上下文预算(字符):长局只喂最新尾巴+开场,别每回合发整条 story 撞模型上限。
 # 世界书扫描深度(往回看几条命中关键词)。
 LORE_LOOKBACK = int(os.environ.get("TAVERN_LORE_LOOKBACK", "6"))
@@ -257,44 +268,6 @@ def _fit_history(story: list, covered_turns: int = 0) -> list:
         if seen_turns > covered_turns:
             kept.append(message)
     return kept
-
-
-def _story_state_has_memory(story_state: dict) -> bool:
-    return isinstance(story_state, dict) and any(story_state.get(key) for key in (
-        "timeline", "facts", "open_threads", "objects", "secrets", "style_notes",
-    ))
-
-
-def _story_prefix_signature(story: list, end_turn: int) -> str:
-    selected = []
-    seen_turns = 0
-    for message in story or []:
-        if message.get("role") == "user":
-            seen_turns += 1
-            if seen_turns > end_turn:
-                break
-        selected.append(message)
-    payload = [(m.get("id"), m.get("role"), m.get("text") or "") for m in selected]
-    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
-
-
-def _validated_story_state(story_state: dict, story: list) -> dict:
-    """Use a ledger only when it safely replaces confirmed raw history."""
-    if not _story_state_has_memory(story_state) or story_state.get("stale"):
-        return {}
-    try:
-        covered_turns = int(story_state.get("turns") or 0)
-    except (TypeError, ValueError):
-        return {}
-    total_turns = sum(1 for message in story or [] if message.get("role") == "user")
-    batch_turns = max(1, int(os.environ.get("TAVERN_STORY_STATE_BATCH_TURNS", "15")))
-    if (covered_turns <= 0 or covered_turns % batch_turns
-            or covered_turns > max(0, total_turns - 1)):
-        return {}
-    expected = str(story_state.get("covered_signature") or "").strip()
-    if expected and _story_prefix_signature(story, covered_turns) != expected:
-        return {}
-    return story_state
 
 
 def _language_code(value: str = "zh") -> str:
@@ -851,6 +824,13 @@ def _request(payload: dict, base: str = None, key: str = None) -> urllib.request
     )
 
 
+def _read_json_response(response, limit=MODEL_MAX_RESPONSE_BYTES):
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise RuntimeError(f"模型响应超过大小限制（{limit} bytes）。")
+    return json.loads(raw)
+
+
 def _chat_once(messages: list, temperature: float = None, model: dict = None,
                max_tokens: int = None) -> str:
     ov = model or {}
@@ -861,8 +841,8 @@ def _chat_once(messages: list, temperature: float = None, model: dict = None,
     try:
         req = _request(_payload(messages, temperature, False, model_name, max_tokens=max_tokens),
                        ov.get("base"), ov.get("key"))
-        with urllib.request.urlopen(req, timeout=180) as r:
-            data = json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as r:
+            data = _read_json_response(r)
         elapsed = round(time.time() - t0, 2)
     except Exception as e:
         elapsed = round(time.time() - t0, 2)
@@ -913,7 +893,7 @@ def ping(model: dict = None) -> int:
     payload = _payload([{"role": "user", "content": "hi"}], 1.0, False,
                        ov.get("model"), max_tokens=8)
     with urllib.request.urlopen(_request(payload, ov.get("base"), ov.get("key")), timeout=20) as r:
-        json.loads(r.read())
+        _read_json_response(r, min(MODEL_MAX_RESPONSE_BYTES, 512 * 1024))
     return int((time.time() - t0) * 1000)
 
 

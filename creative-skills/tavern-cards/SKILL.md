@@ -1,7 +1,7 @@
 ---
 name: tavern-cards
 description: Manage Tavern character cards：搜索、导入、规范化与审计。
-version: 1.20.9
+version: 1.21.0
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

@@ -8,6 +8,32 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RepositoryHygieneTests(unittest.TestCase):
+    def test_runtime_release_contains_refactored_modules(self):
+        archive = ROOT / "dist/tavern-release.tar.gz"
+        manifest_path = ROOT / "dist/manifest.json"
+        if not archive.is_file() or not manifest_path.is_file():
+            self.skipTest("build release assets before archive validation")
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = {
+            "runtime/background_jobs.py",
+            "runtime/continuity_model.py",
+            "runtime/memory_cache.py",
+            "runtime/model_registry.py",
+            "runtime/production_views.py",
+            "runtime/request_security.py",
+            "runtime/runtime_http.py",
+            "runtime/state_store.py",
+            "runtime/story_ledger.py",
+            "runtime/tts_service.py",
+            "runtime/web/security.js",
+        }
+        self.assertTrue(expected.issubset(set(manifest["managed_files"])))
+        with tarfile.open(archive, "r:gz") as package:
+            names = {member.name for member in package.getmembers() if member.isfile()}
+        self.assertTrue(expected.issubset(names))
+        self.assertEqual(set(manifest["managed_files"]), names)
+
     def test_legacy_persona_and_tools_are_absent(self):
         forbidden = (
             ROOT / "skill/SOUL.md",

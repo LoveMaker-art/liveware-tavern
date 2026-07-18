@@ -128,21 +128,35 @@ ALLOWED_OBSOLETE = {
     "skills/tavern/scripts/smoke.py",
 }
 AGENTS_RELEASE_FILE = "references/AGENTS.md"
+LEGACY_RUNTIME_FILES = {
+    ".tavern-release-version",
+    "actor.py",
+    "actor_self.md",
+    "card_import.py",
+    "server.py",
+    "web/actor.html",
+    "web/actor.js",
+    "web/app.js",
+    "web/bridge.js",
+    "web/console.css",
+    "web/i18n.js",
+    "web/index.html",
+}
+RUNTIME_FILES = LEGACY_RUNTIME_FILES | {
+    "background_jobs.py",
+    "continuity_model.py",
+    "memory_cache.py",
+    "model_registry.py",
+    "production_views.py",
+    "request_security.py",
+    "runtime_http.py",
+    "state_store.py",
+    "story_ledger.py",
+    "tts_service.py",
+    "web/security.js",
+}
 ALLOWED_MANAGED = {
-    "runtime": {
-        ".tavern-release-version",
-        "actor.py",
-        "actor_self.md",
-        "card_import.py",
-        "server.py",
-        "web/actor.html",
-        "web/actor.js",
-        "web/app.js",
-        "web/bridge.js",
-        "web/console.css",
-        "web/i18n.js",
-        "web/index.html",
-    },
+    "runtime": RUNTIME_FILES,
     "updater": {
         "SKILL.md",
         "agents/openai.yaml",
@@ -286,19 +300,10 @@ def release_material(work, release=None, historical=False):
         area, separator, name = str(path).partition("/")
         if not separator or name not in ALLOWED_MANAGED.get(area, set()):
             raise RuntimeError(f"release attempts to manage a forbidden path: {path}")
-    required_runtime = {
-        "runtime/.tavern-release-version",
-        "runtime/actor.py",
-        "runtime/actor_self.md",
-        "runtime/server.py",
-        "runtime/web/actor.html",
-        "runtime/web/actor.js",
-        "runtime/web/app.js",
-        "runtime/web/bridge.js",
-        "runtime/web/console.css",
-        "runtime/web/i18n.js",
-        "runtime/web/index.html",
-    }
+    release_runtime_files = (
+        RUNTIME_FILES if version_key(version) >= (1, 21, 0) else LEGACY_RUNTIME_FILES
+    )
+    required_runtime = {f"runtime/{name}" for name in release_runtime_files}
     if not required_runtime.issubset(set(managed)):
         raise RuntimeError("release is missing required Tavern system files")
     if not historical and "updater/" + AGENTS_RELEASE_FILE not in set(managed):
@@ -416,7 +421,10 @@ def bundled_baseline(work, release, version):
     if sha256_file(archive_path) != manifest.get("sha256"):
         raise RuntimeError("bundled historical baseline archive SHA256 mismatch")
     managed = [str(path) for path in (manifest.get("managed_files") or [])]
-    required = {f"runtime/{name}" for name in ALLOWED_MANAGED["runtime"]}
+    baseline_files = (
+        RUNTIME_FILES if version_key(version) >= (1, 21, 0) else LEGACY_RUNTIME_FILES
+    )
+    required = {f"runtime/{name}" for name in baseline_files}
     if set(managed) != required or set(manifest.get("files") or {}) != required:
         raise RuntimeError("bundled historical baseline does not match the runtime allowlist")
     unpacked = work / "unpacked"

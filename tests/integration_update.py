@@ -44,7 +44,11 @@ def extract_install(assets, data_root):
             package.extractall(stage)
         shutil.copytree(stage / "runtime", data_root / "apps/tavern-runtime")
         shutil.copytree(stage / "updater", data_root / "skills/system/tavern-updater")
-        shutil.copytree(stage / "skill", data_root / "skills/creative/tavern")
+        creative_root = data_root / "skills/creative"
+        creative_root.mkdir(parents=True)
+        for skill in (stage / "skills").iterdir():
+            if skill.is_dir():
+                shutil.copytree(skill, creative_root / skill.name)
 
 
 def run_json(command, env):

@@ -23,8 +23,24 @@ BOOTSTRAP_ASSET = DIST / "tavern-updater-bootstrap.py"
 BOOTSTRAP_LAUNCHER_SOURCE = ROOT / "bootstrap/install_tavern_updater.sh"
 BOOTSTRAP_LAUNCHER_ASSET = DIST / "install-tavern-updater.sh"
 BOOTSTRAP_MANIFEST = DIST / "bootstrap-manifest.json"
-BACKEND_FILES = ("actor.py", "actor_self.md", "server.py", "card_import.py")
-FRONTEND_FILES = (
+LEGACY_BACKEND_FILES = ("actor.py", "actor_self.md", "server.py", "card_import.py")
+BACKEND_FILES = (
+    "actor.py",
+    "actor_self.md",
+    "background_jobs.py",
+    "card_import.py",
+    "continuity_model.py",
+    "memory_cache.py",
+    "model_registry.py",
+    "production_views.py",
+    "request_security.py",
+    "runtime_http.py",
+    "server.py",
+    "state_store.py",
+    "story_ledger.py",
+    "tts_service.py",
+)
+LEGACY_FRONTEND_FILES = (
     "actor.html",
     "actor.js",
     "app.js",
@@ -33,7 +49,19 @@ FRONTEND_FILES = (
     "i18n.js",
     "index.html",
 )
-BASELINE_RUNTIME_FILES = tuple(BACKEND_FILES) + tuple(f"web/{name}" for name in FRONTEND_FILES) + (
+FRONTEND_FILES = (
+    "actor.html",
+    "actor.js",
+    "app.js",
+    "bridge.js",
+    "console.css",
+    "i18n.js",
+    "index.html",
+    "security.js",
+)
+LEGACY_BASELINE_RUNTIME_FILES = tuple(LEGACY_BACKEND_FILES) + tuple(
+    f"web/{name}" for name in LEGACY_FRONTEND_FILES
+) + (
     ".tavern-release-version",
 )
 CREATIVE_SKILL_NAMES = (
@@ -141,7 +169,7 @@ def main():
                 for path in baseline_source.rglob("*")
                 if path.is_file()
             }
-            if actual_source_files != set(BASELINE_RUNTIME_FILES):
+            if actual_source_files != set(LEGACY_BASELINE_RUNTIME_FILES):
                 raise RuntimeError(
                     f"legacy baseline {baseline_version} does not match the runtime allowlist"
                 )
@@ -149,7 +177,7 @@ def main():
             if marker != baseline_version:
                 raise RuntimeError(f"legacy baseline {baseline_version} has a mismatched version marker")
             baseline_stage = DIST / f"baseline-v{baseline_version}-release"
-            for name in BASELINE_RUNTIME_FILES:
+            for name in LEGACY_BASELINE_RUNTIME_FILES:
                 copy(baseline_source / name, baseline_stage / "runtime" / name)
             baseline_files = {
                 path.relative_to(baseline_stage).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
