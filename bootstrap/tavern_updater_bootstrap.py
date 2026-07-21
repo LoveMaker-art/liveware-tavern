@@ -68,6 +68,7 @@ SKILL_FILES = (
     "tavern-worldbooks/references/worldbook-authoring.md",
     "tavern-story-profile/SKILL.md",
     "tavern-story-profile/references/actor-memory.md",
+    "tavern-story-profile/scripts/profile_memory.py",
     "tavern-continuity/SKILL.md",
     "tavern-continuity/references/diagnostics.md",
     "tavern-continuity/references/runtime-continuity.md",

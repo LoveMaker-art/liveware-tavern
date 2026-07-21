@@ -1,7 +1,7 @@
 ---
 name: tavern-story-profile
 description: Recall stories, maintain the structured story profile, and synchronize model-aggregated taste and bounded plot-ledger memory into Hermes.
-version: 1.21.5
+version: 1.21.6
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

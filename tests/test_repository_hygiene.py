@@ -1,3 +1,4 @@
+import importlib.util
 import json
 from pathlib import Path
 import tarfile
@@ -7,7 +8,26 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class RepositoryHygieneTests(unittest.TestCase):
+    def test_bootstrap_and_updater_skill_allowlists_match(self):
+        bootstrap = load_module(
+            "tavern_bootstrap_allowlist",
+            ROOT / "bootstrap/tavern_updater_bootstrap.py",
+        )
+        updater = load_module(
+            "tavern_updater_allowlist",
+            ROOT / "updater-skill/scripts/update.py",
+        )
+
+        self.assertEqual(set(bootstrap.SKILL_FILES), updater.CREATIVE_SKILL_FILES)
+
     def test_bootstrap_transition_guidance_is_consistent(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         updater_skill = (ROOT / "updater-skill/SKILL.md").read_text(encoding="utf-8")
