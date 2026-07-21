@@ -89,6 +89,7 @@ CREATIVE_SKILL_NAMES = (
     "tavern-story-profile",
     "tavern-continuity",
     "tavern-ops",
+    "tavern-world-visuals",
 )
 CREATIVE_SKILL_FILES = {
     "tavern/SKILL.md",
@@ -119,6 +120,9 @@ CREATIVE_SKILL_FILES = {
     "tavern-ops/references/i18n.md",
     "tavern-ops/references/liveware-ops.md",
     "tavern-ops/references/model-config.md",
+    "tavern-world-visuals/SKILL.md",
+    "tavern-world-visuals/references/theme-schema.md",
+    "tavern-world-visuals/scripts/world_theme.py",
 }
 LEGACY_SKILL_FILES = {
     "SKILL.md",
@@ -284,9 +288,19 @@ def canonical_skill_managed(skill_manifest):
 def validate_split_skill_managed(skill_managed, historical=False):
     actual = set(skill_managed)
     allowed = {"skills/" + name for name in CREATIVE_SKILL_FILES}
-    required = {f"skills/{name}/SKILL.md" for name in CREATIVE_SKILL_NAMES}
     if historical:
-        if not required.issubset(actual) or not actual.issubset(allowed):
+        directories = {
+            path.split("/", 2)[1]
+            for path in actual
+            if path.startswith("skills/") and path.count("/") >= 2
+        }
+        required = {f"skills/{name}/SKILL.md" for name in directories}
+        if (
+            "tavern" not in directories
+            or not directories.issubset(set(CREATIVE_SKILL_NAMES))
+            or not required.issubset(actual)
+            or not actual.issubset(allowed)
+        ):
             raise RuntimeError("historical Tavern creative-skill release does not match the safe allowlist")
     elif actual != allowed:
         raise RuntimeError("Tavern creative-skill release does not match the safe allowlist")
@@ -355,8 +369,18 @@ def release_material(work, release=None, historical=False):
     else:
         validate_split_skill_managed(skill_managed, historical=historical)
         if skill_schema == 3:
-            if (skill_manifest.get("install_mode") != "exact-directories"
-                    or tuple(skill_manifest.get("directories") or ()) != CREATIVE_SKILL_NAMES):
+            directories = tuple(skill_manifest.get("directories") or ())
+            safe_directories = (
+                bool(directories)
+                and len(directories) == len(set(directories))
+                and "tavern" in directories
+                and set(directories).issubset(set(CREATIVE_SKILL_NAMES))
+            )
+            if (
+                skill_manifest.get("install_mode") != "exact-directories"
+                or (historical and not safe_directories)
+                or (not historical and directories != CREATIVE_SKILL_NAMES)
+            ):
                 raise RuntimeError("Tavern creative-skill release has an unsafe install policy")
             if skill_manifest.get("obsolete_files"):
                 raise RuntimeError("exact-directory skill releases must not list obsolete files")
@@ -1310,13 +1334,13 @@ def command_report(args):
             ]
         ),
         "details": bool(args.details),
-        "skills_policy": "The seven official Tavern skill directories are backed up and replaced exactly; every other skill directory is excluded.",
+        "skills_policy": "The eight official Tavern skill directories are backed up and replaced exactly; every other skill directory is excluded.",
         "excluded": [
-            "runtime/web files outside the seven official managed code files",
+            "runtime/web files outside the eight official managed code files",
             "runtime/assets",
             "runtime identity/persona files other than the neutral actor_self.md seed template",
             "starter and fixture content",
-            "every skill directory outside the seven exact official Tavern skill directories",
+            "every skill directory outside the eight exact official Tavern skill directories",
             "/opt/data/tavern-state",
             "credentials and model keys",
         ],

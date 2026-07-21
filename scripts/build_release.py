@@ -72,6 +72,7 @@ CREATIVE_SKILL_NAMES = (
     "tavern-story-profile",
     "tavern-continuity",
     "tavern-ops",
+    "tavern-world-visuals",
 )
 def copy(source, destination):
     if source.is_dir():

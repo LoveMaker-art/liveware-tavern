@@ -64,6 +64,7 @@ from tts_service import TTSService  # noqa: E402
 
 STATE = os.environ.get("TAVERN_STATE_DIR", "/opt/data/tavern-state")
 READER = os.path.join(HERE, "web")
+WORLD_ASSETS = os.path.join(STATE, "world-assets")
 SEED_ACTOR = os.path.join(HERE, "actor_self.md")
 for sub in ("cards", "worldbooks", "productions"):
     os.makedirs(os.path.join(STATE, sub), exist_ok=True)
@@ -80,9 +81,27 @@ MAX_CLONE_BODY_BYTES = max(
     int(os.environ.get("TAVERN_MAX_CLONE_BODY_BYTES", str(14 * 1024 * 1024))),
 )
 
+WORLD_UI_VERSION = 1
+WORLD_UI_COLOR_FIELDS = {
+    "accent", "background", "surface", "text", "secondary_text", "muted",
+    "border", "user_message", "overlay",
+}
+WORLD_UI_FONT_PRESETS = {"default", "literary", "modern", "classic", "typewriter"}
+WORLD_UI_BACKGROUND_POSITIONS = {
+    "center", "top", "bottom", "left", "right",
+    "left top", "left bottom", "right top", "right bottom",
+}
+WORLD_UI_BACKGROUND_FITS = {"cover", "contain"}
+WORLD_UI_READING_SURFACES = {"plain", "glass", "solid"}
+WORLD_UI_COLOR_RE = re.compile(
+    r"^(?:#[0-9a-fA-F]{3}|#[0-9a-fA-F]{4}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8})$"
+)
+WORLD_ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
-                 ".png": "image/png", ".svg": "image/svg+xml"}
+                 ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".webp": "image/webp", ".svg": "image/svg+xml"}
 
 DESTRUCTIVE_CONFIRM_TTL = 600
 _destructive_confirmations = {}
@@ -492,6 +511,84 @@ def _production_record(p):
     if isinstance(record.get("runtime_cast"), dict):
         record.pop("cards", None)
     return record
+
+
+def _world_ui_asset(value):
+    value = str(value or "").strip()
+    if not value or len(value) > 2048:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.netloc:
+        return value
+    if not parsed.scheme and not value.startswith("//"):
+        try:
+            if parsed.path.startswith("/world-assets/"):
+                local_path = safe_static_path(WORLD_ASSETS, parsed.path[len("/world-assets"):])
+            elif parsed.path.startswith("/assets/"):
+                local_path = safe_static_path(READER, parsed.path)
+            else:
+                return ""
+        except ValueError:
+            return ""
+        if (
+            os.path.isfile(local_path)
+            and os.path.splitext(local_path)[1].lower() in WORLD_ASSET_EXTENSIONS
+        ):
+            return value
+    return ""
+
+
+def _normalize_world_ui(value):
+    """Return the declarative visual theme fields accepted from a world."""
+    if not isinstance(value, dict):
+        return {}
+
+    source_theme = value.get("theme") if isinstance(value.get("theme"), dict) else {}
+    theme = {}
+    for field in WORLD_UI_COLOR_FIELDS:
+        color = str(source_theme.get(field) or "").strip()
+        if color and WORLD_UI_COLOR_RE.fullmatch(color):
+            theme[field] = color.lower()
+
+    for field in ("font", "narration_font"):
+        preset = str(source_theme.get(field) or "").strip().lower()
+        if preset in WORLD_UI_FONT_PRESETS:
+            theme[field] = preset
+
+    try:
+        width = int(source_theme.get("content_width"))
+    except (TypeError, ValueError):
+        width = 0
+    if 360 <= width <= 760:
+        theme["content_width"] = width
+
+    for field in ("background_position", "background_position_mobile"):
+        position = str(source_theme.get(field) or "").strip().lower()
+        if position in WORLD_UI_BACKGROUND_POSITIONS:
+            theme[field] = position
+
+    for field in ("background_fit", "background_fit_mobile"):
+        fit = str(source_theme.get(field) or "").strip().lower()
+        if fit in WORLD_UI_BACKGROUND_FITS:
+            theme[field] = fit
+
+    reading_surface = str(source_theme.get("reading_surface") or "").strip().lower()
+    if reading_surface in WORLD_UI_READING_SURFACES:
+        theme["reading_surface"] = reading_surface
+
+    source_assets = value.get("assets") if isinstance(value.get("assets"), dict) else {}
+    assets = {}
+    for field in ("background", "background_desktop", "background_mobile", "cover"):
+        asset = _world_ui_asset(source_assets.get(field))
+        if asset:
+            assets[field] = asset
+
+    result = {"version": WORLD_UI_VERSION}
+    if theme:
+        result["theme"] = theme
+    if assets:
+        result["assets"] = assets
+    return result if len(result) > 1 else {}
 
 
 def _story_content_signature(story):
@@ -3952,6 +4049,23 @@ def ev_tts_clone_delete(ev):
     return {"tts": TTS_SERVICE.delete_clone(ev.get("clone_id"))}
 
 
+def ev_update_world_ui(ev):
+    pid = str(ev.get("production_id") or "").strip()
+    if not pid:
+        raise ValueError("production_id is required")
+    ui = _normalize_world_ui(ev.get("ui"))
+    with _production_lock(pid):
+        production = load_production(pid)
+        if not production:
+            raise ValueError("production not found")
+        if ui:
+            production["ui"] = ui
+        else:
+            production.pop("ui", None)
+        STATE_STORE.write("productions", pid, _production_record(production))
+    return {"production": production}
+
+
 EVENTS = {
     "cancel_generation": ev_cancel_generation,
     "import_card": ev_import_card, "import_card_json": ev_import_card_json, "create_card": ev_create_card,
@@ -3974,6 +4088,7 @@ EVENTS = {
     "tts_voice_use": ev_tts_voice_use,
     "tts_preset_settings": ev_tts_preset_settings,
     "tts_clone_use": ev_tts_clone_use, "tts_clone_delete": ev_tts_clone_delete,
+    "update_world_ui": ev_update_world_ui,
 }
 
 
@@ -3996,7 +4111,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+            "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; "
             f"style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{nonce}'; "
             "connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'",
         )
@@ -4043,7 +4158,7 @@ class H(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _file(self, path):
+    def _file(self, path, cache_control="no-store, must-revalidate"):
         if not os.path.isfile(path):
             return self._json(404, {"error": "not found"})
         ext = os.path.splitext(path)[1]
@@ -4054,7 +4169,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         # reader 是活件页面、随 agent 迭代频繁更新——禁缓存,否则 WKWebView/WebView2 可能
         # serve 旧 app.js,改动不生效(反馈 2026-06-30「还是不行」的头号嫌疑)。
-        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -4137,6 +4252,14 @@ class H(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path.startswith("/api/") and not self._authorize_api():
             return
+        if path.startswith("/world-assets/"):
+            try:
+                asset_path = safe_static_path(WORLD_ASSETS, path[len("/world-assets"):])
+            except ValueError:
+                return self._json(404, {"error": "not found"})
+            if os.path.splitext(asset_path)[1].lower() not in WORLD_ASSET_EXTENSIONS:
+                return self._json(404, {"error": "not found"})
+            return self._file(asset_path, "private, max-age=86400, immutable")
         if path == "/clawchat/agent":
             return self._clawchat_redirect()
         if path == "/api/health":

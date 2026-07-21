@@ -101,6 +101,38 @@ class BootstrapHttpTests(unittest.TestCase):
                     detail = json.load(response)["production"]
                 self.assertEqual(detail["id"], production_id)
                 self.assertIn("story", detail)
+                asset_dir = Path(state_dir) / "world-assets" / production_id
+                asset_dir.mkdir(parents=True)
+                asset_path = asset_dir / "background.png"
+                asset_path.write_bytes(b"\x89PNG\r\n\x1a\nworld-theme-test")
+                themed = event({
+                    "type": "update_world_ui",
+                    "production_id": production_id,
+                    "ui": {
+                        "version": 1,
+                        "theme": {
+                            "accent": "#AABBCC",
+                            "background_fit": "contain",
+                            "reading_surface": "glass",
+                        },
+                        "assets": {
+                            "background_desktop": (
+                                f"/world-assets/{production_id}/background.png"
+                            ),
+                        },
+                    },
+                })
+                self.assertEqual(themed["production"]["ui"]["theme"]["accent"], "#aabbcc")
+                with urllib.request.urlopen(
+                    base + f"/world-assets/{production_id}/background.png",
+                    timeout=2,
+                ) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.headers.get_content_type(), "image/png")
+                    self.assertEqual(
+                        response.headers.get("Cache-Control"),
+                        "private, max-age=86400, immutable",
+                    )
                 with self.assertRaises(urllib.error.HTTPError) as invalid_query:
                     urllib.request.urlopen(
                         base + "/api/production/worldbooks?production_id=../escape",

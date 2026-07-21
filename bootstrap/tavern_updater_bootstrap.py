@@ -44,6 +44,7 @@ CREATIVE_SKILL_NAMES = (
     "tavern-story-profile",
     "tavern-continuity",
     "tavern-ops",
+    "tavern-world-visuals",
 )
 SKILL_FILES = (
     "tavern/SKILL.md",
@@ -74,6 +75,9 @@ SKILL_FILES = (
     "tavern-ops/references/i18n.md",
     "tavern-ops/references/liveware-ops.md",
     "tavern-ops/references/model-config.md",
+    "tavern-world-visuals/SKILL.md",
+    "tavern-world-visuals/references/theme-schema.md",
+    "tavern-world-visuals/scripts/world_theme.py",
 )
 AGENTS_RELEASE_FILE = "references/AGENTS.md"
 
@@ -345,7 +349,7 @@ def main():
         "release_version": manifest["version"],
         "agents_updated": agents_changed,
         "backup": backup,
-        "next_step": "Show one update report and wait for approval. All seven Tavern skills and the complete release-managed AGENTS.md are included in that plan and must not be offered as separate follow-ups.",
+        "next_step": "Show one update report and wait for approval. All eight Tavern skills and the complete release-managed AGENTS.md are included in that plan and must not be offered as separate follow-ups.",
     }
     if not args.skip_report:
         result.update(generate_report(updater_target / "scripts/update.py", data_root))

@@ -29,6 +29,107 @@ function loc(obj, field) {
   return I18N.renderName ? I18N.renderName(value) : value;
 }
 
+const WORLD_THEME_PROPERTIES = [
+  "--world-accent", "--world-bg", "--world-surface", "--world-ink",
+  "--world-ink2", "--world-muted", "--world-line", "--world-userbg",
+  "--world-overlay", "--world-body-font", "--world-narration-font",
+  "--world-content-width", "--world-background-image-desktop", "--world-background-image-mobile",
+  "--world-background-position", "--world-background-position-mobile",
+  "--world-background-fit", "--world-background-fit-mobile",
+];
+const WORLD_THEME_COLORS = {
+  accent: "--world-accent", background: "--world-bg", surface: "--world-surface",
+  text: "--world-ink", secondary_text: "--world-ink2", muted: "--world-muted",
+  border: "--world-line", user_message: "--world-userbg", overlay: "--world-overlay",
+};
+const WORLD_FONT_PRESETS = {
+  default: "var(--sans)",
+  literary: "var(--serif)",
+  modern: "var(--sans)",
+  classic: '"Songti SC","Noto Serif SC",Georgia,"Times New Roman",serif',
+  typewriter: '"SFMono-Regular",Consolas,"Liberation Mono",monospace',
+};
+const WORLD_COLOR_RE = /^(?:#[0-9a-fA-F]{3}|#[0-9a-fA-F]{4}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8})$/;
+const WORLD_POSITIONS = new Set(["center", "top", "bottom", "left", "right", "left top", "left bottom", "right top", "right bottom"]);
+const WORLD_FITS = new Set(["cover", "contain"]);
+const WORLD_READING_SURFACES = new Set(["plain", "glass", "solid"]);
+
+function safeWorldAsset(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 2048 || raw.startsWith("//")) return "";
+  try {
+    const url = new URL(raw, location.origin);
+    if (raw.startsWith("/world-assets/") || raw.startsWith("/assets/")) {
+      return `${url.pathname}${url.search}`;
+    }
+    return url.protocol === "https:" ? url.href : "";
+  } catch (_) { return ""; }
+}
+
+function applyWorldTheme(production) {
+  const stage = $("#stage");
+  if (!stage) return;
+  const panel = $("#panel");
+  const targets = [stage, panel].filter(Boolean);
+  const root = document.documentElement;
+  root.style.removeProperty("--app-safe-bg");
+  targets.forEach((target) => {
+    WORLD_THEME_PROPERTIES.forEach((property) => target.style.removeProperty(property));
+  });
+
+  const ui = production && production.ui;
+  const theme = ui && ui.version === 1 && ui.theme && typeof ui.theme === "object" ? ui.theme : {};
+  const assets = ui && ui.version === 1 && ui.assets && typeof ui.assets === "object" ? ui.assets : {};
+
+  Object.entries(WORLD_THEME_COLORS).forEach(([field, property]) => {
+    const color = String(theme[field] || "").trim();
+    if (WORLD_COLOR_RE.test(color)) targets.forEach((target) => target.style.setProperty(property, color));
+  });
+  const themeBackground = String(theme.background || "").trim();
+  const safeBackground = WORLD_COLOR_RE.test(themeBackground)
+    ? themeBackground
+    : getComputedStyle(document.body).backgroundColor;
+  root.style.setProperty("--app-safe-bg", safeBackground);
+  let themeColorMeta = document.querySelector('meta[name="theme-color"]');
+  if (!themeColorMeta) {
+    themeColorMeta = document.createElement("meta");
+    themeColorMeta.name = "theme-color";
+    document.head.appendChild(themeColorMeta);
+  }
+  themeColorMeta.content = safeBackground;
+  if (WORLD_FONT_PRESETS[theme.font]) {
+    targets.forEach((target) => target.style.setProperty("--world-body-font", WORLD_FONT_PRESETS[theme.font]));
+  }
+  if (WORLD_FONT_PRESETS[theme.narration_font]) {
+    targets.forEach((target) => target.style.setProperty("--world-narration-font", WORLD_FONT_PRESETS[theme.narration_font]));
+  }
+
+  const width = Number(theme.content_width);
+  if (Number.isInteger(width) && width >= 360 && width <= 760) {
+    stage.style.setProperty("--world-content-width", `${width}px`);
+  }
+  const position = String(theme.background_position || "").trim().toLowerCase();
+  if (WORLD_POSITIONS.has(position)) stage.style.setProperty("--world-background-position", position);
+  const fit = String(theme.background_fit || "").trim().toLowerCase();
+  if (WORLD_FITS.has(fit)) stage.style.setProperty("--world-background-fit", fit);
+  const mobilePosition = String(theme.background_position_mobile || "").trim().toLowerCase();
+  if (WORLD_POSITIONS.has(mobilePosition)) stage.style.setProperty("--world-background-position-mobile", mobilePosition);
+  const mobileFit = String(theme.background_fit_mobile || "").trim().toLowerCase();
+  if (WORLD_FITS.has(mobileFit)) stage.style.setProperty("--world-background-fit-mobile", mobileFit);
+
+  const fallbackBackground = safeWorldAsset(assets.background);
+  const desktopBackground = safeWorldAsset(assets.background_desktop) || fallbackBackground || safeWorldAsset(assets.background_mobile);
+  const mobileBackground = safeWorldAsset(assets.background_mobile) || fallbackBackground || desktopBackground;
+  if (desktopBackground) stage.style.setProperty("--world-background-image-desktop", `url(${JSON.stringify(desktopBackground)})`);
+  if (mobileBackground) stage.style.setProperty("--world-background-image-mobile", `url(${JSON.stringify(mobileBackground)})`);
+  const hasBackground = Boolean(desktopBackground || mobileBackground);
+  const themed = Boolean(Object.keys(theme).length || hasBackground);
+  targets.forEach((target) => target.classList.toggle("worldThemed", themed));
+  const readingSurface = WORLD_READING_SURFACES.has(theme.reading_surface) ? theme.reading_surface : "plain";
+  stage.classList.toggle("worldReadingGlass", hasBackground && readingSurface === "glass");
+  stage.classList.toggle("worldReadingSolid", hasBackground && readingSurface === "solid");
+}
+
 function toast(msg) { const box = $("#toast"); box.textContent = msg; box.classList.remove("hidden"); clearTimeout(box._h); box._h = setTimeout(() => box.classList.add("hidden"), 2600); }
 // 内联图标(reader 不挂图标字体)——细描边,克制。
 const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
@@ -195,6 +296,7 @@ async function loadAll() {
     if (activeIndex >= 0 && state.active) state.productions[activeIndex] = state.active;
   }
   state.persona = (state.active && state.active.persona) || {};
+  applyWorldTheme(state.active);
   renderRail(); renderStage(); renderPanel();
 }
 
@@ -1027,6 +1129,7 @@ async function switchProd(id) {
     state.persona = result.production.persona || {};
     const index = state.productions.findIndex((production) => production.id === result.production.id);
     if (index >= 0) state.productions[index] = result.production;
+    applyWorldTheme(result.production);
     renderRail(); renderStage(); renderPanel();
   } catch (e) { toast(t("switchFailed", { err: e.message })); }
 }

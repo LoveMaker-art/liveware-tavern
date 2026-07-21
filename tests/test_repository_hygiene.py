@@ -13,8 +13,8 @@ class RepositoryHygieneTests(unittest.TestCase):
         updater_skill = (ROOT / "updater-skill/SKILL.md").read_text(encoding="utf-8")
         updater_source = (ROOT / "updater-skill/scripts/update.py").read_text(encoding="utf-8")
 
-        self.assertIn("older than `v1.21.0`", readme)
-        self.assertRegex(updater_skill, r"older\s+than `v1\.21\.0`")
+        self.assertIn("older than `v1.21.3`", readme)
+        self.assertRegex(updater_skill, r"older\s+than `v1\.21\.3`")
         self.assertNotIn("older than `v1.20.0`", updater_skill)
         self.assertIn("EXPANDED_RUNTIME_VERSION = (1, 21, 0)", updater_source)
         self.assertNotIn(">= (1, 21, 0)", updater_source)
@@ -75,16 +75,18 @@ class RepositoryHygieneTests(unittest.TestCase):
                 "skills/tavern/scripts/bringup.sh",
                 "skills/tavern/scripts/provision.sh",
                 "skills/tavern/scripts/tavern_cli.py",
+                "skills/tavern-world-visuals/scripts/world_theme.py",
             },
         )
         self.assertEqual(manifest["schema"], 3)
         self.assertEqual(manifest["scope"], "tavern-creative-skills")
         self.assertEqual(manifest["install_mode"], "exact-directories")
-        self.assertEqual(len(manifest["directories"]), 7)
+        self.assertEqual(len(manifest["directories"]), 8)
         self.assertNotIn("obsolete_files", manifest)
         for name in (
                 "tavern", "tavern-world", "tavern-cards", "tavern-worldbooks",
-                "tavern-story-profile", "tavern-continuity", "tavern-ops"):
+                "tavern-story-profile", "tavern-continuity", "tavern-ops",
+                "tavern-world-visuals"):
             self.assertIn(f"skills/{name}/SKILL.md", manifest["managed_files"])
         with tarfile.open(archive, "r:gz") as package:
             names = {member.name for member in package.getmembers() if member.isfile()}

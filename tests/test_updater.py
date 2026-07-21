@@ -257,7 +257,10 @@ class UpdaterMergeTests(unittest.TestCase):
 
     def test_historical_split_skill_manifest_accepts_safe_older_subset(self):
         current = {"skills/" + name for name in UPDATER.CREATIVE_SKILL_FILES}
-        older = current - {"skills/tavern-cards/references/field-mapping.md"}
+        older = {
+            path for path in current
+            if not path.startswith("skills/tavern-world-visuals/")
+        }
 
         UPDATER.validate_split_skill_managed(older, historical=True)
         with self.assertRaisesRegex(RuntimeError, "does not match"):
