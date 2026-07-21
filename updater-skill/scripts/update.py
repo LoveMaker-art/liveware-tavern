@@ -68,6 +68,10 @@ COMPATIBILITY_REPLACEMENTS = {
             "min_target": "1.21.0",
             "reason": "story-state-watch-policy",
         },
+        "21deaa1e65bf5836827327b1857f8d72f3f5e12473e40131dc872cd94858cb46": {
+            "min_target": "1.21.3",
+            "reason": "world-theme-preview",
+        },
     },
     "runtime/web/app.js": {
         "38ba6dc28b092b92d88367cfc35f5b69e8417be662a80b794263585a78cf7165": {

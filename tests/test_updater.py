@@ -139,6 +139,13 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertEqual(report[0]["compatibility_migration"], "test-migration")
         self.assertEqual((output / "server.py").read_text(), "official new\n")
 
+    def test_world_theme_preview_fingerprint_is_an_exact_compatibility_migration(self):
+        migration = UPDATER.COMPATIBILITY_REPLACEMENTS["runtime/server.py"][
+            "21deaa1e65bf5836827327b1857f8d72f3f5e12473e40131dc872cd94858cb46"
+        ]
+        self.assertEqual(migration["min_target"], "1.21.3")
+        self.assertEqual(migration["reason"], "world-theme-preview")
+
     def test_unknown_transitional_runtime_still_conflicts(self):
         base = self.root / "base/runtime"
         current = self.root / "current/runtime"
