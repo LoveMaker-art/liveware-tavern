@@ -36,6 +36,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             "runtime/runtime_http.py",
             "runtime/state_store.py",
             "runtime/story_ledger.py",
+            "runtime/story_profile.py",
             "runtime/tts_service.py",
             "runtime/web/security.js",
         }
@@ -75,6 +76,7 @@ class RepositoryHygieneTests(unittest.TestCase):
                 "skills/tavern/scripts/bringup.sh",
                 "skills/tavern/scripts/provision.sh",
                 "skills/tavern/scripts/tavern_cli.py",
+                "skills/tavern-story-profile/scripts/profile_memory.py",
                 "skills/tavern-world-visuals/scripts/world_theme.py",
             },
         )

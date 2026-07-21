@@ -51,6 +51,7 @@ runtime/
   server.py
   state_store.py
   story_ledger.py
+  story_profile.py
   tts_service.py
   .tavern-release-version
   web/

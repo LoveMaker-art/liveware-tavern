@@ -38,6 +38,7 @@ BACKEND_FILES = (
     "server.py",
     "state_store.py",
     "story_ledger.py",
+    "story_profile.py",
     "tts_service.py",
 )
 LEGACY_FRONTEND_FILES = (

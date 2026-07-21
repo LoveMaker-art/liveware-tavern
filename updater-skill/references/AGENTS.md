@@ -8,7 +8,7 @@ Use `/opt/data/skills/creative/tavern/SKILL.md` as the lightweight router. Load 
 - `tavern-world-visuals`: import durable world images and design, apply, inspect, or reset the story stage, top title bar, and right-side panel theme.
 - `tavern-cards`: search, import, normalize, audit, or attach character cards.
 - `tavern-worldbooks`: create, import, audit, or repair lore and worldbooks.
-- `tavern-story-profile`: recall stories and manage durable story preferences.
+- `tavern-story-profile`: recall stories, manage durable story preferences, synchronize model-aggregated play style and taste to `USER.md`, and project bounded model-generated plot-ledger events into `MEMORY.md`.
 - `tavern-continuity`: diagnose compression, dynamic cast state, prompts, or generation.
 - `tavern-ops`: configure models, restart, verify, or localize Liveware.
 

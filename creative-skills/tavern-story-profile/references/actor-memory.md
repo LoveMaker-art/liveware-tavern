@@ -10,6 +10,10 @@ python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py recall "<world na
 python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py learn "<preference learned>" --reason "<why>"
 python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py reflect "<world name or id>"
 python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py note "<world name or id>" "<director note>"
+python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py audit
+python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py memory-preview
+python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py memory-sync
+python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py refresh
 ```
 
 Guidance:
@@ -28,10 +32,21 @@ Story profile behavior:
 - When intimacy reaches a new stage, tell the user briefly and share the story profile liveware URL returned by `card`.
 - Good phrasing is quiet and personal: "我记得你喜欢慢一点，这次我收着走。"
 
+Storage contract:
+
+- `story_profile.json` is the canonical active profile.
+- `profile_events.jsonl` is the complete append-only audit archive and is never injected into a prompt.
+- `profile_eras.json` contains bounded phase summaries generated from archived events.
+- `actor_self.md` is a rendered compatibility view, not a writable source.
+- Fixed Tavern marker blocks in `USER.md` and `MEMORY.md` are projections. Replace them; never append a second copy.
+- Hermes natively loads `USER.md` and `MEMORY.md` into its system context. Do not add a second prompt hook for these projections.
+
 Memory boundary:
 
-- Tavern acting preferences go through `learn`/`reflect` because they are injected into tavern generation.
+- Tavern acting preferences go through `learn`/`reflect`. When a new durable preference is accepted, the runtime asks the configured model to aggregate the confirmed notes into bounded taste fields for `USER.md`.
+- Concrete story memories come only from successful model-generated `story_state.timeline` and `story_state.open_threads` checkpoints. They are projected into `MEMORY.md` without program-written semantic summaries.
 - General life facts about the user belong in ordinary Hermes memory, not tavern runtime state.
+- Fictional story events remain explicitly labeled as story memory and must not be treated as real-life facts.
 
 ## Reflection Quality
 
@@ -42,3 +57,10 @@ Good memories are durable user preferences: pacing, interaction style, emotional
 Do not write one-off plot facts, world state, role relationships, task progress, or model/tool issues into the story profile. Those belong to the world story state, worldbook, bug report, or director note.
 
 Only run `reflect <world>` when the preview is specific enough to guide future play.
+
+## Timeline Retention
+
+- The story-profile page shows the latest eight milestones.
+- Older milestones are grouped into phase summaries; raw events remain in `profile_events.jsonl`.
+- Repeated evidence updates an existing preference instead of creating another visible timeline item.
+- A profile extraction runs in the background after each completed 15-user-turn batch or when leaving a world with an eligible batch. It must not block story generation.

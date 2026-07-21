@@ -474,7 +474,7 @@ class UpdaterMergeTests(unittest.TestCase):
 
 
 class RuntimeStateBoundaryTests(unittest.TestCase):
-    def test_existing_actor_profile_is_never_migrated_on_read(self):
+    def test_existing_actor_profile_is_migrated_without_losing_content(self):
         with tempfile.TemporaryDirectory(prefix="tavern-state-test-") as temp:
             state = Path(temp)
             profile = state / "actor_self.md"
@@ -482,9 +482,10 @@ class RuntimeStateBoundaryTests(unittest.TestCase):
             profile.write_text(original, encoding="utf-8")
             env = os.environ.copy()
             env["TAVERN_STATE_DIR"] = str(state)
+            env["TAVERN_HERMES_MEMORIES_DIR"] = str(state / "memories")
             command = (
                 "import server; "
-                "assert server.actor_self_text() == " + repr(original)
+                "assert 'Preserve this exact text.' in server.actor_self_text()"
             )
             subprocess.run(
                 [sys.executable, "-c", command],
@@ -492,7 +493,8 @@ class RuntimeStateBoundaryTests(unittest.TestCase):
                 env=env,
                 check=True,
             )
-            self.assertEqual(profile.read_text(encoding="utf-8"), original)
+            self.assertIn("Preserve this exact text.", profile.read_text(encoding="utf-8"))
+            self.assertTrue((state / "story_profile.json").is_file())
 
 
 if __name__ == "__main__":

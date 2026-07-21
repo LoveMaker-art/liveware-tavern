@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import actor  # noqa: E402
 import card_import  # noqa: E402
+import story_profile  # noqa: E402
 from background_jobs import tavern_job_runner  # noqa: E402
 from continuity_model import (  # noqa: E402
     canonical_profile_snapshot as _canonical_profile_snapshot,
@@ -240,14 +241,8 @@ def _set_active(pid):
 
 
 def actor_self_text():
-    rt = os.path.join(STATE, "actor_self.md")
-    if not os.path.exists(rt):  # 首次：种子 → 运行时副本(成长改这份，不动种子)
-        with open(SEED_ACTOR, encoding="utf-8") as f:
-            seed = f.read()
-        with open(rt, "w", encoding="utf-8") as f:
-            f.write(seed)
-    with open(rt, encoding="utf-8") as f:
-        return f.read()
+    profile = story_profile.ensure_profile(STATE, SEED_ACTOR)
+    return story_profile.render_markdown(profile, story_profile.eras(STATE))
 
 
 def liveware_version():
@@ -316,8 +311,6 @@ INTIMACY_BLURB_I18N = {
            "默契": "One glance is enough — smoother every scene",
            "知己": "The actor who knows exactly how you play"},
 }
-
-
 def _sections(md):
     """把 actor_self.md 按 '# ' 一级标题切成 {标题: [正文行]}。"""
     secs, cur = {}, None
@@ -424,10 +417,15 @@ def actor_card_data(lang="zh"):
         if cid:
             roles_played[cid] = roles_played.get(cid, 0) + uturns
     debut_days = 0 if debut is None else max(0, (int(time.time()) - int(debut)) // 86400)
-    tagline, knows, timeline = parse_actor_self(actor_self_text())
-    intim = _intimacy(total_turns + INTIMACY_W * len(timeline), lang)
+    profile = story_profile.ensure_profile(STATE, SEED_ACTOR)
+    tagline = parse_actor_self(actor_self_text())[0]
+    knows = story_profile.preference_texts(profile)
+    timeline = story_profile.timeline(profile)
+    era_items = story_profile.eras(STATE)
+    event_count = int(profile.get("stats", {}).get("event_count") or len(timeline))
+    intim = _intimacy(total_turns + INTIMACY_W * event_count, lang)
     intim["turns"] = total_turns
-    intim["log"] = len(timeline)
+    intim["log"] = event_count
     cards = {c["id"]: c for c in _list("cards")}
     roles = sorted(({"name": (cards.get(cid) or {}).get("name") or "角色", "turns": t}
                     for cid, t in roles_played.items()), key=lambda r: -r["turns"])
@@ -446,6 +444,8 @@ def actor_card_data(lang="zh"):
         "intimacy": intim,
         "knows": knows,
         "timeline": list(reversed(timeline)),  # 最近在前
+        "eras": list(reversed(era_items)),
+        "profile_revision": int(profile.get("revision") or 0),
         "specialties": specs[:8],
         "roles_played": roles,
         "version": liveware_version(),
@@ -1510,8 +1510,8 @@ def ev_delete_card(ev):
 
 
 # Q_C：切走剧组时后台自动复盘（达阈值才做），不阻塞切换、不靠主理人自觉（结构性 > 软性）。
-AUTO_REFLECT_MIN = int(os.environ.get("ACTOR_AUTO_REFLECT_MIN", "4"))      # 至少这么多轮才值得复盘
-AUTO_REFLECT_EVERY = int(os.environ.get("ACTOR_AUTO_REFLECT_EVERY", "6"))  # 距上次复盘再攒这么多轮
+AUTO_REFLECT_MIN = int(os.environ.get("ACTOR_AUTO_REFLECT_MIN", "15"))
+AUTO_REFLECT_EVERY = int(os.environ.get("ACTOR_AUTO_REFLECT_EVERY", "15"))
 
 
 def _maybe_auto_reflect(pid):
@@ -1527,6 +1527,21 @@ def _maybe_auto_reflect(pid):
         _merge_production_fields(pid, reflected_at_turns=uturns)
     except Exception:
         pass  # 后台尽力而为，失败不影响任何前台操作
+
+
+def _schedule_actor_reflect(pid):
+    """Run one non-blocking preference reflection for each completed 15-turn batch."""
+    p = load_production(pid)
+    if not p:
+        return False
+    user_turns = sum(1 for message in p.get("story", []) if message.get("role") == "user")
+    reflected = int(p.get("reflected_at_turns") or 0)
+    if user_turns < AUTO_REFLECT_MIN or user_turns - reflected < AUTO_REFLECT_EVERY:
+        return False
+    key = ("auto_reflect", pid)
+    was_active = BACKGROUND_JOBS.is_active(key)
+    accepted = BACKGROUND_JOBS.submit(key, _maybe_auto_reflect, pid)
+    return bool(accepted and not was_active)
 
 
 def ev_switch_loadout(ev):
@@ -1569,6 +1584,10 @@ def ev_delete_production(ev):
         remaining = [x for x in _list("productions") if x]
         new_active = remaining[0]["id"] if remaining else None
         _set_active(new_active)
+    try:
+        story_profile.sync_story_states(STATE, SEED_ACTOR, _list_productions())
+    except Exception as error:
+        print(f"[story-profile] story memory sync failed after delete: {error}", flush=True)
     return {"deleted": pid, "active": new_active}
 
 
@@ -1729,6 +1748,7 @@ def ev_send_message(ev):
     _commit_foreground_story(p, expected_story_signature)
     state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
+    _schedule_actor_reflect(p["id"])
     return {"reply": reply, "message": m, "user_message": user_msg,
             "production_id": p["id"], "state_sync": state_sync}
 
@@ -1858,6 +1878,7 @@ def ev_continue(ev):
     _commit_foreground_story(p, expected_story_signature)
     state_sync = _story_state_sync_trigger(p["id"])
     _schedule_story_state(p["id"])
+    _schedule_actor_reflect(p["id"])
     return {"reply": reply, "user_message": user_msg, "message": m,
             "production_id": p["id"], "state_sync": state_sync}
 
@@ -2076,81 +2097,28 @@ def ev_edit_message(ev):
     raise ValueError("message not found")
 
 
-# ---------- Q_B：合并写入 + 生涯年表审计 ----------
-# 越演越懂你的引擎：learn/reflect 不再尾部堆流水账,而是①把新学到的**合并进「我对你的了解」**
-# (有界、去重、精化——actor.merge_knows)②在「成长记」记一行审计(生涯年表的资产)。
-# 「我对你的了解」供主理人推荐与故事档案展示；不注入故事正文生成。
-KNOWS_PLACEHOLDER = "- （还不了解你。等我们演几场，我会把你的口味记到这里。）"
+# ---------- 结构化故事档案 ----------
+# story_profile.json 是唯一生效来源；actor_self.md 仅为兼容展示。
 _ACTOR_SELF_LOCK = threading.RLock()
 
 
-def _write_actor_self(md):
-    rt = os.path.join(STATE, "actor_self.md")
-    tmp = rt + ".tmp." + secrets.token_hex(4)
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(md if md.endswith("\n") else md + "\n")
-        os.replace(tmp, rt)
-    finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
-
-
-def _replace_section(md, key, body_lines):
-    """把 md 中标题含 key 的一级段落正文替换为 body_lines（保留标题 + 前后空行）。"""
-    lines, out, i, n, done = md.splitlines(), [], 0, len(md.splitlines()), False
-    while i < n:
-        line = lines[i]
-        if not done and line.startswith("# ") and key in line:
-            out += [line, ""] + list(body_lines)
-            i += 1
-            while i < n and not lines[i].startswith("# "):
-                i += 1
-            if i < n:
-                out.append("")
-            done = True
-            continue
-        out.append(line)
-        i += 1
-    return "\n".join(out)
-
-
-def _merge_into_knows(addition):
-    """把新学到的并进「我对你的了解」段（合并、去重、有界），写回，返回合并后清单。"""
-    md = actor_self_text()
-    merged = actor.merge_knows(parse_actor_self(md)[1], addition)
-    body = ["- " + k for k in merged] if merged else [KNOWS_PLACEHOLDER]
-    _write_actor_self(_replace_section(md, "我对你的了解", body))
-    return merged
-
-
-def _append_growth(meta, change, ts=None):
-    """在「成长记」尾追加**一行**生涯年表审计（成长记是最后一段，追加到尾即落在它下面）。
-    change 可能是多行（reflect 蒸馏出多条）——折成一行（`；` 连、去 bullet），否则年表会裂成多条、掉日期。"""
-    stamp = time.strftime("%Y-%m-%d", time.localtime(ts or time.time()))
-    change = "；".join(s.strip().lstrip("-•").strip()
-                       for s in str(change).splitlines() if s.strip())
-    meta = " ".join(str(meta).split())
-    line = f"- {stamp} {meta} → {change}"
-    _write_actor_self(actor_self_text().rstrip() + "\n" + line + "\n")
-    return line
-
-
-def _record_actor_learning(change, reason, ts=None):
+def _record_actor_learning(change, reason, ts=None, source_type="reflection"):
     with _ACTOR_SELF_LOCK:
-        merged = _merge_into_knows(change)
-        audit = _append_growth(reason, change, ts)
-    return merged, audit
+        merged, event = story_profile.record_learning(
+            STATE, SEED_ACTOR, change, reason, ts, source_type=source_type)
+    if event:
+        try:
+            _refresh_taste_profile()
+        except Exception as error:
+            print(f"[story-profile] taste refresh failed: {error}", flush=True)
+    return merged, event
 
 
 def ev_actor_grow(ev):
-    """learn：把对用户的了解/演法调整**合并进「我对你的了解」** + 记一笔生涯年表（带人话理由）。Q_B。"""
+    """Persist an explicit, durable story preference."""
     change = ev.get("change", "")
     merged, audit = _record_actor_learning(
-        change, ev.get("reason", "") or "(无理由)", ev.get("ts"))
+        change, ev.get("reason", "") or "(无理由)", ev.get("ts"), source_type="explicit")
     return {"ok": True, "knows": merged, "appended": audit}
 
 
@@ -2165,6 +2133,53 @@ def _json_from_model_text(out):
             except Exception:
                 return {}
     return {}
+
+
+def _refresh_taste_profile():
+    """Aggregate model-derived preference notes into a bounded user taste profile."""
+    profile = story_profile.ensure_profile(STATE, SEED_ACTOR)
+    preferences = story_profile.preference_texts(profile)
+    if not preferences:
+        empty = {key: [] for key in story_profile.TASTE_PROFILE_FIELDS}
+        return story_profile.set_taste_profile(STATE, SEED_ACTOR, empty)
+    schema = {key: ["string"] for key in story_profile.TASTE_PROFILE_FIELDS}
+    prompt = (
+        "你是故事口味档案整理员。根据已有的模型复盘条目，归纳用户稳定的故事偏好。\n"
+        "只归纳输入中有证据支持的内容，不补写剧情，不推测现实人格，不把临时剧情状态当成偏好。\n"
+        "相近内容合并；每个字段最多四项；证据不足的字段输出空数组。\n"
+        "character_styles=偏爱的角色类型或特质；relationship_dynamics=偏爱的人物关系与互动张力；"
+        "story_themes=偏爱的世界、题材与主题；pacing=节奏与推进偏好；"
+        "narrative_style=叙事视角、描写与文风；interaction_preferences=用户参与和选择方式；"
+        "boundaries=明确不希望出现的模式。\n"
+        "只输出严格 JSON，键必须完整且只能使用以下结构：\n"
+        + json.dumps(schema, ensure_ascii=False)
+    )
+    source = "\n".join(f"- {item}" for item in preferences)
+    out = actor.chat(
+        [{"role": "system", "content": prompt},
+         {"role": "user", "content": source}],
+        temperature=0.2,
+        model=_active_model(),
+        max_tokens=1200,
+    )
+    parsed = _json_from_model_text(out)
+    if not isinstance(parsed, dict) or any(
+            key not in parsed or not isinstance(parsed.get(key), list)
+            for key in story_profile.TASTE_PROFILE_FIELDS):
+        raise ValueError("taste profile model output does not match the required schema")
+    return story_profile.set_taste_profile(STATE, SEED_ACTOR, parsed)
+
+
+def ev_refresh_story_profile(ev):
+    worlds = story_profile.sync_story_states(
+        STATE, SEED_ACTOR, _list_productions())
+    taste = _refresh_taste_profile()
+    return {
+        "ok": True,
+        "worlds": len(worlds),
+        "taste_fields": sum(1 for value in taste.values() if value),
+        "profile": story_profile.audit(STATE, SEED_ACTOR),
+    }
 
 
 def _card_names(cards):
@@ -3646,7 +3661,11 @@ def _commit_story_state_batch(pid, state, runtime_cast, end_turn, expected_signa
         current["runtime"] = runtime
         record = _production_record(current)
         STATE_STORE.write("productions", pid, record)
-        return current
+    try:
+        story_profile.sync_story_states(STATE, SEED_ACTOR, _list_productions())
+    except Exception as error:
+        print(f"[story-profile] story memory sync failed: {error}", flush=True)
+    return current
 
 
 def _record_story_state_error(pid, error):
@@ -4082,6 +4101,7 @@ EVENTS = {
     "story_state": ev_story_state,
     "swipe": ev_swipe, "edit_message": ev_edit_message, "actor_grow": ev_actor_grow,
     "reflect": ev_reflect, "reflect_preview": ev_reflect_preview,
+    "refresh_story_profile": ev_refresh_story_profile,
     "set_persona": ev_set_persona, "set_note": ev_set_note,
     "model_add": ev_model_add, "model_use": ev_model_use,
     "model_delete": ev_model_delete, "model_test": ev_model_test,
