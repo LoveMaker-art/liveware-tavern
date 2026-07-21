@@ -17,9 +17,9 @@ import uuid
 
 
 REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/liveware-tavern")
-RELEASE_API = os.environ.get(
-    "TAVERN_BOOTSTRAP_RELEASE_API",
-    f"https://api.github.com/repos/{REPO}/releases/latest",
+RELEASE_BASE_URL = os.environ.get(
+    "TAVERN_BOOTSTRAP_RELEASE_BASE_URL",
+    f"https://github.com/{REPO}/releases/latest/download",
 )
 ASSET_MANIFEST = "manifest.json"
 ASSET_ARCHIVE = "tavern-release.tar.gz"
@@ -83,18 +83,6 @@ SKILL_FILES = (
 AGENTS_RELEASE_FILE = "references/AGENTS.md"
 
 
-def request_json(url):
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "tavern-updater-bootstrap/1",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
-
-
 def download(url, destination):
     request = urllib.request.Request(
         url,
@@ -131,27 +119,25 @@ def fetch_release(work, release_dir=None):
         return ({"tag": "v" + str(manifest.get("version") or ""), "url": str(release_dir)},
                 manifest, archive_path, skill_manifest, skill_archive_path)
 
-    release = request_json(RELEASE_API)
-    if release.get("draft") or release.get("prerelease"):
-        raise RuntimeError("latest GitHub release is not stable")
-    assets = {item.get("name"): item.get("browser_download_url") for item in release.get("assets") or []}
     required_assets = (ASSET_MANIFEST, ASSET_ARCHIVE, SKILL_ASSET_MANIFEST, SKILL_ASSET_ARCHIVE)
-    missing = [name for name in required_assets if not assets.get(name)]
-    if missing:
-        raise RuntimeError("release is missing required assets: " + ", ".join(missing))
     manifest_path = work / ASSET_MANIFEST
     archive_path = work / ASSET_ARCHIVE
     skill_manifest_path = work / SKILL_ASSET_MANIFEST
     skill_archive_path = work / SKILL_ASSET_ARCHIVE
-    download(assets[ASSET_MANIFEST], manifest_path)
-    download(assets[ASSET_ARCHIVE], archive_path)
-    download(assets[SKILL_ASSET_MANIFEST], skill_manifest_path)
-    download(assets[SKILL_ASSET_ARCHIVE], skill_archive_path)
+    destinations = {
+        ASSET_MANIFEST: manifest_path,
+        ASSET_ARCHIVE: archive_path,
+        SKILL_ASSET_MANIFEST: skill_manifest_path,
+        SKILL_ASSET_ARCHIVE: skill_archive_path,
+    }
+    for name in required_assets:
+        download(f"{RELEASE_BASE_URL.rstrip('/')}/{name}", destinations[name])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     skill_manifest = json.loads(skill_manifest_path.read_text(encoding="utf-8"))
+    version = str(manifest.get("version") or "")
     return {
-        "tag": release.get("tag_name"),
-        "url": release.get("html_url"),
+        "tag": "v" + version,
+        "url": f"https://github.com/{REPO}/releases/tag/v{version}",
     }, manifest, archive_path, skill_manifest, skill_archive_path
 
 

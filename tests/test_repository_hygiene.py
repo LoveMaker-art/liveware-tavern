@@ -2,7 +2,9 @@ import importlib.util
 import json
 from pathlib import Path
 import tarfile
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,33 @@ def load_module(name, path):
 
 
 class RepositoryHygieneTests(unittest.TestCase):
+    def test_bootstrap_fetches_latest_assets_without_github_api(self):
+        bootstrap = load_module(
+            "tavern_bootstrap_fetch",
+            ROOT / "bootstrap/tavern_updater_bootstrap.py",
+        )
+        downloaded = []
+
+        def fake_download(url, destination):
+            downloaded.append(url)
+            name = Path(url).name
+            if name == bootstrap.ASSET_MANIFEST:
+                destination.write_text('{"version":"1.21.7"}', encoding="utf-8")
+            elif name == bootstrap.SKILL_ASSET_MANIFEST:
+                destination.write_text("{}", encoding="utf-8")
+            else:
+                destination.write_bytes(b"archive")
+
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                bootstrap, "download", side_effect=fake_download):
+            release, manifest, *_rest = bootstrap.fetch_release(Path(temp))
+
+        self.assertEqual(manifest["version"], "1.21.7")
+        self.assertEqual(release["tag"], "v1.21.7")
+        self.assertEqual(len(downloaded), 4)
+        self.assertTrue(all("/releases/latest/download/" in url for url in downloaded))
+        self.assertTrue(all("api.github.com" not in url for url in downloaded))
+
     def test_bootstrap_and_updater_skill_allowlists_match(self):
         bootstrap = load_module(
             "tavern_bootstrap_allowlist",
