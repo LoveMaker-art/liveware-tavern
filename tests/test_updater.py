@@ -146,6 +146,22 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertEqual(migration["min_target"], "1.21.3")
         self.assertEqual(migration["reason"], "world-theme-preview")
 
+    def test_runtime_allowlist_tracks_each_release_generation(self):
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.14.12"),
+            UPDATER.LEGACY_RUNTIME_FILES,
+        )
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.21.8"),
+            UPDATER.EXPANDED_RUNTIME_FILES,
+        )
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.22.0"),
+            UPDATER.RUNTIME_FILES,
+        )
+        self.assertIn("generation_service.py", UPDATER.RUNTIME_FILES)
+        self.assertNotIn("generation_service.py", UPDATER.EXPANDED_RUNTIME_FILES)
+
     def test_unknown_transitional_runtime_still_conflicts(self):
         base = self.root / "base/runtime"
         current = self.root / "current/runtime"

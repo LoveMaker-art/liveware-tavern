@@ -1229,6 +1229,26 @@ def cmd_lore_fix(a):
         print(f"✅ 已保守修复：{path}")
     print(f"完成：修改 {changed} 处。建议再运行 lore-audit <世界> 验证。")
 
+
+
+# ---------- Tavern continuity repair compatibility entrypoints ----------
+def _run_tavern_continuity_repair(kind, a):
+    script = "/opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py"
+    args = [sys.executable, script, kind, a.world, a.request]
+    if getattr(a, "apply", False):
+        args.append("--apply")
+    if getattr(a, "confirm", False):
+        args.append("--confirm")
+    os.execv(sys.executable, args)
+
+
+def cmd_story_fix(a):
+    _run_tavern_continuity_repair("story-fix", a)
+
+
+def cmd_cast_fix(a):
+    _run_tavern_continuity_repair("cast-fix", a)
+
 def _resolve_production(q):
     prods = _get_productions()
     matches = [p for p in prods if p.get("id") == q or q in (p.get("name") or "")]
@@ -1411,6 +1431,23 @@ def main():
     s.add_argument("--apply", action="store_true", help="执行保守机械修复：收窄宽触发词、关闭 recursive")
     s.add_argument("--confirm", action="store_true", help="确认写入 worldbook 文件")
     s.set_defaults(fn=cmd_lore_fix)
+
+
+    s = sub.add_parser("story-fix", help="若棠修复剧情账本 story_state；默认只规划，--apply --confirm 后写入")
+    s.add_argument("world", help="世界 id 或名字片段")
+    s.add_argument("request", help="自然语言修复请求，如：钥匙现在在我手里，不在贝塔手里")
+    s.add_argument("--plan", action="store_true", default=True, help="只生成修复计划，不修改数据")
+    s.add_argument("--apply", action="store_true", help="按计划修改 story_state")
+    s.add_argument("--confirm", action="store_true", help="确认写入 production 状态文件")
+    s.set_defaults(fn=cmd_story_fix)
+
+    s = sub.add_parser("cast-fix", help="若棠修复角色/用户状态 runtime_cast；默认只规划，--apply --confirm 后写入")
+    s.add_argument("world", help="世界 id 或名字片段")
+    s.add_argument("request", help="自然语言修复请求，如：阿尔法的伤势已经恢复")
+    s.add_argument("--plan", action="store_true", default=True, help="只生成修复计划，不修改数据")
+    s.add_argument("--apply", action="store_true", help="按计划修改 runtime_cast")
+    s.add_argument("--confirm", action="store_true", help="确认写入 production 状态文件")
+    s.set_defaults(fn=cmd_cast_fix)
 
     s = sub.add_parser("model", help="大模型配置:帮用户配/切/删自定义 API(add 先实测再落盘)")
     ms = s.add_subparsers(dest="mcmd", required=True)
