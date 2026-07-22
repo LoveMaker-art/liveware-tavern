@@ -27,6 +27,7 @@ from background_jobs import tavern_job_runner  # noqa: E402
 from continuity_model import (  # noqa: E402
     canonical_profile_snapshot as _canonical_profile_snapshot,
     ensure_runtime_cast as _continuity_ensure_runtime_cast,
+    has_meaningful_story_context as _has_meaningful_story_context,
     hydrate_runtime_cards as _continuity_hydrate_runtime_cards,
     hydrate_user_persona as _continuity_hydrate_user_persona,
     migrate_legacy_story_context as _migrate_legacy_story_context,
@@ -3688,6 +3689,8 @@ def _summarize_story_state(p, force_full=False):
         story = snapshot.get("story") or []
         compressible_turns = _compressible_story_turns(story)
         stored_previous = snapshot.get("story_state") or {}
+        if not _has_meaningful_story_context(stored_previous):
+            stored_previous = {}
         previous = _validated_story_state(stored_previous, story)
         rebuild = force_full or (bool(stored_previous) and not previous)
         state = {} if rebuild else dict(previous)

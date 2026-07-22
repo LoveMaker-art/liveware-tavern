@@ -111,9 +111,37 @@ def _normalize_ledger_scene(value, valid_ids=None):
     }
 
 
+def _has_meaningful_story_context(value):
+    """Distinguish real saved context from an empty normalized ledger shell."""
+    if isinstance(value, dict):
+        return any(_has_meaningful_story_context(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_meaningful_story_context(item) for item in value)
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value not in (None, 0, False)
+
+
+def _has_legacy_character_state(character):
+    """Return whether a card contains mutable state written by the legacy runtime."""
+    if not isinstance(character, dict) or not isinstance(character.get("state"), dict):
+        return False
+    old = character["state"]
+    if any(_clip_memory_text(old.get(key), 220)
+           for key in ("location", "goal", "condition")):
+        return True
+    return bool(_state_list(old.get("knowledge"), 1, 220) or
+                _state_list(old.get("notes"), 1, 220))
+
+
 def _migrate_legacy_story_context(state, characters):
     """Move old per-card scene/knowledge state into the canonical story ledger."""
-    ledger = dict(state or {})
+    source_state = state if isinstance(state, dict) else {}
+    has_legacy_card_state = any(_has_legacy_character_state(c) for c in characters)
+    if not _has_meaningful_story_context(source_state) and not has_legacy_card_state:
+        return {}
+
+    ledger = dict(source_state)
     valid_ids = {str(c.get("id")) for c in characters if isinstance(c, dict) and c.get("id")}
     valid_ids.add("__user__")
     def entries(value):
@@ -443,6 +471,7 @@ normalize_object_entry = _normalize_object_entry
 normalize_scene_participant = _normalize_scene_participant
 normalize_ledger_scene = _normalize_ledger_scene
 migrate_legacy_story_context = _migrate_legacy_story_context
+has_meaningful_story_context = _has_meaningful_story_context
 normalize_persistent_status = _normalize_persistent_status
 canonical_profile_snapshot = _canonical_profile_snapshot
 profile_has_content = _profile_has_content
