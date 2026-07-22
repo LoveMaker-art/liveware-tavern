@@ -73,7 +73,7 @@ Place `updater-skill/` at:
 /opt/data/skills/system/tavern-updater/
 ```
 
-The Agent can then check and install a verified stable release after explicit user confirmation. Any instance whose updater is older than `v1.21.3` must enter this transition through the one-command Bootstrap so the updater is upgraded before it reviews the current runtime allowlist and exact eight-directory skill manifest.
+The Agent can then check and install a verified stable release after explicit user confirmation. Any instance whose updater is older than `v1.22.0` must enter this transition through the one-command Bootstrap so the updater is upgraded before it reviews the current runtime allowlist and exact eight-directory skill manifest.
 
 ## License
 

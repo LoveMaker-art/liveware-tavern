@@ -121,6 +121,8 @@ CREATIVE_SKILL_FILES = {
     "tavern-continuity/SKILL.md",
     "tavern-continuity/references/diagnostics.md",
     "tavern-continuity/references/runtime-continuity.md",
+    "tavern-continuity/references/state-repair.md",
+    "tavern-continuity/scripts/tavern_repair.py",
     "tavern-ops/SKILL.md",
     "tavern-ops/references/i18n.md",
     "tavern-ops/references/liveware-ops.md",
@@ -173,7 +175,7 @@ LEGACY_RUNTIME_FILES = {
     "web/i18n.js",
     "web/index.html",
 }
-RUNTIME_FILES = LEGACY_RUNTIME_FILES | {
+EXPANDED_RUNTIME_FILES = LEGACY_RUNTIME_FILES | {
     "background_jobs.py",
     "continuity_model.py",
     "memory_cache.py",
@@ -187,7 +189,16 @@ RUNTIME_FILES = LEGACY_RUNTIME_FILES | {
     "tts_service.py",
     "web/security.js",
 }
+RUNTIME_FILES = EXPANDED_RUNTIME_FILES | {
+    "generation_service.py",
+    "message_segments.py",
+    "reply_format.py",
+    "runtime_cast_service.py",
+    "story_state_service.py",
+    "turn_plan_service.py",
+}
 EXPANDED_RUNTIME_VERSION = (1, 21, 0)
+MODULAR_RUNTIME_VERSION = (1, 22, 0)
 ALLOWED_MANAGED = {
     "runtime": RUNTIME_FILES,
     "updater": {
@@ -207,6 +218,15 @@ def version_key(value):
     if not match:
         raise RuntimeError(f"unsupported semantic version: {value}")
     return tuple(int(part) for part in match.groups())
+
+
+def runtime_files_for_version(version):
+    key = version_key(version)
+    if key >= MODULAR_RUNTIME_VERSION:
+        return RUNTIME_FILES
+    if key >= EXPANDED_RUNTIME_VERSION:
+        return EXPANDED_RUNTIME_FILES
+    return LEGACY_RUNTIME_FILES
 
 
 def request_json(url):
@@ -343,9 +363,7 @@ def release_material(work, release=None, historical=False):
         area, separator, name = str(path).partition("/")
         if not separator or name not in ALLOWED_MANAGED.get(area, set()):
             raise RuntimeError(f"release attempts to manage a forbidden path: {path}")
-    release_runtime_files = (
-        RUNTIME_FILES if version_key(version) >= EXPANDED_RUNTIME_VERSION else LEGACY_RUNTIME_FILES
-    )
+    release_runtime_files = runtime_files_for_version(version)
     required_runtime = {f"runtime/{name}" for name in release_runtime_files}
     if not required_runtime.issubset(set(managed)):
         raise RuntimeError("release is missing required Tavern system files")
@@ -474,9 +492,7 @@ def bundled_baseline(work, release, version):
     if sha256_file(archive_path) != manifest.get("sha256"):
         raise RuntimeError("bundled historical baseline archive SHA256 mismatch")
     managed = [str(path) for path in (manifest.get("managed_files") or [])]
-    baseline_files = (
-        RUNTIME_FILES if version_key(version) >= EXPANDED_RUNTIME_VERSION else LEGACY_RUNTIME_FILES
-    )
+    baseline_files = runtime_files_for_version(version)
     required = {f"runtime/{name}" for name in baseline_files}
     if set(managed) != required or set(manifest.get("files") or {}) != required:
         raise RuntimeError("bundled historical baseline does not match the runtime allowlist")

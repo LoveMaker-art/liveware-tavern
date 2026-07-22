@@ -1,7 +1,7 @@
 ---
 name: tavern
 description: Route Tavern requests to one specialist workflow（酒馆路由）.
-version: 1.21.8
+version: 1.22.0
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -35,7 +35,7 @@ Routing map:
 | Find, import, create, normalize, audit, or attach a character card | tavern-cards |
 | Create, import, audit, or repair lore and worldbooks | tavern-worldbooks |
 | Recall a story or manage durable story preferences | tavern-story-profile |
-| Diagnose continuity, compression, cast state, prompts, or generation | tavern-continuity |
+| Diagnose or repair continuity, compression, cast state, story_state, runtime_cast, prompts, or generation | tavern-continuity |
 | Configure models, restart, verify, or localize Liveware | tavern-ops |
 | Review or install Tavern frontend/backend updates | tavern-updater |
 

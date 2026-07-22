@@ -43,16 +43,22 @@ runtime/
   background_jobs.py
   card_import.py
   continuity_model.py
+  generation_service.py
   memory_cache.py
+  message_segments.py
   model_registry.py
   production_views.py
+  reply_format.py
   request_security.py
+  runtime_cast_service.py
   runtime_http.py
   server.py
   state_store.py
   story_ledger.py
   story_profile.py
+  story_state_service.py
   tts_service.py
+  turn_plan_service.py
   .tavern-release-version
   web/
     actor.html
@@ -88,7 +94,7 @@ The schema-3 skill manifest declares `install_mode: exact-directories`, the exac
 
 Legacy versions without their own GitHub Release may be represented by two additional assets on the latest stable Release: `baseline-v<VERSION>-manifest.json` and `tavern-baseline-v<VERSION>.tar.gz`. The archive contains only the exact allowlisted runtime tree. Its schema-1 manifest binds the version, archive SHA256, complete file list, every file hash, and embedded `.tavern-release-version` marker. It is a merge base only; it is never installed directly and never contains skills, updater code, credentials, identity state, or Tavern user data.
 
-`v1.21.0` expands the managed runtime allowlist with the refactored service modules and `web/security.js`; `v1.21.3` expands the exact skill manifest from seven to eight directories. Installations carrying an updater older than `v1.21.3` must use the verified one-command Bootstrap, which installs the target release's updater before it reviews or applies the current manifests. Historical releases and the `v1.14.12` bundled baseline continue to validate against their original 4-backend/7-frontend runtime allowlist.
+`v1.21.0` expands the managed runtime allowlist with the first refactored service modules and `web/security.js`; `v1.21.3` expands the exact skill manifest from seven to eight directories; `v1.22.0` adds generation, message-segment, reply-format, turn-plan, story-state, and runtime-cast service modules. Installations carrying an updater older than `v1.22.0` must use the verified one-command Bootstrap, which installs the target release's updater before it reviews or applies the current manifests. Historical releases continue to validate against the allowlist active for their version, and the `v1.14.12` bundled baseline remains restricted to its original 4-backend/7-frontend allowlist.
 
 Only the listed runtime files, the eight official frontend code files, and the exact contents of the eight declared creative-skill directories are release assets. Developer smoke tools and host-side installers are not skill assets. `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral seed template used only when runtime state is absent. `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files, frontend backups, images and other assets, starter/fixture content, runtime state, credentials, and nonofficial skill directories are never release assets. Every regular archive file must appear in its archive's `managed_files` and `files`. Build with `scripts/build_release.py`, then attach all generated assets to a stable GitHub Release tagged `v<version>`.
 

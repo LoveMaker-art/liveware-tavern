@@ -72,6 +72,8 @@ SKILL_FILES = (
     "tavern-continuity/SKILL.md",
     "tavern-continuity/references/diagnostics.md",
     "tavern-continuity/references/runtime-continuity.md",
+    "tavern-continuity/references/state-repair.md",
+    "tavern-continuity/scripts/tavern_repair.py",
     "tavern-ops/SKILL.md",
     "tavern-ops/references/i18n.md",
     "tavern-ops/references/liveware-ops.md",

@@ -18,7 +18,7 @@ python3 /opt/data/skills/system/tavern-updater/scripts/update.py rollback --conf
 ```
 
 Legacy instances without this skill, and installations whose updater is older
-than `v1.21.3`, must use the official one-command Bootstrap from the latest
+than `v1.22.0`, must use the official one-command Bootstrap from the latest
 stable Release. An explicit
 `install-tavern-updater.sh | sh -s -- --apply --confirm` invocation authorizes
 that single Bootstrap run to install the skill, report the plan, and apply it.
@@ -48,7 +48,7 @@ normalization, not conflicts. Unknown local code remains subject to three-way me
 
 - Install only a non-draft, non-prerelease GitHub Release from the configured repository.
 - Require both release assets; verify archive and per-file SHA256 before review.
-- Installations with an updater older than `v1.21.3` must use the documented one-command Bootstrap. This covers the `v1.21.0` runtime-module expansion and the `v1.21.3` eight-skill manifest expansion before release review.
+- Installations with an updater older than `v1.22.0` must use the documented one-command Bootstrap. This covers the `v1.21.0` runtime-module expansion, the `v1.21.3` eight-skill manifest expansion, and the `v1.22.0` generation/continuity service expansion before release review.
 - Never update from `main`, a pull request, an arbitrary URL, or user-provided executable code.
 - Never copy, delete, or publish `/opt/data/tavern-state`, `/opt/data/config.yaml`, `.env`, ClawChat databases, sessions, logs, or credentials.
 - Resolve the installed version's official Release as the trusted merge base. A verified cached official baseline may be used only when its version, managed-file list, and hashes all match. Never treat current instance files as an official baseline.

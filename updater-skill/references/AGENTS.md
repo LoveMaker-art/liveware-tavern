@@ -9,7 +9,7 @@ Use `/opt/data/skills/creative/tavern/SKILL.md` as the lightweight router. Load 
 - `tavern-cards`: search, import, normalize, audit, or attach character cards.
 - `tavern-worldbooks`: create, import, audit, or repair lore and worldbooks.
 - `tavern-story-profile`: recall stories, manage durable story preferences, synchronize model-aggregated play style and taste to `USER.md`, and project bounded model-generated plot-ledger events into `MEMORY.md`.
-- `tavern-continuity`: diagnose compression, dynamic cast state, prompts, or generation.
+- `tavern-continuity`: diagnose or repair compression, dynamic cast state, story_state, runtime_cast, prompts, or generation; always plan before apply for state repair.
 - `tavern-ops`: configure models, restart, verify, or localize Liveware.
 
 Use `/opt/data/skills/system/tavern-updater` for version checks, review, installation, and rollback. Never improvise `git pull` or overwrite the runtime or skill directories.

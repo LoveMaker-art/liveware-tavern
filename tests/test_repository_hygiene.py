@@ -29,7 +29,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             downloaded.append(url)
             name = Path(url).name
             if name == bootstrap.ASSET_MANIFEST:
-                destination.write_text('{"version":"1.21.8"}', encoding="utf-8")
+                destination.write_text('{"version":"1.22.0"}', encoding="utf-8")
             elif name == bootstrap.SKILL_ASSET_MANIFEST:
                 destination.write_text("{}", encoding="utf-8")
             else:
@@ -39,8 +39,8 @@ class RepositoryHygieneTests(unittest.TestCase):
                 bootstrap, "download", side_effect=fake_download):
             release, manifest, *_rest = bootstrap.fetch_release(Path(temp))
 
-        self.assertEqual(manifest["version"], "1.21.8")
-        self.assertEqual(release["tag"], "v1.21.8")
+        self.assertEqual(manifest["version"], "1.22.0")
+        self.assertEqual(release["tag"], "v1.22.0")
         self.assertEqual(len(downloaded), 4)
         self.assertTrue(all("/releases/latest/download/" in url for url in downloaded))
         self.assertTrue(all("api.github.com" not in url for url in downloaded))
@@ -62,10 +62,11 @@ class RepositoryHygieneTests(unittest.TestCase):
         updater_skill = (ROOT / "updater-skill/SKILL.md").read_text(encoding="utf-8")
         updater_source = (ROOT / "updater-skill/scripts/update.py").read_text(encoding="utf-8")
 
-        self.assertIn("older than `v1.21.3`", readme)
-        self.assertRegex(updater_skill, r"older\s+than `v1\.21\.3`")
+        self.assertIn("older than `v1.22.0`", readme)
+        self.assertRegex(updater_skill, r"older\s+than `v1\.22\.0`")
         self.assertNotIn("older than `v1.20.0`", updater_skill)
         self.assertIn("EXPANDED_RUNTIME_VERSION = (1, 21, 0)", updater_source)
+        self.assertIn("MODULAR_RUNTIME_VERSION = (1, 22, 0)", updater_source)
         self.assertNotIn(">= (1, 21, 0)", updater_source)
 
     def test_runtime_release_contains_refactored_modules(self):
@@ -78,15 +79,21 @@ class RepositoryHygieneTests(unittest.TestCase):
         expected = {
             "runtime/background_jobs.py",
             "runtime/continuity_model.py",
+            "runtime/generation_service.py",
             "runtime/memory_cache.py",
+            "runtime/message_segments.py",
             "runtime/model_registry.py",
             "runtime/production_views.py",
+            "runtime/reply_format.py",
             "runtime/request_security.py",
+            "runtime/runtime_cast_service.py",
             "runtime/runtime_http.py",
             "runtime/state_store.py",
             "runtime/story_ledger.py",
             "runtime/story_profile.py",
+            "runtime/story_state_service.py",
             "runtime/tts_service.py",
+            "runtime/turn_plan_service.py",
             "runtime/web/security.js",
         }
         self.assertTrue(expected.issubset(set(manifest["managed_files"])))
@@ -125,6 +132,7 @@ class RepositoryHygieneTests(unittest.TestCase):
                 "skills/tavern/scripts/bringup.sh",
                 "skills/tavern/scripts/provision.sh",
                 "skills/tavern/scripts/tavern_cli.py",
+                "skills/tavern-continuity/scripts/tavern_repair.py",
                 "skills/tavern-story-profile/scripts/profile_memory.py",
                 "skills/tavern-world-visuals/scripts/world_theme.py",
             },
