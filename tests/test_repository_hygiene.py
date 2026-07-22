@@ -29,7 +29,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             downloaded.append(url)
             name = Path(url).name
             if name == bootstrap.ASSET_MANIFEST:
-                destination.write_text('{"version":"1.21.7"}', encoding="utf-8")
+                destination.write_text('{"version":"1.21.8"}', encoding="utf-8")
             elif name == bootstrap.SKILL_ASSET_MANIFEST:
                 destination.write_text("{}", encoding="utf-8")
             else:
@@ -39,8 +39,8 @@ class RepositoryHygieneTests(unittest.TestCase):
                 bootstrap, "download", side_effect=fake_download):
             release, manifest, *_rest = bootstrap.fetch_release(Path(temp))
 
-        self.assertEqual(manifest["version"], "1.21.7")
-        self.assertEqual(release["tag"], "v1.21.7")
+        self.assertEqual(manifest["version"], "1.21.8")
+        self.assertEqual(release["tag"], "v1.21.8")
         self.assertEqual(len(downloaded), 4)
         self.assertTrue(all("/releases/latest/download/" in url for url in downloaded))
         self.assertTrue(all("api.github.com" not in url for url in downloaded))
