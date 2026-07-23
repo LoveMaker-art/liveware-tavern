@@ -1,7 +1,7 @@
 ---
 name: tavern-world
 description: Build Tavern story worlds：推荐、规划、创建与重构。
-version: 1.22.0
+version: 1.22.1
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -24,9 +24,9 @@ Do not use it for deep character-card repair, worldbook trigger repair, long-sto
 1. For a recommendation, run recommend before asking unnecessary preference questions.
 2. For a loose idea, run plan-world or setup-world without apply.
 3. Separate world facts, character facts, persona, and opening scene using the content-modeling reference.
-4. Present one compact plan: world premise, cast, lore, persona direction, and opening hook.
+4. Present one compact conversation card: world premise, user role, cast, core lore, and opening hook. Follow `tavern/references/conversation-cards.md`; do not dump JSON or imitate unavailable buttons.
 5. Create state only after the user confirms the plan.
-6. Verify the resulting world, cast, lore groups, persona, and opening.
+6. Verify the resulting world, cast, lore groups, persona, and opening, then return a compact created-world card with the exact world name.
 
 Commands:
 
@@ -46,6 +46,7 @@ Load only the needed reference:
 - references/event-driven-update.md
 
 Before writing state, load the Tavern shared contract.
+Before presenting a proposed or completed world in chat, load `tavern/references/conversation-cards.md`.
 
 ## Pitfalls
 

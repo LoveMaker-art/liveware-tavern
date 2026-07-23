@@ -1,7 +1,7 @@
 ---
 name: tavern-cards
 description: Manage Tavern character cards：搜索、导入、规范化与审计。
-version: 1.22.0
+version: 1.22.1
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -29,8 +29,9 @@ Do not use it for worldbook trigger design, story compression, or app operations
    - runtime canonicalization guarantees schema shape;
    - semantic fields still require evidence-based review and repair.
 6. Apply `references/field-mapping.md`: align source fields with `profile`, `entry`, and `performance`, and route world lore, Persona, current state, and relationships to their separate owners.
-7. Attach the reusable card to the intended world, producing a world-local runtime copy.
-8. Verify both library source and world-local effective profile.
+7. Present a compact character conversation card before attachment when the user is still choosing or reviewing. Follow `tavern/references/conversation-cards.md`; do not paste raw JSON unless requested.
+8. Attach the reusable card to the intended world, producing a world-local runtime copy.
+9. Verify both library source and world-local effective profile, then state which world received the card.
 
 Commands:
 
@@ -50,6 +51,7 @@ Load only the needed reference:
 - references/field-mapping.md
 
 Before writing state, load the Tavern shared contract.
+Before presenting a character card in chat, load `tavern/references/conversation-cards.md`.
 
 ## Pitfalls
 

@@ -1,7 +1,7 @@
 ---
 name: tavern-world-visuals
 description: "Design, apply, inspect, or reset a per-world Tavern visual theme, including durable user backgrounds, palette, typography, reading width, top title bar, and right-side world panel（世界视觉、背景、字体、配色、主题）."
-version: 1.22.0
+version: 1.22.1
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

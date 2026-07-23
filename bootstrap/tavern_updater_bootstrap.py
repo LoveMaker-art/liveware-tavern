@@ -48,6 +48,7 @@ CREATIVE_SKILL_NAMES = (
 )
 SKILL_FILES = (
     "tavern/SKILL.md",
+    "tavern/references/conversation-cards.md",
     "tavern/references/shared-contract.md",
     "tavern/scripts/bringup.sh",
     "tavern/scripts/provision.sh",

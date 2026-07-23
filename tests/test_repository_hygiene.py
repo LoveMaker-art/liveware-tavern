@@ -147,6 +147,10 @@ class RepositoryHygieneTests(unittest.TestCase):
                 "tavern-story-profile", "tavern-continuity", "tavern-ops",
                 "tavern-world-visuals"):
             self.assertIn(f"skills/{name}/SKILL.md", manifest["managed_files"])
+        self.assertIn(
+            "skills/tavern/references/conversation-cards.md",
+            manifest["managed_files"],
+        )
         with tarfile.open(archive, "r:gz") as package:
             names = {member.name for member in package.getmembers() if member.isfile()}
         self.assertFalse(any(name.endswith("/SOUL.md") for name in names))
@@ -154,6 +158,19 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn("skills/tavern/scripts/smoke.py", names)
         self.assertNotIn("skills/tavern/scripts/make_test_card.py", names)
         self.assertEqual(set(manifest["managed_files"]), names)
+
+    def test_all_creative_skill_versions_match_release(self):
+        release_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        for skill_file in sorted((ROOT / "creative-skills").glob("*/SKILL.md")):
+            version_line = next(
+                line for line in skill_file.read_text(encoding="utf-8").splitlines()
+                if line.startswith("version:")
+            )
+            self.assertEqual(
+                version_line.split(":", 1)[1].strip(),
+                release_version,
+                skill_file.relative_to(ROOT).as_posix(),
+            )
 
     def test_release_contains_one_canonical_agents_file(self):
         canonical = ROOT / "updater-skill/references/AGENTS.md"
