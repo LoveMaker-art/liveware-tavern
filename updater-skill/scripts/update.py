@@ -88,13 +88,16 @@ HISTORICAL_SKILL_FILES = {
 CREATIVE_SKILL_NAMES = (
     "tavern",
     "tavern-world",
-    "tavern-cards",
-    "tavern-worldbooks",
     "tavern-story-profile",
     "tavern-continuity",
     "tavern-ops",
     "tavern-world-visuals",
 )
+OBSOLETE_CREATIVE_SKILL_NAMES = (
+    "tavern-cards",
+    "tavern-worldbooks",
+)
+SAFE_CREATIVE_SKILL_NAMES = CREATIVE_SKILL_NAMES + OBSOLETE_CREATIVE_SKILL_NAMES
 CREATIVE_SKILL_FILES = {
     "tavern/SKILL.md",
     "tavern/references/conversation-cards.md",
@@ -103,19 +106,18 @@ CREATIVE_SKILL_FILES = {
     "tavern/scripts/provision.sh",
     "tavern/scripts/tavern_cli.py",
     "tavern-world/SKILL.md",
+    "tavern-world/references/complete-world-workflow.md",
+    "tavern-world/references/card-authoring.md",
+    "tavern-world/references/card-localization.md",
+    "tavern-world/references/card-workflow.md",
     "tavern-world/references/content-modeling.md",
     "tavern-world/references/event-driven-update.md",
+    "tavern-world/references/field-mapping.md",
+    "tavern-world/references/lore-audit.md",
     "tavern-world/references/recommendation-planning.md",
+    "tavern-world/references/worldbook-authoring.md",
     "tavern-world/references/world-expansion.md",
     "tavern-world/references/world-rebuild.md",
-    "tavern-cards/SKILL.md",
-    "tavern-cards/references/card-authoring.md",
-    "tavern-cards/references/field-mapping.md",
-    "tavern-cards/references/card-localization.md",
-    "tavern-cards/references/card-workflow.md",
-    "tavern-worldbooks/SKILL.md",
-    "tavern-worldbooks/references/lore-audit.md",
-    "tavern-worldbooks/references/worldbook-authoring.md",
     "tavern-story-profile/SKILL.md",
     "tavern-story-profile/references/actor-memory.md",
     "tavern-story-profile/scripts/profile_memory.py",
@@ -131,6 +133,16 @@ CREATIVE_SKILL_FILES = {
     "tavern-world-visuals/SKILL.md",
     "tavern-world-visuals/references/theme-schema.md",
     "tavern-world-visuals/scripts/world_theme.py",
+}
+LEGACY_SPLIT_SKILL_FILES = {
+    "tavern-cards/SKILL.md",
+    "tavern-cards/references/card-authoring.md",
+    "tavern-cards/references/field-mapping.md",
+    "tavern-cards/references/card-localization.md",
+    "tavern-cards/references/card-workflow.md",
+    "tavern-worldbooks/SKILL.md",
+    "tavern-worldbooks/references/lore-audit.md",
+    "tavern-worldbooks/references/worldbook-authoring.md",
 }
 LEGACY_SKILL_FILES = {
     "SKILL.md",
@@ -314,7 +326,8 @@ def canonical_skill_managed(skill_manifest):
 
 def validate_split_skill_managed(skill_managed, historical=False):
     actual = set(skill_managed)
-    allowed = {"skills/" + name for name in CREATIVE_SKILL_FILES}
+    allowed_files = CREATIVE_SKILL_FILES | (LEGACY_SPLIT_SKILL_FILES if historical else set())
+    allowed = {"skills/" + name for name in allowed_files}
     if historical:
         directories = {
             path.split("/", 2)[1]
@@ -324,7 +337,7 @@ def validate_split_skill_managed(skill_managed, historical=False):
         required = {f"skills/{name}/SKILL.md" for name in directories}
         if (
             "tavern" not in directories
-            or not directories.issubset(set(CREATIVE_SKILL_NAMES))
+            or not directories.issubset(set(SAFE_CREATIVE_SKILL_NAMES))
             or not required.issubset(actual)
             or not actual.issubset(allowed)
         ):
@@ -399,7 +412,7 @@ def release_material(work, release=None, historical=False):
                 bool(directories)
                 and len(directories) == len(set(directories))
                 and "tavern" in directories
-                and set(directories).issubset(set(CREATIVE_SKILL_NAMES))
+                and set(directories).issubset(set(SAFE_CREATIVE_SKILL_NAMES))
             )
             if (
                 skill_manifest.get("install_mode") != "exact-directories"
@@ -537,11 +550,12 @@ def tree_hashes(root):
     return {name: sha256_file(path) for name, path in sorted(tree_files(root).items())}
 
 
-def official_skill_hashes(root=None):
+def official_skill_hashes(root=None, include_obsolete=False):
     root = root or TARGETS["skills"]
+    names = SAFE_CREATIVE_SKILL_NAMES if include_obsolete else CREATIVE_SKILL_NAMES
     return {
         name: tree_hashes(root / name)
-        for name in CREATIVE_SKILL_NAMES
+        for name in names
     }
 
 
@@ -567,7 +581,7 @@ def managed_fingerprint(managed_files, obsolete_files=None, include_agents=True)
         area, _, name = key.partition("/")
         path = TARGETS[area] / name
         payload[key] = sha256_file(path) if path.is_file() else None
-    payload["skills/exact-directories"] = official_skill_hashes()
+    payload["skills/exact-directories"] = official_skill_hashes(include_obsolete=True)
     if include_agents:
         payload["agents/AGENTS.md"] = sha256_file(AGENTS_PATH) if AGENTS_PATH.is_file() else None
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -958,6 +972,8 @@ def replace_official_skills(staged_root):
             target = TARGETS["skills"] / name
             remove_path(target)
             os.replace(pending / name, target)
+        for name in OBSOLETE_CREATIVE_SKILL_NAMES:
+            remove_path(TARGETS["skills"] / name)
     finally:
         remove_path(pending)
     installed = official_skill_hashes()
@@ -1001,7 +1017,7 @@ def backup_current(version, managed_files, obsolete_files=None):
     if BASELINE.is_dir():
         shutil.copytree(BASELINE, backup / "baseline")
     skill_directories_present = []
-    for name in CREATIVE_SKILL_NAMES:
+    for name in SAFE_CREATIVE_SKILL_NAMES:
         current = TARGETS["skills"] / name
         if current.exists() and not current.is_dir():
             raise RuntimeError(f"official skill path is not a directory: {current}")
@@ -1078,7 +1094,7 @@ def restore(backup):
             prune_empty_parents(target, TARGETS["updater"])
     if metadata.get("schema") == 2:
         present = set(metadata.get("skill_directories_present") or [])
-        for name in CREATIVE_SKILL_NAMES:
+        for name in SAFE_CREATIVE_SKILL_NAMES:
             target = TARGETS["skills"] / name
             remove_path(target)
             if name in present:
@@ -1357,13 +1373,13 @@ def command_report(args):
             ]
         ),
         "details": bool(args.details),
-        "skills_policy": "The eight official Tavern skill directories are backed up and replaced exactly; every other skill directory is excluded.",
+        "skills_policy": "The six official Tavern skill directories are backed up and replaced exactly; the two obsolete construction-skill directories are deleted and never installed or registered; every other skill directory is excluded.",
         "excluded": [
             "runtime/web files outside the eight official managed code files",
             "runtime/assets",
             "runtime identity/persona files other than the neutral actor_self.md seed template",
             "starter and fixture content",
-            "every skill directory outside the eight exact official Tavern skill directories",
+            "every skill directory outside the six exact official Tavern skill directories and two explicit obsolete directories scheduled for deletion",
             "/opt/data/tavern-state",
             "credentials and model keys",
         ],

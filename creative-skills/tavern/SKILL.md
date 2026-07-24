@@ -1,7 +1,7 @@
 ---
 name: tavern
 description: Route Tavern requests to one specialist workflow（酒馆路由）.
-version: 1.22.1
+version: 1.23.1
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -30,10 +30,8 @@ Routing map:
 
 | User outcome | Specialist |
 | --- | --- |
-| Recommend, plan, create, expand, or rebuild a world | tavern-world |
+| Recommend, find, import, create, localize, expand, rebuild, or repair a world, its character cards, worldbooks, Persona, or opening | tavern-world |
 | Import a world image or design, inspect, apply, or reset a world theme | tavern-world-visuals |
-| Find, import, create, normalize, audit, or attach a character card | tavern-cards |
-| Create, import, audit, or repair lore and worldbooks | tavern-worldbooks |
 | Recall a story or manage durable story preferences | tavern-story-profile |
 | Diagnose or repair continuity, compression, cast state, story_state, runtime_cast, prompts, or generation | tavern-continuity |
 | Configure models, restart, verify, or localize Liveware | tavern-ops |
@@ -60,11 +58,11 @@ Confirm the skill index exposes these independent names:
 
     tavern
     tavern-world
-    tavern-cards
-    tavern-worldbooks
     tavern-story-profile
     tavern-continuity
     tavern-ops
     tavern-world-visuals
 
-Test natural-language routing with one request from each row of the routing map. Only the selected specialist should be loaded.
+Test natural-language routing with one request from each row of the routing map.
+Only the selected specialist should be loaded. Card and worldbook requests must
+load `tavern-world`, not a second construction skill.

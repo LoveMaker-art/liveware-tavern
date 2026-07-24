@@ -26,8 +26,10 @@ For each canonical section, a non-empty top-level canonical value takes preceden
 | `system_prompt` | `performance.system_prompt` | Character-specific identity, voice, or knowledge constraints only. |
 | `post_history_instructions` | `performance.post_history_instructions` | Rare persistent character constraint. |
 | `alternate_greetings` | top-level `alternate_greetings[]` | Preserve as alternate openings. |
+| `group_only_greetings` | top-level `group_only_greetings[]` | V3 multi-character opening alternatives; use only when the world has multiple characters and no explicit opening overrides them. |
 | `character_book` | standalone worldbook on attachment | Character-local lore may travel with the card; global lore must be separated. |
-| `tags`, `creator`, `character_version`, unknown `extensions` | preserved source metadata | Do not discard or reinterpret them as character facts. |
+| `assets`, `creator_notes_multilingual`, `source`, creation/modification dates | preserved V3 metadata | Keep for provenance and future presentation; do not inject into story generation by default. |
+| `tags`, `creator`, `character_version`, unknown `extensions` and unknown root/data keys | preserved source metadata | Do not discard or reinterpret them as character facts. |
 
 ## Structured Description Sections
 

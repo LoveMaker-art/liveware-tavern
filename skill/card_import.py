@@ -1,20 +1,28 @@
-"""card_import — 把一张酒馆角色卡(V2/V3 PNG)解析成 tavern 内部 card JSON。
+"""card_import — 把 V1/V2/V3 角色卡解析成 Tavern 内部统一结构。
 
-纯 stdlib：读 PNG 的 tEXt chunk，V2 关键字 `chara`、V3 关键字 `ccv3`，chunk 数据是
-`keyword\\0base64(json)`，base64 解出来是角色卡 JSON。优先 V3(ccv3)，回落 V2(chara)。
+纯 stdlib：支持裸 V1 JSON、V2/V3 JSON，以及 PNG/APNG 中的 tEXt、zTXt、iTXt
+角色卡元数据。V3 关键字 `ccv3` 优先，回落到兼容关键字 `chara`。
 
-铁律：**不丢未知键**(V2 spec「Character editors MUST NOT destroy unknown key-value pairs」)，
-整份 data + 顶层 extensions 原样带走。
+铁律：不丢未知键。标准字段进入稳定结构，厂商扩展和未知字段保存在
+`source_unknown`，供未来迁移或导出使用，不参与生成提示词。
 """
 import base64
+import copy
+import io
 import json
 import struct
 import hashlib
 import re
+import zlib
+import zipfile
+from pathlib import PurePosixPath
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 MAX_PNG_BYTES = 5 * 1024 * 1024
 MAX_METADATA_BYTES = 2 * 1024 * 1024
+MAX_CHARX_BYTES = 20 * 1024 * 1024
+MAX_CHARX_EXPANDED_BYTES = 50 * 1024 * 1024
+MAX_CHARX_FILES = 128
 
 
 def _iter_png_chunks(raw: bytes):
@@ -43,6 +51,20 @@ def _read_text_chunks(raw: bytes) -> dict:
         if ctype == b"tEXt":
             kw, _, txt = data.partition(b"\x00")
             out[kw.decode("latin-1")] = txt.decode("latin-1")
+        elif ctype == b"zTXt":
+            try:
+                kw, rest = data.split(b"\x00", 1)
+                if not rest or rest[0] != 0:
+                    continue
+                decompressor = zlib.decompressobj()
+                decoded = decompressor.decompress(rest[1:], MAX_METADATA_BYTES + 1)
+                if len(decoded) > MAX_METADATA_BYTES or decompressor.unconsumed_tail:
+                    raise ValueError("角色卡压缩元数据解压后过大")
+                if not decompressor.eof:
+                    raise ValueError("角色卡压缩元数据不完整")
+                out.setdefault(kw.decode("latin-1"), decoded.decode("latin-1"))
+            except Exception:
+                continue
         elif ctype == b"iTXt":
             # keyword\0 compflag\0 compmethod\0 langtag\0 transkw\0 text
             try:
@@ -54,8 +76,6 @@ def _read_text_chunks(raw: bytes) -> dict:
                 _lang, rest = rest.split(b"\x00", 1)
                 _trans, rest = rest.split(b"\x00", 1)
                 if comp_flag == 1:
-                    import zlib
-
                     decompressor = zlib.decompressobj()
                     decoded = decompressor.decompress(rest, MAX_METADATA_BYTES + 1)
                     if len(decoded) > MAX_METADATA_BYTES or decompressor.unconsumed_tail:
@@ -97,8 +117,93 @@ def _decode_card_payload(text_chunks: dict) -> dict:
 _STR_FIELDS = (
     "name", "description", "personality", "scenario",
     "first_mes", "mes_example", "system_prompt", "post_history_instructions",
-    "creator", "character_version", "nickname",
+    "creator", "character_version", "nickname", "creator_notes",
 )
+
+_FIELD_ALIASES = {
+    "name": ("char_name",),
+    "description": ("char_persona", "persona"),
+    "scenario": ("world_scenario",),
+    "first_mes": ("char_greeting", "greeting"),
+    "mes_example": ("example_dialogue",),
+}
+
+_STANDARD_DATA_FIELDS = {
+    *_STR_FIELDS,
+    "alternate_greetings", "tags", "character_book", "extensions", "source",
+    "assets", "creator_notes_multilingual", "group_only_greetings",
+    "creation_date", "modification_date", "profile", "entry", "performance",
+}
+for _aliases in _FIELD_ALIASES.values():
+    _STANDARD_DATA_FIELDS.update(_aliases)
+
+
+def _field(data, name, default=""):
+    if name in data:
+        return data.get(name)
+    for alias in _FIELD_ALIASES.get(name, ()):
+        if alias in data:
+            return data.get(alias)
+    return default
+
+
+def _array(value):
+    if isinstance(value, list):
+        return copy.deepcopy(value)
+    if value in (None, ""):
+        return []
+    return [copy.deepcopy(value)]
+
+
+def detect_card_format(card_obj: dict) -> dict:
+    """Return a stable format description without trusting the filename."""
+    if not isinstance(card_obj, dict):
+        raise ValueError("角色卡 JSON 根节点必须是对象")
+    spec = str(card_obj.get("spec") or "").strip().lower()
+    version = str(card_obj.get("spec_version") or "").strip()
+    wrapped = isinstance(card_obj.get("data"), dict)
+    if spec == "chara_card_v3" or version.startswith("3"):
+        generation = 3
+    elif spec == "chara_card_v2" or version.startswith("2") or wrapped:
+        generation = 2
+    else:
+        generation = 1
+    return {
+        "generation": generation,
+        "format": f"v{generation}",
+        "spec": spec or ("tavern_card_v1" if generation == 1 else f"chara_card_v{generation}"),
+        "spec_version": version or (f"{generation}.0" if generation > 1 else "1"),
+        "wrapped": wrapped,
+    }
+
+
+def _source_unknown(card_obj, data):
+    root_unknown = {}
+    if data is not card_obj:
+        root_unknown = {
+            key: copy.deepcopy(value)
+            for key, value in card_obj.items()
+            if key not in {"spec", "spec_version", "data"}
+        }
+    data_unknown = {
+        key: copy.deepcopy(value)
+        for key, value in data.items()
+        if key not in _STANDARD_DATA_FIELDS
+    }
+    legacy = {
+        key: copy.deepcopy(data[key])
+        for aliases in _FIELD_ALIASES.values()
+        for key in aliases
+        if key in data
+    }
+    result = {}
+    if root_unknown:
+        result["root"] = root_unknown
+    if data_unknown:
+        result["data"] = data_unknown
+    if legacy:
+        result["legacy"] = legacy
+    return result
 
 
 def _text(value, limit=4000):
@@ -317,21 +422,35 @@ def canonical_performance(data: dict) -> dict:
 
 
 def normalize_card(card_obj: dict) -> dict:
-    """V1/V2/V3 → tavern 内部统一形态。保留 extensions + 原始 data。"""
+    """V1/V2/V3 → Tavern 内部统一形态，并保留未知源字段。"""
+    format_info = detect_card_format(card_obj)
     data = card_obj.get("data") if isinstance(card_obj.get("data"), dict) else card_obj
-    out = {"spec": card_obj.get("spec", "chara_card_v2")}
+    out = {
+        "spec": card_obj.get("spec") or format_info["spec"],
+        "spec_version": card_obj.get("spec_version") or format_info["spec_version"],
+        "source_format": format_info["format"],
+    }
     for f in _STR_FIELDS:
-        out[f] = data.get(f, "") or ""
-    out["alternate_greetings"] = data.get("alternate_greetings") or []
-    out["tags"] = data.get("tags") or []
+        out[f] = _field(data, f, "") or ""
+    if not str(out["name"]).strip():
+        raise ValueError("角色卡缺少 name/char_name，无法识别为有效 V1/V2/V3 卡")
+    out["alternate_greetings"] = _array(data.get("alternate_greetings"))
+    out["group_only_greetings"] = _array(data.get("group_only_greetings"))
+    out["tags"] = _array(data.get("tags"))
     # 出处标记:import_card(PNG/Chub)→「chub」、import_card_json(原创/粘贴)→「agent」,
     # 由 server 的事件入口按导入渠道打(normalize_card 路径无关、分不清渠道)。卡 JSON 自带
     # 的 source 先保留(不丢未知键),server 再按渠道覆盖。显示优先 creator,无 creator 才看 source。
-    out["source"] = data.get("source") or ""
+    out["source"] = ""
+    out["source_urls"] = _array(data.get("source"))
+    out["assets"] = _array(data.get("assets"))
+    out["creator_notes_multilingual"] = data.get("creator_notes_multilingual") or {}
+    out["creation_date"] = data.get("creation_date")
+    out["modification_date"] = data.get("modification_date")
     # 世界书可能内嵌在卡里(character_book)——带走，建剧组时可转成独立 worldbook
     if isinstance(data.get("character_book"), dict):
         out["character_book"] = data["character_book"]
-    out["extensions"] = data.get("extensions") or {}  # 铁律：不丢未知键
+    out["extensions"] = copy.deepcopy(data.get("extensions") or {})
+    out["source_unknown"] = _source_unknown(card_obj, data)
     out["profile"] = canonical_profile(data)
     out["entry"] = canonical_entry(data)
     out["performance"] = canonical_performance(data)
@@ -345,13 +464,78 @@ def normalize_card(card_obj: dict) -> dict:
 def import_card_bytes(png_bytes: bytes) -> dict:
     if len(png_bytes) > MAX_PNG_BYTES:
         raise ValueError("角色卡 PNG 不能超过 5 MB")
-    return normalize_card(_decode_card_payload(_read_text_chunks(png_bytes)))
+    chunks = _read_text_chunks(png_bytes)
+    card = normalize_card(_decode_card_payload(chunks))
+    embedded_assets = []
+    for key, value in chunks.items():
+        if not key.startswith("chara-ext-asset_:"):
+            continue
+        path = key.split(":", 1)[1].strip()
+        try:
+            size = len(base64.b64decode(value.encode("latin-1"), validate=True))
+        except Exception:
+            size = 0
+        embedded_assets.append({"path": path, "size": size, "container": "png"})
+    if embedded_assets:
+        card["embedded_assets"] = embedded_assets
+    card["source_container"] = "png"
+    return card
 
 
 def import_card_b64(png_b64: str) -> dict:
     if len(str(png_b64 or "")) > (MAX_PNG_BYTES * 4 // 3) + 16:
         raise ValueError("角色卡 PNG 不能超过 5 MB")
     return import_card_bytes(base64.b64decode(png_b64, validate=True))
+
+
+def import_card_archive_bytes(archive_bytes: bytes) -> dict:
+    """Read a V3 CHARX archive without extracting untrusted files to disk."""
+    if len(archive_bytes) > MAX_CHARX_BYTES:
+        raise ValueError("CHARX 角色卡不能超过 20 MB")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("不是有效的 CHARX 文件") from exc
+    with archive:
+        files = [item for item in archive.infolist() if not item.is_dir()]
+        if len(files) > MAX_CHARX_FILES:
+            raise ValueError("CHARX 文件数量过多")
+        total = 0
+        for item in files:
+            path = PurePosixPath(item.filename)
+            if path.is_absolute() or ".." in path.parts or "\\" in item.filename:
+                raise ValueError("CHARX 包含不安全路径")
+            total += item.file_size
+            if total > MAX_CHARX_EXPANDED_BYTES:
+                raise ValueError("CHARX 解压后内容过大")
+        card_info = next((item for item in files if item.filename == "card.json"), None)
+        if not card_info:
+            raise ValueError("CHARX 根目录缺少 card.json")
+        if card_info.file_size > MAX_METADATA_BYTES:
+            raise ValueError("CHARX card.json 过大")
+        try:
+            card_obj = json.loads(archive.read(card_info).decode("utf-8-sig"))
+        except Exception as exc:
+            raise ValueError("CHARX card.json 不是有效 JSON") from exc
+        card = normalize_card(card_obj)
+        card["source_container"] = "charx"
+        card["embedded_assets"] = [
+            {
+                "path": item.filename,
+                "size": item.file_size,
+                "compressed_size": item.compress_size,
+                "container": "charx",
+            }
+            for item in files
+            if item.filename != "card.json"
+        ]
+    return card
+
+
+def import_card_archive_b64(archive_b64: str) -> dict:
+    if len(str(archive_b64 or "")) > (MAX_CHARX_BYTES * 4 // 3) + 16:
+        raise ValueError("CHARX 角色卡不能超过 20 MB")
+    return import_card_archive_bytes(base64.b64decode(archive_b64, validate=True))
 
 
 if __name__ == "__main__":

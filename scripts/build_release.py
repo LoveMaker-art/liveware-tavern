@@ -74,8 +74,6 @@ LEGACY_BASELINE_RUNTIME_FILES = tuple(LEGACY_BACKEND_FILES) + tuple(
 CREATIVE_SKILL_NAMES = (
     "tavern",
     "tavern-world",
-    "tavern-cards",
-    "tavern-worldbooks",
     "tavern-story-profile",
     "tavern-continuity",
     "tavern-ops",

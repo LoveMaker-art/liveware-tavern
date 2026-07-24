@@ -143,7 +143,7 @@ const STOP_SVG = '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" 
 const SLIDERS_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h9M20 8h0M4 16h1M12 16h8"/><circle cx="16" cy="8" r="2.2"/><circle cx="8" cy="16" r="2.2"/></svg>';
 const SPEAKER_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>';
 const USER_PLUS_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19a6 6 0 0 0-12 0"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/></svg>';
-const CLAWCHAT_OFFICIAL_DEVELOPER_ID = "usr_01KQE596Y0FSMVTPQKW48SKXRF";
+const CLAWCHAT_OFFICIAL_DEVELOPER_ID = "usr_01KPSPHRDQF9HARGBKBDCF5X6H";
 const PAUSE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
 const speechState = { audio: null, button: null, url: "", controller: null };
 

@@ -360,11 +360,15 @@ class UpdaterMergeTests(unittest.TestCase):
         self.write_official_skill_stage(staged)
         self.write(UPDATER.TARGETS["skills"], "tavern/SKILL.md", "old router\n")
         self.write(UPDATER.TARGETS["skills"], "tavern/references/legacy.md", "stale\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern-cards/SKILL.md", "retired cards\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern-worldbooks/SKILL.md", "retired lore\n")
         self.write(UPDATER.TARGETS["skills"], "custom-skill/SKILL.md", "custom\n")
 
         UPDATER.replace_official_skills(staged)
 
         self.assertFalse((UPDATER.TARGETS["skills"] / "tavern/references/legacy.md").exists())
+        self.assertFalse((UPDATER.TARGETS["skills"] / "tavern-cards").exists())
+        self.assertFalse((UPDATER.TARGETS["skills"] / "tavern-worldbooks").exists())
         self.assertEqual((UPDATER.TARGETS["skills"] / "custom-skill/SKILL.md").read_text(), "custom\n")
         self.assertEqual(UPDATER.official_skill_hashes(), UPDATER.official_skill_hashes(staged))
 
@@ -412,6 +416,8 @@ class UpdaterMergeTests(unittest.TestCase):
         managed = ["runtime/server.py"] + ["skills/" + name for name in UPDATER.CREATIVE_SKILL_FILES]
         self.write(UPDATER.TARGETS["runtime"], "server.py", "runtime\n")
         self.write(UPDATER.TARGETS["skills"], "tavern/scripts/smoke.py", "legacy\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern-cards/SKILL.md", "old card skill\n")
+        self.write(UPDATER.TARGETS["skills"], "tavern-worldbooks/SKILL.md", "old lore skill\n")
         self.write(UPDATER.TARGETS["skills"], "custom-skill/SKILL.md", "custom\n")
         self.write(self.root / "installed", "AGENTS.md", "local agents\n")
         backup = UPDATER.backup_current("1.19.7", managed)
@@ -423,6 +429,8 @@ class UpdaterMergeTests(unittest.TestCase):
         UPDATER.restore(backup)
 
         self.assertEqual((UPDATER.TARGETS["skills"] / "tavern/scripts/smoke.py").read_text(), "legacy\n")
+        self.assertEqual((UPDATER.TARGETS["skills"] / "tavern-cards/SKILL.md").read_text(), "old card skill\n")
+        self.assertEqual((UPDATER.TARGETS["skills"] / "tavern-worldbooks/SKILL.md").read_text(), "old lore skill\n")
         self.assertFalse((UPDATER.TARGETS["skills"] / "tavern-world").exists())
         self.assertEqual((UPDATER.TARGETS["skills"] / "custom-skill/SKILL.md").read_text(), "custom\n")
         self.assertEqual(UPDATER.AGENTS_PATH.read_text(), "local agents\n")

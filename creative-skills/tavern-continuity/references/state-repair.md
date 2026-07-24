@@ -23,8 +23,8 @@ Use `cast-fix` for:
 
 Use another skill instead:
 
-- worldbook trigger/key pollution → `tavern-worldbooks`;
-- reusable card identity/personality/source template → `tavern-cards`;
+- worldbook trigger/key pollution → `tavern-world`;
+- reusable card identity/personality/source template → `tavern-world`;
 - user acting taste or durable preference → `tavern-story-profile`;
 - output format or language protocol → runtime engineering / `tavern-continuity`;
 - model timeout/configuration → `tavern-ops`.

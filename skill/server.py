@@ -117,6 +117,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javasc
 DESTRUCTIVE_CONFIRM_TTL = 600
 _destructive_confirmations = {}
 _destructive_confirmation_lock = threading.Lock()
+_world_build_lock = threading.RLock()
 
 
 def _prepare_destructive_confirmation(action, resource_id):
@@ -153,7 +154,7 @@ DEFAULT_IDENTITY = {
     "tavern_name": "酒馆",
     "actor_name": "故事档案",
     "persona_name_en": "Curator",
-    "tavern_name_en": "Tarven",
+    "tavern_name_en": "Tavern",
     "actor_name_en": "Story Profile",
 }
 
@@ -217,7 +218,7 @@ def app_identity():
     if nickname:
         identity["persona_name"] = nickname
         identity["persona_name_en"] = nickname
-    identity["tavern_name_en"] = "Tarven"
+    identity["tavern_name_en"] = "Tavern"
     identity["actor_name_en"] = "Story Profile"
     return identity
 
@@ -902,9 +903,14 @@ def _production_worldbooks(pid):
 
 
 
-def _msg(role, text, cards=None):
-    msg = {"id": secrets.token_hex(4), "role": role, "text": text,
-           "ts": int(time.time()), "alts": [text], "active_alt": 0}
+def _msg(role, text, cards=None, alternatives=None):
+    alts = []
+    for value in [text, *(alternatives or [])]:
+        value = str(value or "").strip()
+        if value and value not in alts:
+            alts.append(value)
+    msg = {"id": secrets.token_hex(4), "role": role, "text": str(text or "").strip(),
+           "ts": int(time.time()), "alts": alts or [str(text or "")], "active_alt": 0}
     return _set_message_segments(msg, cards)
 
 
@@ -936,11 +942,16 @@ def _raise_if_generation_cancelled(ev):
 
 
 # ---------- event handlers ----------
-def _store_card(card, source=""):
+def _store_card(card, source="", source_url=""):
     # source = 导入渠道(出处):chub=导入真卡 / agent=原创。creator(卡作者)仍透传,
     # 信息面板优先显 creator,无 creator 才回落 source(Task 2 角色卡出处)。
     if source:
         card["source"] = source
+    if source_url:
+        urls = card.get("source_urls") if isinstance(card.get("source_urls"), list) else []
+        if source_url not in urls:
+            urls.append(source_url)
+        card["source_urls"] = urls
     card["profile"] = card_import.canonical_profile(card)
     card["entry"] = card_import.canonical_entry(card)
     card["performance"] = card_import.canonical_performance(card)
@@ -957,15 +968,72 @@ def _store_card(card, source=""):
     return {"card": card}
 
 
+def _card_import_inspection(card):
+    warnings = []
+    if len(str(card.get("description") or "").strip()) < 40:
+        warnings.append("角色描述缺失或过短")
+    if not str(card.get("first_mes") or "").strip():
+        warnings.append("缺少开场白")
+    if "{{user}}" in json.dumps(card, ensure_ascii=False):
+        warnings.append("包含 {{user}}，建世界时必须核对并归入我的角色")
+    if card.get("character_book"):
+        warnings.append("包含内嵌世界书，导入后会拆成可复用世界书")
+    return {
+        "format": card.get("source_format") or "unknown",
+        "spec": card.get("spec") or "",
+        "spec_version": card.get("spec_version") or "",
+        "name": card.get("name") or "",
+        "creator": card.get("creator") or "",
+        "alternate_greetings": len(card.get("alternate_greetings") or []),
+        "group_only_greetings": len(card.get("group_only_greetings") or []),
+        "embedded_worldbook_entries": len(
+            ((card.get("character_book") or {}).get("entries") or [])
+        ),
+        "assets": len(card.get("assets") or []) + len(card.get("embedded_assets") or []),
+        "container": card.get("source_container") or "json",
+        "unknown_root_fields": sorted(((card.get("source_unknown") or {}).get("root") or {}).keys()),
+        "unknown_data_fields": sorted(((card.get("source_unknown") or {}).get("data") or {}).keys()),
+        "warnings": warnings,
+    }
+
+
+def ev_inspect_card(ev):
+    if isinstance(ev.get("card"), dict):
+        card = card_import.normalize_card(ev["card"])
+    elif ev.get("png_base64"):
+        card = card_import.import_card_b64(str(ev["png_base64"]))
+    elif ev.get("charx_base64"):
+        card = card_import.import_card_archive_b64(str(ev["charx_base64"]))
+    else:
+        raise ValueError("inspect_card requires card JSON, png_base64, or charx_base64")
+    return {"inspection": _card_import_inspection(card)}
+
+
 def ev_import_card(ev):
     # PNG 路径：吃一张 V2/V3 角色卡 PNG（base64）。真实卡走这条，编码天然正确。出处=chub。
-    return _store_card(card_import.import_card_b64(ev["png_base64"]), "chub")
+    return _store_card(
+        card_import.import_card_b64(ev["png_base64"]),
+        ev.get("source") or "chub",
+        str(ev.get("source_url") or "").strip(),
+    )
 
 
 def ev_import_card_json(ev):
     # JSON 路径：吃一份卡 JSON（V1/V2/V3 形态，带 data 包或裸 obj 都行）。
     # 给 agent「原创/自造」角色卡用——不手搓 PNG，绕开 btoa(UTF-8) 把中文搞乱码的坑。出处=agent。
-    return _store_card(card_import.normalize_card(ev["card"]), ev.get("source") or "agent")
+    return _store_card(
+        card_import.normalize_card(ev["card"]),
+        ev.get("source") or "agent",
+        str(ev.get("source_url") or "").strip(),
+    )
+
+
+def ev_import_card_archive(ev):
+    return _store_card(
+        card_import.import_card_archive_b64(ev["charx_base64"]),
+        ev.get("source") or "external",
+        str(ev.get("source_url") or "").strip(),
+    )
 
 
 def ev_create_card(ev):
@@ -1131,8 +1199,13 @@ def ev_add_lore(ev):
             "content": text,
             "constant": constant,
             "keys": [] if constant else keys,
-            "position": "before_char",
-            "category": "setting",
+            "secondary_keys": ev.get("secondary_keys") or [],
+            "exclusion_keys": ev.get("exclusion_keys") or [],
+            "priority": ev.get("priority", 5),
+            "position": ev.get("position") or "before_char",
+            "category": ev.get("category") or "setting",
+            "known_by": ev.get("known_by") or [],
+            "hidden_from": ev.get("hidden_from") or [],
         }, text, cards)
     else:
         entry = _classify_lore_entry(text, p, cards)
@@ -1268,6 +1341,25 @@ def ev_delete_lore(ev):
                 "deleted": deleted.get("id") or removed["index"]}
 
 
+def _card_opening_candidates(cards):
+    cards = [card for card in (cards or []) if isinstance(card, dict)]
+    values = []
+    if len(cards) > 1:
+        for card in cards:
+            group = card.get("group_only_greetings") or []
+            values.extend(group if isinstance(group, list) else [group])
+    if cards:
+        values.append(cards[0].get("first_mes"))
+        alternates = cards[0].get("alternate_greetings") or []
+        values.extend(alternates if isinstance(alternates, list) else [alternates])
+    result = []
+    for value in values:
+        value = str(value or "").strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
 def ev_create_production(ev):
     requested = ev.get("card_ids") or [ev.get("card_id")]
     card_ids = []
@@ -1292,14 +1384,17 @@ def ev_create_production(ev):
                 wid = "wb_" + c["id"]
                 if wid not in wbs:
                     wbs.append(wid)
-    greeting = ev.get("first_mes") or card.get("first_mes") or ""
+    explicit_greeting = str(ev.get("first_mes") or "").strip()
+    card_greetings = _card_opening_candidates(cards)
+    greeting = explicit_greeting or (card_greetings[0] if card_greetings else "")
+    greeting_alts = [] if explicit_greeting else card_greetings
     runtime_wbs = _materialize_worldbook_ids(pid, wbs or [])
     p = {"id": pid, "name": ev.get("name") or card.get("name"),
          "card_id": card["id"], "card_ids": card_ids, "worldbook_ids": runtime_wbs,
          "cards": cards,
          "persona_id": ev.get("persona_id"), "persona": ev.get("persona") or {},
          "created_at": int(time.time()), "status": "active", "runtime": {},
-         "story": [_msg("char", greeting, cards)] if greeting else []}
+         "story": [_msg("char", greeting, cards, greeting_alts)] if greeting else []}
     _ensure_world_language(p, ev.get("locale"))
     _ensure_production_session(p)
     save_production(p)
@@ -1354,6 +1449,293 @@ def ev_attach_card(ev):
     _mark_context_state_stale(p, "loadout_changed")
     save_production(p)
     return {"production": p}
+
+
+def _world_build_request_id(manifest):
+    request_id = str(manifest.get("request_id") or "").strip()
+    if not request_id:
+        payload = {key: value for key, value in manifest.items() if key != "request_id"}
+        request_id = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:24]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+        raise ValueError("request_id must be 8-128 ASCII letters, digits, underscores, or hyphens")
+    return request_id
+
+
+def _world_build_manifest_hash(manifest):
+    payload = {key: value for key, value in manifest.items() if key != "request_id"}
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _world_build_existing(request_id, manifest_hash):
+    for production in _list("productions"):
+        if str((production or {}).get("build_request_id") or "") != request_id:
+            continue
+        if str(production.get("build_manifest_hash") or "") != manifest_hash:
+            raise ValueError("request_id was already used for a different world manifest")
+        return production
+    return None
+
+
+def _world_build_import_card(spec):
+    if not isinstance(spec, dict):
+        raise ValueError("each character must be an object")
+    card_id = str(spec.get("card_id") or "").strip()
+    if card_id:
+        card = load_card(card_id)
+        if not card:
+            raise ValueError("card not found: " + card_id)
+        return card, False, []
+
+    source = str(spec.get("source") or "agent").strip() or "agent"
+    if isinstance(spec.get("card"), dict):
+        card = card_import.normalize_card(spec["card"])
+    elif spec.get("png_base64"):
+        card = card_import.import_card_b64(str(spec["png_base64"]))
+        source = "chub" if source == "agent" else source
+    elif spec.get("charx_base64"):
+        card = card_import.import_card_archive_b64(str(spec["charx_base64"]))
+        source = "external" if source == "agent" else source
+    else:
+        raise ValueError("character requires card_id, card, png_base64, or charx_base64")
+
+    while load_card(card.get("id")):
+        card["id"] = "card_" + secrets.token_hex(4)
+    result = _store_card(card, source)
+    stored = result["card"]
+    worldbook_ids = []
+    embedded_id = "wb_" + stored["id"]
+    if load_worldbook(embedded_id):
+        worldbook_ids.append(embedded_id)
+    return stored, True, worldbook_ids
+
+
+def _world_build_lore_spec(item):
+    if isinstance(item, str):
+        item = {"content": item, "constant": True}
+    if not isinstance(item, dict):
+        raise ValueError("each lore entry must be text or an object")
+    content = str(item.get("content") or item.get("text") or "").strip()
+    if not content:
+        raise ValueError("lore content is required")
+    constant = bool(item.get("constant"))
+    keys = item.get("keys") or []
+    if isinstance(keys, str):
+        keys = [value.strip() for value in re.split(r"[,，、]", keys) if value.strip()]
+    if not constant and not keys:
+        raise ValueError("triggered lore requires at least one key")
+    return {
+        "content": content,
+        "constant": constant,
+        "keys": keys,
+        "secondary_keys": item.get("secondary_keys") or [],
+        "exclusion_keys": item.get("exclusion_keys") or [],
+        "priority": item.get("priority", 5),
+        "position": item.get("position") or "before_char",
+        "category": item.get("category") or "setting",
+        "known_by": item.get("known_by") or [],
+        "hidden_from": item.get("hidden_from") or [],
+    }
+
+
+def _world_build_verification(production, expected_card_ids, expected_lore_count):
+    cards = _production_card_ids(production)
+    worldbooks = [
+        load_worldbook(worldbook_id)
+        for worldbook_id in production.get("worldbook_ids") or []
+    ]
+    lore_count = sum(
+        len((worldbook or {}).get("entries") or [])
+        for worldbook in worldbooks
+        if worldbook
+    )
+    persona = production.get("persona") or {}
+    opening_ready = bool(
+        (production.get("story") or [])
+        and str((production.get("story") or [])[0].get("text") or "").strip()
+    )
+    checks = {
+        "active_world": _get_state().get("active_production_id") == production.get("id"),
+        "cast": cards == expected_card_ids,
+        "worldbooks": lore_count >= expected_lore_count,
+        "persona": _profile_has_content(persona.get("profile") or persona),
+        "opening": opening_ready,
+    }
+    checks["ok"] = all(checks.values())
+    return checks
+
+
+def ev_build_world(ev):
+    """Create one complete playable world as a single idempotent transaction."""
+    manifest = ev.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest must be an object")
+    world = manifest.get("world")
+    if not isinstance(world, dict):
+        raise ValueError("manifest.world must be an object")
+    name = str(world.get("name") or "").strip()
+    if not name:
+        raise ValueError("manifest.world.name is required")
+    if len(name) > 120:
+        raise ValueError("world name is too long")
+
+    character_specs = manifest.get("characters")
+    if not isinstance(character_specs, list) or not character_specs:
+        raise ValueError("manifest.characters must contain at least one role")
+    if len(character_specs) > 16:
+        raise ValueError("a world may contain at most 16 imported roles")
+
+    lore_specs = manifest.get("worldbook_entries")
+    if lore_specs is None:
+        lore_specs = manifest.get("lore")
+    if lore_specs is None:
+        lore_specs = []
+    if not isinstance(lore_specs, list):
+        raise ValueError("manifest.worldbook_entries must be an array")
+    if len(lore_specs) > 64:
+        raise ValueError("a world may contain at most 64 initial lore entries")
+    lore_specs = [_world_build_lore_spec(item) for item in lore_specs]
+
+    persona_spec = manifest.get("persona")
+    if not isinstance(persona_spec, dict) or not persona_spec:
+        raise ValueError("manifest.persona must define the user's world-local role")
+
+    request_id = _world_build_request_id(manifest)
+    manifest_hash = _world_build_manifest_hash(manifest)
+    previous_active = _get_state().get("active_production_id")
+    created_cards = []
+    created_worldbooks = []
+    production_id = None
+
+    with _world_build_lock:
+        existing = _world_build_existing(request_id, manifest_hash)
+        if existing:
+            verification = _world_build_verification(
+                existing,
+                existing.get("build_expected_card_ids") or _production_card_ids(existing),
+                int(existing.get("build_expected_lore_count") or len(lore_specs)),
+            )
+            return {
+                "production": existing,
+                "verification": verification,
+                "request_id": request_id,
+                "reused": True,
+            }
+
+        try:
+            cards = []
+            for spec in character_specs:
+                card, created, embedded_worldbooks = _world_build_import_card(spec)
+                cards.append(card)
+                if created:
+                    created_cards.append(card["id"])
+                    created_worldbooks.extend(embedded_worldbooks)
+
+            source_worldbook_ids = []
+            for worldbook_id in manifest.get("worldbook_ids") or []:
+                worldbook_id = str(worldbook_id or "").strip()
+                if not load_worldbook(worldbook_id):
+                    raise ValueError("worldbook not found: " + worldbook_id)
+                if worldbook_id not in source_worldbook_ids:
+                    source_worldbook_ids.append(worldbook_id)
+
+            created = ev_create_blank_production({
+                "name": name,
+                "worldbook_ids": source_worldbook_ids,
+                "locale": world.get("language") or manifest.get("language"),
+            })["production"]
+            production_id = created["id"]
+            created_worldbooks.extend(created.get("worldbook_ids") or [])
+
+            for card in cards:
+                before = set((load_production(production_id) or {}).get("worldbook_ids") or [])
+                attached = ev_attach_card({
+                    "production_id": production_id,
+                    "card_id": card["id"],
+                })["production"]
+                created_worldbooks.extend(
+                    worldbook_id
+                    for worldbook_id in attached.get("worldbook_ids") or []
+                    if worldbook_id not in before
+                )
+
+            for lore in lore_specs:
+                result = ev_add_lore({"production_id": production_id, **lore})
+                worldbook_id = str((result.get("worldbook") or {}).get("id") or "")
+                if worldbook_id:
+                    created_worldbooks.append(worldbook_id)
+
+            persona_event = {"type": "set_persona", "production_id": production_id}
+            if persona_spec.get("card_id"):
+                persona_event["card_id"] = persona_spec["card_id"]
+            else:
+                persona_event.update({
+                    "name": persona_spec.get("name", ""),
+                    "description": persona_spec.get("description", ""),
+                    "profile": persona_spec.get("profile") or {},
+                })
+            ev_set_persona(persona_event)
+
+            production = load_production(production_id)
+            explicit_opening = str(
+                world.get("opening") or manifest.get("opening") or ""
+            ).strip()
+            opening_candidates = _card_opening_candidates(cards)
+            opening = explicit_opening or (
+                opening_candidates[0] if opening_candidates else ""
+            )
+            if not opening:
+                raise ValueError("world opening is required")
+            production["story"] = [_msg(
+                "char",
+                opening,
+                cards,
+                [] if explicit_opening else opening_candidates,
+            )]
+            production["build_request_id"] = request_id
+            production["build_manifest_hash"] = manifest_hash
+            production["build_schema"] = str(manifest.get("schema") or "tavern-world/v1")
+            production["build_expected_card_ids"] = [card["id"] for card in cards]
+            production["build_expected_lore_count"] = len(lore_specs)
+            _mark_context_state_stale(production, "world_built")
+            save_production(production)
+            _set_active(production_id)
+
+            production = load_production(production_id)
+            verification = _world_build_verification(
+                production, [card["id"] for card in cards], len(lore_specs)
+            )
+            if not verification["ok"]:
+                failed = ", ".join(
+                    key for key, value in verification.items()
+                    if key != "ok" and not value
+                )
+                raise RuntimeError("world verification failed: " + failed)
+            return {
+                "production": production,
+                "verification": verification,
+                "request_id": request_id,
+                "created_card_ids": created_cards,
+                "reused": False,
+            }
+        except Exception:
+            for worldbook_id in reversed(list(dict.fromkeys(created_worldbooks))):
+                worldbook = load_worldbook(worldbook_id)
+                if worldbook and (
+                    worldbook_id in {"wb_" + card_id for card_id in created_cards}
+                    or worldbook.get("owner_production_id") == production_id
+                ):
+                    STATE_STORE.delete("worldbooks", worldbook_id)
+            if production_id and load_production(production_id):
+                STATE_STORE.delete("productions", production_id)
+            for card_id in reversed(created_cards):
+                if load_card(card_id):
+                    STATE_STORE.delete("cards", card_id)
+            _set_active(previous_active)
+            raise
 
 
 def ev_update_cast(ev):
@@ -3064,11 +3446,14 @@ def ev_update_world_ui(ev):
 
 EVENTS = {
     "cancel_generation": ev_cancel_generation,
-    "import_card": ev_import_card, "import_card_json": ev_import_card_json, "create_card": ev_create_card,
+    "inspect_card": ev_inspect_card,
+    "import_card": ev_import_card, "import_card_json": ev_import_card_json,
+    "import_card_archive": ev_import_card_archive, "create_card": ev_create_card,
     "import_worldbook": ev_import_worldbook, "attach_worldbook": ev_attach_worldbook,
     "add_lore": ev_add_lore, "update_lore": ev_update_lore, "delete_lore": ev_delete_lore,
     "attach_card": ev_attach_card, "update_cast": ev_update_cast, "detach_card": ev_detach_card, "delete_card": ev_delete_card,
     "create_production": ev_create_production, "create_blank_production": ev_create_blank_production,
+    "build_world": ev_build_world,
     "switch_loadout": ev_switch_loadout,
     "prepare_delete_production": ev_prepare_delete_production,
     "delete_production": ev_delete_production,

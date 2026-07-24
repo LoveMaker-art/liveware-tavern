@@ -83,11 +83,14 @@ class CharacterCardMappingTests(unittest.TestCase):
     def test_normalization_preserves_worldbook_unknown_extensions_and_scene_notes(self):
         source = {
             "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "vendor_root": {"keep": "root"},
             "data": {
                 "name": "林岚",
                 "description": "记者\n【当前状态】左臂受伤",
                 "character_book": {"name": "雾城", "entries": []},
                 "extensions": {"vendor_extension": {"keep": True}},
+                "vendor_data": {"keep": "data"},
             },
         }
 
@@ -95,13 +98,66 @@ class CharacterCardMappingTests(unittest.TestCase):
 
         self.assertEqual(normalized["character_book"]["name"], "雾城")
         self.assertTrue(normalized["extensions"]["vendor_extension"]["keep"])
+        self.assertEqual(normalized["source_format"], "v2")
+        self.assertEqual(normalized["source_unknown"]["root"]["vendor_root"]["keep"], "root")
+        self.assertEqual(normalized["source_unknown"]["data"]["vendor_data"]["keep"], "data")
         self.assertEqual(CARD_IMPORT.canonical_scene_notes(source["data"]), ["左臂受伤"])
         self.assertIn("profile", normalized)
         self.assertIn("entry", normalized)
         self.assertIn("performance", normalized)
 
+    def test_v1_legacy_aliases_map_without_becoming_v2(self):
+        normalized = CARD_IMPORT.normalize_card({
+            "char_name": "旧馆主",
+            "char_persona": "经营山间旅店的沉静女子。",
+            "world_scenario": "暴雨封山。",
+            "char_greeting": "她放下灯，看向门外。",
+            "example_dialogue": "{{char}}: 今夜别赶路。",
+            "legacy_vendor_flag": True,
+        })
+
+        self.assertEqual(normalized["source_format"], "v1")
+        self.assertEqual(normalized["name"], "旧馆主")
+        self.assertEqual(normalized["description"], "经营山间旅店的沉静女子。")
+        self.assertEqual(normalized["scenario"], "暴雨封山。")
+        self.assertEqual(normalized["first_mes"], "她放下灯，看向门外。")
+        self.assertEqual(normalized["mes_example"], "{{char}}: 今夜别赶路。")
+        self.assertTrue(normalized["source_unknown"]["data"]["legacy_vendor_flag"])
+
+    def test_v3_metadata_and_unknown_fields_are_preserved(self):
+        normalized = CARD_IMPORT.normalize_card({
+            "spec": "chara_card_v3",
+            "spec_version": "3.0",
+            "data": {
+                "name": "Mara",
+                "description": "An archivist.",
+                "assets": [{"type": "icon", "uri": "embeded://portrait.png", "ext": "png"}],
+                "creator_notes_multilingual": {"zh-CN": "作者说明"},
+                "source": ["https://example.com/card"],
+                "group_only_greetings": ["The whole crew looks up."],
+                "creation_date": 123,
+                "modification_date": 456,
+                "future_v4_hint": {"keep": True},
+            },
+        })
+
+        self.assertEqual(normalized["source_format"], "v3")
+        self.assertEqual(normalized["group_only_greetings"], ["The whole crew looks up."])
+        self.assertEqual(normalized["source_urls"], ["https://example.com/card"])
+        self.assertEqual(normalized["assets"][0]["type"], "icon")
+        self.assertEqual(normalized["creator_notes_multilingual"]["zh-CN"], "作者说明")
+        self.assertTrue(normalized["source_unknown"]["data"]["future_v4_hint"]["keep"])
+
+    def test_missing_name_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "缺少 name"):
+            CARD_IMPORT.normalize_card({
+                "spec": "chara_card_v3",
+                "spec_version": "3.0",
+                "data": {"description": "No name"},
+            })
+
     def test_skill_contract_names_every_canonical_section(self):
-        contract = (ROOT / "creative-skills/tavern-cards/references/field-mapping.md").read_text(
+        contract = (ROOT / "creative-skills/tavern-world/references/field-mapping.md").read_text(
             encoding="utf-8")
         for field in (
                 "profile.identity", "profile.appearance", "profile.personality",

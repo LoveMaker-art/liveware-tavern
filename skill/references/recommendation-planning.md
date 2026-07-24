@@ -11,7 +11,8 @@ The story curator should feel like a story lead, not a form wizard. The user giv
 1. Run `recommend ["want"]` first. It is read-only and combines story profile, local worlds, and local character library.
 2. Pick one main direction and at most one backup. Do not offer a large menu unless the user explicitly asks.
 3. Explain the recommendation through story feel: relationship tension, world pressure, first scene hook, and why it fits the user.
-4. If the user chooses a direction, use existing commands to create or assemble it: `new-world`, `search`, `add`, `attach-card`, `add-lore`, and console persona setup.
+4. If the user chooses a direction, assemble one complete-world manifest and
+   create it through `build-world`.
 
 ## World Planning Workflow
 
@@ -42,13 +43,13 @@ Example tone:
 第一场从夜里的档案室开始，有人已经替你签过到。
 ```
 
-## Avoid
-
 - Do not ask the user to fill long setup forms.
 - Do not turn every capability into a visible front-end button.
 - Do not put the user's identity into lore as `{{user}}` when it should be persona.
 - Do not create a large worldbook before the first scene has a clear entry point.
 - Do not recommend many unrelated cards just because search returns many results.
-## Setup World
+## Build World
 
-Use `setup-world <idea>` as the practical bridge from recommendation to creation. By default it only prints the world plan. `--apply --confirm` may create a blank world, attach explicitly named local cards, and write explicit lore items. Do not infer destructive or hidden changes.
+Use `build-world <manifest>` as the bridge from recommendation to creation. The
+default is a read-only preview. After confirmation, apply the same manifest once
+with `--apply --confirm --request-id <stable-id> --json`.

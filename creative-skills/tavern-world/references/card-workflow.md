@@ -12,9 +12,13 @@ Commands:
 
 - `new-world --name "world name"`: create a blank world.
 - `search "<query>" [--n 8]`: search Chub and show candidate cards. If Chub is unreachable, the CLI falls back to bundled starter cards.
-- `add <fullPath|Chub URL> [--name "world name"]`: download a real Chub card, import it, and open a world from it.
-- `starter [<number|name>] [--name "world name"]`: list or import bundled starter cards from `/opt/data/apps/tavern-runtime/assets/fixtures/starter`.
-- `add-original <jsonfile|-> [--name "world name"]`: import an explicitly original SillyTavern V2 JSON card and open a world from it.
+- `inspect-card <file|HTTPS URL|Chub path>`: detect and audit a V1/V2/V3 JSON, PNG/APNG, or V3 CHARX without writing state.
+- `import-card <file|HTTPS URL|Chub path>`: import a recognized external card into the reusable library.
+- `add <fullPath|Chub URL>`: backward-compatible Chub-only import.
+- `starter [<number|name>]`: list or import bundled starter cards from `/opt/data/apps/tavern-runtime/assets/fixtures/starter`.
+- `add-original <jsonfile|->`: import an explicitly original SillyTavern V2 JSON card into the reusable library. Never use this command for a card found online.
+- Add `--new-world [--name "..."]` to those commands only when the user explicitly wants a one-card world.
+- `build-world <manifest>`: atomically create a complete world from cards, lore, Persona, and an opening.
 - `attach-card <world> <card>`: join an already imported card into an existing world.
 - `add-lore <world> "natural language setting"`: add a natural-language setting to a world; runtime organizes it into lore entries.
 - `add-worldbook <jsonfile|-> [--production <world id>]`: import structured worldbook/lore JSON and optionally attach it to a world. The flag remains `--production` for runtime compatibility.
@@ -23,7 +27,7 @@ Commands:
 Rules:
 
 - The product concept is world-driven: world = container, cast = character cards, lore = settings/material, story = runtime output.
-- Existing characters should use `search` and `add`; do not invent cards from memory.
+- Existing characters should use network research plus `inspect-card` and `import-card`; do not invent cards from memory.
 - Original cards are allowed only when the user explicitly asks for an original character. Say clearly that it is original.
 - If Chub is unreachable, use `starter`; do not hand-roll PNG/base64 card files and do not use browser scraping as the primary path.
 - Natural user settings should go through `add-lore`; structured JSON lore should go through `add-worldbook`.
@@ -33,21 +37,34 @@ Rules:
 
 For cards found on the web, use this path:
 
-1. Fetch/import with `search` + `add`, or `add-original` for explicitly original JSON.
-2. Apply `field-mapping.md`. Let the runtime canonicalizer create `profile`, `entry`, and `performance`, then inspect semantic alignment and move world lore, Persona, current state, and relationship facts to their proper owners. Do not hand-copy source prose into production JSON.
-3. Run `card-audit <card>` before making the card a core role. Structural normalization is automatic, but semantic quality and fine-grained fields still require evidence-based review.
-4. Attach the library card to the chosen world. The runtime creates an independent `runtime_cast` role with an immutable `origin_profile` and one effective `profile`.
-5. Verify with `diagnose <world>`. Story-local changes remain in that world's effective profile and never mutate the library template.
+1. Search public sources and identify the actual downloadable artifact. A detail page or preview image is not the card.
+2. Run `inspect-card <artifact>` before writing anything. It must report V1, V2, or V3 and a non-empty character name.
+3. Import the same artifact with `import-card`. This preserves source version, standard V3 metadata, vendor extensions, and unknown fields while deriving `profile`, `entry`, and `performance`.
+4. Apply `field-mapping.md`. Inspect semantic alignment and move world lore, Persona, current state, and relationship facts to their proper owners. Do not hand-copy source prose into production JSON.
+5. Run `card-audit <card>` before making the card a core role. Structural normalization is automatic, but semantic quality and fine-grained fields still require evidence-based review.
+6. Localize only when requested, and retain creator/source attribution. Do not silently rewrite a public card as an original card.
+7. Attach the library card to the chosen world. The runtime creates an independent `runtime_cast` role with an immutable `origin_profile` and one effective `profile`.
+8. Verify with `diagnose <world>`. Story-local changes remain in that world's effective profile and never mutate the library template.
+
+### Format Compatibility
+
+- V1: accepts flat JSON and legacy `chara` PNG fields, including common aliases such as `char_name`, `char_persona`, `world_scenario`, and `char_greeting`.
+- V2: accepts wrapped JSON and `chara` PNG, including alternate greetings, character-local system prompts, extensions, and embedded `character_book`.
+- V3: accepts wrapped JSON, `ccv3` PNG/APNG, and CHARX archives containing root `card.json`; preserves the resource manifest, `assets`, multilingual creator notes, source references, group-only greetings, and timestamps.
+- Unknown root/data fields are retained as source metadata and are not injected into the story prompt.
+- V3 embedded assets are preserved as a safe resource manifest. They do not automatically become a world background or theme; visual theming belongs to `tavern-world-visuals`.
+- V3 group-only greetings are available as opening alternatives for multi-character worlds when no explicit world opening overrides them.
+
+Reject ordinary images, HTML pages, arrays, cards without a name, oversized files, unsafe CHARX paths, and external URLs that are not public HTTPS addresses. Do not silently convert a rejected artifact into a newly invented card.
 
 Recommended flow for "帮我找一个世界和角色":
 
 1. Run `recommend ["want"]` first. It is read-only and combines the story curator's story profile, local worlds, and the local character library.
 2. Analyze the user's current request in conversation as the story curator, using the recommendation as context.
-3. If the user accepts a direction, create a world with `new-world --name ...`, import a reusable worldbook with `add-worldbook`, or start from a card with `add/starter/add-original` only when a role card is truly the best foundation.
-4. Add/refine natural background with `add-lore <world> "..."`. This writes current-world lore, not the reusable worldbook library.
-5. Search/import cards, then join roles with `attach-card <world> <card>`.
-6. Help the user set "我的角色" for this world if needed.
-7. Send the tavern liveware URL and invite the user to enter the world.
+3. If the user accepts a direction, assemble one complete-world manifest.
+4. Preview it with `build-world <manifest>` and apply the same file once with
+   `--apply --confirm --request-id <stable-id> --json`.
+5. Require `verification.ok: true`, then send the bare URL from `app-link`.
 
 Original card workflow:
 
@@ -129,7 +146,9 @@ The tavern CLI has no `detach-card` or `remove-card` command. To remove a charac
 2. Verify the role disappeared from `runtime_cast.characters` and its relationship edges were removed.
 3. Do NOT delete the standalone card file in `/opt/data/tavern-state/cards/<card_id>.json` — the user may want it for future worlds.
 
-**PITFALL**: When using `add-original` to create a card for an existing world (not a new world), the command auto-creates a standalone production and worldbook. After `attach-card` succeeds, delete the auto-created production file (`tavern-state/productions/prod_<id>.json`) and its worldbook (`tavern-state/worldbooks/wb_prod_prod_<id>.json`) to avoid orphan worlds cluttering the left rail.
+`add-original` imports into the reusable library and does not create a world
+unless `--new-world` is explicit. Never delete production or worldbook files as
+normal cleanup.
 
 ## Embedded Lore Extraction
 
@@ -183,15 +202,9 @@ The user can:
 
 The persona is stored inside the current production JSON under `persona`. It is injected into generation for that world only. It is not cross-world; editing persona in one world must not change another world.
 
-Programmatic update:
-
-```sh
-curl -s -X POST http://127.0.0.1:8799/api/event \
-  -H "Content-Type: application/json" \
-  -d '{"type":"set_persona","production_id":"<world_id>","name":"你","description":"<this-world persona>"}'
-```
-
-No CLI command exists for persona management. When the user asks about their own character, direct them to the console UI's right panel, or use the server event above for the chosen world.
+For a new complete world, place the Persona in the `build-world` manifest. For
+an existing world, use the console editor or the supported Liveware event. Do
+not write the production JSON directly.
 
 Default user-facing phrasing:
 

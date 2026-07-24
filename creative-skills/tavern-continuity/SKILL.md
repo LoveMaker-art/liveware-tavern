@@ -1,7 +1,7 @@
 ---
 name: tavern-continuity
 description: Diagnose and repair Tavern continuity：压缩、剧情账本、角色状态、提示词与生成。Use when a Tavern world becomes inconsistent, story_state or runtime_cast is wrong, object custody/scene facts/secrets/relationships need correction, characters drift, replies are empty or slow, output formatting changes, compression is questioned, or the user asks what context the model received.
-version: 1.22.1
+version: 1.23.1
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -25,9 +25,9 @@ This skill owns:
 
 Route elsewhere:
 
-- worldbook trigger pollution → `tavern-worldbooks`;
+- worldbook trigger pollution → `tavern-world`;
 - durable user taste or RP preference → `tavern-story-profile`;
-- reusable character-card edits → `tavern-cards`;
+- reusable character-card edits → `tavern-world`;
 - model, restart, health, localization → `tavern-ops`;
 - runtime/frontend code changes → updater or engineering workflow.
 

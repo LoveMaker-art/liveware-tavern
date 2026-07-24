@@ -10,10 +10,14 @@
 
 命令：
   search <query> [--n N]                   搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）；Chub 连不上→列 starter
-  add <fullPath|Chub链接> [--name NAME]     下载 Chub 真卡 → 导入 → 开启世界（**优先用这条**）；连不上→提示 starter
-  starter [<序号|名字>] [--name NAME]        列出/导入随仓内置 starter 真卡（离线兜底 + 写原创卡的样板）
-  add-original <jsonfile|->                 原创/自造卡 JSON → 导入 → 开启世界（仅在明确「原创」时用）
+  inspect-card <文件|直链|Chub路径>          识别并审查 V1/V2/V3 JSON/PNG/CHARX，不写入
+  import-card <文件|直链|Chub路径>           安全归一化外部 V1/V2/V3 卡 → 角色库
+  add <fullPath|Chub链接> [--new-world]      兼容旧命令：下载 Chub 真卡 → 导入角色库
+  starter [<序号|名字>] [--new-world]        列出/导入随仓内置 starter 真卡
+  add-original <jsonfile|-> [--new-world]   原创卡 JSON → 导入角色库；显式要求时才开启世界
   add-worldbook <jsonfile|-> [--production PID]   世界设定 JSON → 导入（可挂到现有世界）
+  build-world <manifest.json|->             预览或原子创建完整世界
+  app-link [--app console|actor] [--json]   读取当前实例的 Liveware 入口
   note <world> "<提示>"                     设/清世界导演提示（场景方向，空串清除）
   list                                     列出当前世界 / 角色 / 设定
 
@@ -23,6 +27,8 @@ import argparse
 import base64
 import json
 import os
+import ipaddress
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -51,6 +57,12 @@ CHUB_IMAGE_HEADERS = {
 }
 # 随仓打包的 starter 真卡（tavern/assets/fixtures/starter/）——Chub 不可达时的离线兜底。
 STARTER_DIR = os.environ.get("TAVERN_STARTER_DIR", "/opt/data/apps/tavern-runtime/assets/fixtures/starter")
+TAVERN_STATE_DIR = os.environ.get("TAVERN_STATE_DIR", "/opt/data/tavern-state")
+TAVERN_APPS_FILE = os.environ.get(
+    "TAVERN_APPS_FILE",
+    os.path.join(TAVERN_STATE_DIR, "apps.json"),
+)
+MAX_EXTERNAL_CARD_BYTES = 20 * 1024 * 1024
 
 
 class ChubUnreachable(Exception):
@@ -72,6 +84,146 @@ def _http(url, data=None, headers=None, timeout=30):
         _die(f"HTTP {e.code} {url}\n{body}")
     except Exception as e:  # noqa: BLE001
         _die(f"请求失败 {url}: {e}")
+
+
+def _validate_external_url(url):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        _die("外部角色卡只接受公开 HTTPS 直链")
+    host = parsed.hostname.lower().rstrip(".")
+    if host in {"localhost", "localhost.localdomain"}:
+        _die("外部角色卡地址不能指向本机")
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+        }
+    except OSError as exc:
+        _die(f"无法解析角色卡地址：{exc}")
+    for value in addresses:
+        ip = ipaddress.ip_address(value)
+        if not ip.is_global:
+            _die("外部角色卡地址不能指向内网、回环或保留地址")
+    return parsed
+
+
+class _SafeCardRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_external_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_external_card(url):
+    _validate_external_url(url)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": CHUB_UA,
+            "Accept": "application/json,image/png,image/apng,*/*;q=0.5",
+        },
+    )
+    try:
+        opener = urllib.request.build_opener(_SafeCardRedirectHandler())
+        with opener.open(req, timeout=60) as response:
+            final_url = response.geturl()
+            _validate_external_url(final_url)
+            declared = response.headers.get("Content-Length")
+            if declared and int(declared) > MAX_EXTERNAL_CARD_BYTES:
+                _die("角色卡文件不能超过 20 MB")
+            body = response.read(MAX_EXTERNAL_CARD_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        _die(f"角色卡下载失败：HTTP {exc.code}")
+    except Exception as exc:  # noqa: BLE001
+        _die(f"角色卡下载失败：{exc}")
+    if len(body) > MAX_EXTERNAL_CARD_BYTES:
+        _die("角色卡文件不能超过 20 MB")
+    return body, final_url
+
+
+def _decode_card_document(raw, label):
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png", raw
+    if raw[:4] == b"PK\x03\x04":
+        return "charx", raw
+    try:
+        text = raw.decode("utf-8-sig")
+        value = json.loads(text)
+    except Exception:
+        _die(f"{label} 不是有效的角色卡 PNG、JSON 或 CHARX")
+    if not isinstance(value, dict):
+        _die(f"{label} 的 JSON 根节点必须是对象")
+    return "json", value
+
+
+def _load_external_card(source):
+    value = source.strip()
+    if value == "-":
+        return "json", _read_json_arg("-"), "stdin", ""
+    if os.path.isfile(value):
+        with open(value, "rb") as file:
+            raw = file.read(MAX_EXTERNAL_CARD_BYTES + 1)
+        if len(raw) > MAX_EXTERNAL_CARD_BYTES:
+            _die("角色卡文件不能超过 20 MB")
+        kind, payload = _decode_card_document(raw, value)
+        return kind, payload, "file", ""
+    if value.startswith(("https://", "http://")):
+        parsed = urllib.parse.urlparse(value)
+        is_chub_page = (
+            parsed.hostname in {"chub.ai", "www.chub.ai", "characterhub.org", "www.characterhub.org"}
+            and any(marker in parsed.path for marker in ("/characters/", "/character/"))
+            and not parsed.path.lower().endswith((".png", ".json"))
+        )
+        if is_chub_page:
+            value = _parse_full_path(value)
+        else:
+            raw, final_url = _fetch_external_card(value)
+            kind, payload = _decode_card_document(raw, value)
+            return kind, payload, "external", final_url
+    fp = _parse_full_path(value)
+    url = CHUB_CARD.format(full_path=urllib.parse.quote(fp))
+    try:
+        raw = _chub_get(url, timeout=60, image=True)
+    except ChubUnreachable as exc:
+        _die(f"Chub 角色卡下载失败：{exc}")
+    except urllib.error.HTTPError as exc:
+        _die(f"Chub 角色卡下载失败：HTTP {exc.code}")
+    kind, payload = _decode_card_document(raw, value)
+    return kind, payload, "chub", url
+
+
+def _inspect_external_card(kind, payload):
+    event = {"type": "inspect_card"}
+    if kind == "png":
+        event["png_base64"] = base64.b64encode(payload).decode("ascii")
+    elif kind == "charx":
+        event["charx_base64"] = base64.b64encode(payload).decode("ascii")
+    else:
+        event["card"] = payload
+    return _event(event)["inspection"]
+
+
+def _print_card_inspection(report):
+    print(
+        f"格式：{str(report.get('format') or '?').upper()} · "
+        f"{report.get('spec') or '未声明 spec'} {report.get('spec_version') or ''} · "
+        f"{str(report.get('container') or 'json').upper()}"
+    )
+    print(f"角色：{report.get('name') or '?'}" + (
+        f" · 作者 {report['creator']}" if report.get("creator") else ""
+    ))
+    print(
+        f"内容：备用开场 {report.get('alternate_greetings', 0)} · "
+        f"群组开场 {report.get('group_only_greetings', 0)} · "
+        f"内嵌设定 {report.get('embedded_worldbook_entries', 0)} · "
+        f"资源 {report.get('assets', 0)}"
+    )
+    unknown = list(report.get("unknown_root_fields") or []) + list(
+        report.get("unknown_data_fields") or []
+    )
+    if unknown:
+        print("兼容扩展：已保留 " + "、".join(unknown[:12]))
+    for warning in report.get("warnings") or []:
+        print("注意：" + warning)
 
 
 def _event(ev):
@@ -99,7 +251,11 @@ def _event(ev):
 
 def _read_json_arg(arg):
     """从文件或 stdin('-') 读 JSON。"""
-    text = sys.stdin.read() if arg == "-" else open(arg, encoding="utf-8").read()
+    if arg == "-":
+        text = sys.stdin.read()
+    else:
+        with open(arg, encoding="utf-8") as file:
+            text = file.read()
     try:
         return json.loads(text)
     except Exception as e:  # noqa: BLE001
@@ -234,7 +390,41 @@ def cmd_add(a):
         _die("下载的不是 PNG（fullPath 可能写错）。用 `search` 拿准确 fullPath，或 `starter` 用内置卡。")
     card = _event({"type": "import_card",
                    "png_base64": base64.b64encode(png).decode("ascii")})["card"]
-    _create_production(card, a.name)
+    print(f"✅ 已导入角色库：{card.get('name')}（{card['id']}）")
+    if a.new_world:
+        _create_production(card, a.name)
+
+
+def cmd_inspect_card(a):
+    kind, payload, _source, _source_url = _load_external_card(a.source)
+    report = _inspect_external_card(kind, payload)
+    if a.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        _print_card_inspection(report)
+
+
+def cmd_import_card(a):
+    kind, payload, source, source_url = _load_external_card(a.source)
+    report = _inspect_external_card(kind, payload)
+    _print_card_inspection(report)
+    event = {"source": source, "source_url": source_url}
+    if kind == "png":
+        event.update({
+            "type": "import_card",
+            "png_base64": base64.b64encode(payload).decode("ascii"),
+        })
+    elif kind == "charx":
+        event.update({
+            "type": "import_card_archive",
+            "charx_base64": base64.b64encode(payload).decode("ascii"),
+        })
+    else:
+        event.update({"type": "import_card_json", "card": payload})
+    card = _event(event)["card"]
+    print(f"✅ 已适配并导入角色库：{card.get('name')}（{card['id']}）")
+    if a.new_world:
+        _create_production(card, a.name)
 
 
 def cmd_starter(a):
@@ -263,7 +453,9 @@ def cmd_starter(a):
             png = f.read()
         card = _event({"type": "import_card",
                        "png_base64": base64.b64encode(png).decode("ascii")})["card"]
-    _create_production(card, a.name)
+    print(f"✅ 已导入角色库：{card.get('name')}（{card['id']}）")
+    if a.new_world:
+        _create_production(card, a.name)
 
 
 def _resolve_starter(cards, which):
@@ -281,8 +473,9 @@ def _resolve_starter(cards, which):
 def cmd_add_original(a):
     card_obj = _read_json_arg(a.json)
     card = _event({"type": "import_card_json", "card": card_obj})["card"]
-    print("（原创卡，已导入）")
-    _create_production(card, a.name)
+    print(f"✅ 已导入原创角色卡：{card.get('name')}（{card['id']}）")
+    if a.new_world:
+        _create_production(card, a.name)
 
 
 def cmd_add_worldbook(a):
@@ -725,7 +918,7 @@ def cmd_recommend(a):
                 for i, n in enumerate(nodes[:a.n], 1):
                     topics = ", ".join((n.get("topics") or [])[:4])
                     print(f"  [{i}] {n.get('name','?')} · {n.get('fullPath','?')}" + (f" · {topics}" if topics else ""))
-                print("  选定后：add <fullPath> --name <世界名>")
+                print("  选定后：add <fullPath>，再放入完整世界清单。")
             else:
                 print("  - 外部卡库没有命中；换英文名/作品名再搜。")
         except Exception as e:
@@ -734,7 +927,7 @@ def cmd_recommend(a):
 
     print("\n落地命令顺序：")
     print("  1. 若用现有世界：diagnose <世界>，必要时 lore-audit <世界>")
-    print(f"  2. 若开新世界：setup-world \"{want or world_name}\" --plan")
+    print(f"  2. 若开新世界：plan-world \"{want or world_name}\"，再整理 build-world 清单")
     print("  3. 若需要外部角色：recommend --external <想法>，再 add <fullPath>")
     print("  4. 用 add-lore 逐条接住设定；用户身份写入右栏「我的角色」")
 
@@ -871,7 +1064,7 @@ def cmd_card_audit(a):
 
 
 def cmd_setup_world(a):
-    """Plan/apply a simple world setup from one idea. Apply is intentionally conservative."""
+    """Legacy read-only planner kept for command compatibility."""
     idea = a.idea.strip()
     if not idea:
         _die("想法不能为空。")
@@ -893,30 +1086,9 @@ def cmd_setup_world(a):
     print("\n计划写入设定：")
     for x in lore_items:
         print("- " + x)
-    if not a.apply:
-        print("\n未创建数据。确认后可运行：")
-        cmd = f"setup-world \"{idea}\" --apply --confirm"
-        if a.name:
-            cmd += f" --name \"{name}\""
-        for c in card_refs:
-            cmd += f" --card \"{c}\""
-        for l in a.lore or []:
-            cmd += f" --lore \"{l}\""
-        print("python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py " + cmd)
-        return
-    if not a.confirm:
-        _die("--apply 会创建世界/挂角色/写设定；请加 --confirm。")
-    p = _event({"type": "create_blank_production", "name": name})["production"]
-    print(f"\n✅ 已创建世界：{p.get('name')}（{p.get('id')}）")
-    for cref in card_refs:
-        c = _resolve_card(cref)
-        _event({"type": "attach_card", "production_id": p["id"], "card_id": c["id"]})
-        print(f"✅ 已加入角色：{_card_name(c)}")
-    for text in lore_items:
-        res = _event({"type": "add_lore", "production_id": p["id"], "text": text})
-        keys = "、".join((res.get("entry") or {}).get("keys") or []) or "常驻"
-        print(f"✅ 已加入设定：{text[:40]}（触发词：{keys}）")
-    print("下一步：在右栏完善「我的角色」，然后开第一场。")
+    if a.apply:
+        _die("setup-world 已改为只读兼容命令。请生成完整清单后使用 build-world --apply --confirm。")
+    print("\n未创建数据。下一步：把角色、设定、我的角色和开场整理成一份清单，再运行 build-world 预览。")
 
 
 def cmd_card_fix(a):
@@ -1229,26 +1401,6 @@ def cmd_lore_fix(a):
         print(f"✅ 已保守修复：{path}")
     print(f"完成：修改 {changed} 处。建议再运行 lore-audit <世界> 验证。")
 
-
-
-# ---------- Tavern continuity repair compatibility entrypoints ----------
-def _run_tavern_continuity_repair(kind, a):
-    script = "/opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py"
-    args = [sys.executable, script, kind, a.world, a.request]
-    if getattr(a, "apply", False):
-        args.append("--apply")
-    if getattr(a, "confirm", False):
-        args.append("--confirm")
-    os.execv(sys.executable, args)
-
-
-def cmd_story_fix(a):
-    _run_tavern_continuity_repair("story-fix", a)
-
-
-def cmd_cast_fix(a):
-    _run_tavern_continuity_repair("cast-fix", a)
-
 def _resolve_production(q):
     prods = _get_productions()
     matches = [p for p in prods if p.get("id") == q or q in (p.get("name") or "")]
@@ -1270,7 +1422,217 @@ def cmd_new_world(a):
     p = _event({"type": "create_blank_production", "name": name})["production"]
     print(f"✅ 已开启世界「{p['name']}」（{p['id']}）")
     print("   下一步可以 `attach-card <世界> <角色>` 加入角色，或 `add-lore <世界> <设定>` 接住设定。")
-    print(f"   酒馆：{CONSOLE}/")
+    print("   Liveware 入口可用 `app-link` 读取。")
+
+
+def _liveware_entry(app_key):
+    try:
+        with open(TAVERN_APPS_FILE, encoding="utf-8") as f:
+            apps = json.load(f)
+    except FileNotFoundError:
+        _die("还没有 Liveware 注册信息，请先用 tavern-ops 完成 Tavern 注册。")
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"Liveware 注册信息不可读：{e}")
+
+    entry = apps.get(app_key) if isinstance(apps, dict) else None
+    if not isinstance(entry, dict):
+        _die(f"Liveware 注册信息缺少 {app_key} 入口。")
+    domain = str(entry.get("domain") or "").strip().strip("/")
+    if not domain or not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", domain):
+        _die(f"Liveware {app_key} 域名无效。")
+    name = str(entry.get("liveware_name") or entry.get("name") or "").strip()
+    return {
+        "app": app_key,
+        "name": name or ("Tavern" if app_key == "console" else "Story Profile"),
+        "app_id": str(entry.get("app_id") or "").strip(),
+        "url": f"https://{domain}/",
+    }
+
+
+def _maybe_liveware_entry(app_key):
+    try:
+        with open(TAVERN_APPS_FILE, encoding="utf-8") as f:
+            apps = json.load(f)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    entry = apps.get(app_key) if isinstance(apps, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    domain = str(entry.get("domain") or "").strip().strip("/")
+    if not domain or not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", domain):
+        return None
+    name = str(entry.get("liveware_name") or entry.get("name") or "").strip()
+    return {
+        "app": app_key,
+        "name": name or ("Tavern" if app_key == "console" else "Story Profile"),
+        "app_id": str(entry.get("app_id") or "").strip(),
+        "url": f"https://{domain}/",
+    }
+
+
+def cmd_app_link(a):
+    entry = _liveware_entry(a.app)
+    print(json.dumps(entry, ensure_ascii=False) if a.json else entry["url"])
+
+
+def _manifest_file(path, base):
+    candidate = path if os.path.isabs(path) else os.path.join(base, path)
+    try:
+        with open(candidate, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"角色卡 JSON 不可读 {candidate}: {e}")
+
+
+def _expand_world_manifest(raw, source_path):
+    manifest = json.loads(json.dumps(raw, ensure_ascii=False))
+    if not isinstance(manifest, dict):
+        _die("世界清单必须是 JSON 对象。")
+    base = os.getcwd() if source_path == "-" else os.path.dirname(os.path.abspath(source_path))
+    characters = manifest.get("characters")
+    if not isinstance(characters, list):
+        _die("世界清单必须包含 characters 数组。")
+    expanded = []
+    for index, spec in enumerate(characters, 1):
+        if not isinstance(spec, dict):
+            _die(f"第 {index} 个角色必须是对象。")
+        item = dict(spec)
+        library_ref = str(item.pop("library", "") or "").strip()
+        if library_ref and not item.get("card_id"):
+            item["card_id"] = _resolve_card(library_ref)["id"]
+        json_file = str(item.pop("json_file", "") or "").strip()
+        if json_file:
+            item["card"] = _manifest_file(json_file, base)
+            item.setdefault("source", "agent")
+        png_file = str(item.pop("png_file", "") or "").strip()
+        if png_file:
+            candidate = png_file if os.path.isabs(png_file) else os.path.join(base, png_file)
+            try:
+                with open(candidate, "rb") as f:
+                    item["png_base64"] = base64.b64encode(f.read()).decode("ascii")
+            except OSError as e:
+                _die(f"角色卡 PNG 不可读 {candidate}: {e}")
+            item.setdefault("source", "upload")
+        full_path = str(item.pop("full_path", "") or "").strip()
+        if full_path:
+            url = CHUB_CARD.format(full_path=urllib.parse.quote(_parse_full_path(full_path)))
+            try:
+                png = _chub_get(url, timeout=60, image=True)
+            except (ChubUnreachable, urllib.error.HTTPError) as e:
+                _die(f"外部角色卡下载失败：{e}")
+            item["png_base64"] = base64.b64encode(png).decode("ascii")
+            item["source"] = "chub"
+        expanded.append(item)
+    manifest["characters"] = expanded
+    return manifest
+
+
+def _world_manifest_summary(manifest):
+    world = manifest.get("world") if isinstance(manifest.get("world"), dict) else {}
+    characters = manifest.get("characters") if isinstance(manifest.get("characters"), list) else []
+    lore = manifest.get("worldbook_entries")
+    if lore is None:
+        lore = manifest.get("lore")
+    lore = lore if isinstance(lore, list) else []
+    names = []
+    for spec in characters:
+        if not isinstance(spec, dict):
+            continue
+        card = spec.get("card") if isinstance(spec.get("card"), dict) else {}
+        names.append(
+            str(card.get("name") or spec.get("library") or spec.get("card_id")
+                or spec.get("full_path") or spec.get("json_file") or "未命名角色")
+        )
+    persona = manifest.get("persona") if isinstance(manifest.get("persona"), dict) else {}
+    persona_profile = persona.get("profile") if isinstance(persona.get("profile"), dict) else {}
+    identity = persona_profile.get("identity") if isinstance(persona_profile.get("identity"), dict) else {}
+    return {
+        "name": str(world.get("name") or "").strip(),
+        "characters": names,
+        "lore_count": len(lore),
+        "persona": str(identity.get("name") or persona.get("name") or "").strip(),
+        "opening": str(world.get("opening") or manifest.get("opening") or "").strip(),
+    }
+
+
+def cmd_build_world(a):
+    manifest = _read_json_arg(a.manifest)
+    summary = _world_manifest_summary(manifest)
+    if not summary["name"]:
+        _die("manifest.world.name 不能为空。")
+    if not a.apply:
+        print(f"=== 完整世界方案：{summary['name']} ===")
+        print("登场角色：" + ("、".join(summary["characters"]) or "未设置"))
+        print(f"世界设定：{summary['lore_count']} 条")
+        print("我的角色：" + (summary["persona"] or "未设置"))
+        print("开场：" + ((summary["opening"][:120] + "…") if len(summary["opening"]) > 120
+                         else (summary["opening"] or "使用首张角色卡开场")))
+        print("\n未写入数据。确认后使用同一清单加 --apply --confirm。")
+        return
+    if not a.confirm:
+        _die("--apply 会创建完整世界；请同时加 --confirm。")
+    manifest = _expand_world_manifest(manifest, a.manifest)
+    if a.request_id:
+        manifest["request_id"] = a.request_id
+    result = _event({"type": "build_world", "manifest": manifest})
+    production = result.get("production") or {}
+    payload = {
+        "world_id": production.get("id"),
+        "name": production.get("name"),
+        "request_id": result.get("request_id"),
+        "reused": bool(result.get("reused")),
+        "verification": result.get("verification") or {},
+    }
+    liveware = _maybe_liveware_entry("console")
+    if liveware:
+        payload["liveware"] = liveware
+    if a.json:
+        print(json.dumps(payload, ensure_ascii=False))
+        return
+    print(f"\n✅ 世界已就绪：{payload['name']}（{payload['world_id']}）")
+    print("验证：" + ("通过" if payload["verification"].get("ok") else "失败"))
+    if payload.get("liveware"):
+        print(payload["liveware"]["url"])
+
+
+def cmd_verify_world(a):
+    raw = json.loads(_http(CONSOLE + "/api/productions", timeout=15))
+    productions = raw.get("productions") or []
+    matches = [
+        production for production in productions
+        if production.get("id") == a.world or a.world in (production.get("name") or "")
+    ]
+    if len(matches) != 1:
+        _die("世界不存在或名称不唯一。")
+    production = matches[0]
+    card_ids = _production_card_ids(production)
+    lore_count = sum(
+        len((worldbook or {}).get("entries") or [])
+        for worldbook in production.get("worldbooks") or []
+    )
+    persona = production.get("persona") or {}
+    profile = persona.get("profile") if isinstance(persona.get("profile"), dict) else {}
+    result = {
+        "world_id": production.get("id"),
+        "name": production.get("name"),
+        "active": raw.get("active") == production.get("id"),
+        "cast_count": len(card_ids),
+        "lore_count": lore_count,
+        "persona": bool(profile or persona.get("name") or persona.get("description")),
+        "opening": bool(
+            (production.get("story") or [])
+            and str((production.get("story") or [])[0].get("text") or "").strip()
+        ),
+    }
+    result["ok"] = all((
+        result["active"], result["cast_count"] > 0, result["lore_count"] > 0,
+        result["persona"], result["opening"],
+    ))
+    if a.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"{result['name']}：{'验证通过' if result['ok'] else '验证失败'}")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_attach_card(a):
@@ -1319,19 +1681,33 @@ def main():
     s.add_argument("--n", type=int, default=8)
     s.set_defaults(fn=cmd_search)
 
-    s = sub.add_parser("add", help="下载 Chub 真卡 → 导入 → 开启世界")
+    s = sub.add_parser("inspect-card", help="识别并审查外部 V1/V2/V3 JSON/PNG/CHARX，不写入")
+    s.add_argument("source", help="本地文件、HTTPS 直链、Chub 页面/fullPath，或 '-' 读 JSON")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    s.set_defaults(fn=cmd_inspect_card)
+
+    s = sub.add_parser("import-card", help="安全归一化外部 V1/V2/V3 JSON/PNG/CHARX 到角色库")
+    s.add_argument("source", help="本地文件、HTTPS 直链、Chub 页面/fullPath，或 '-' 读 JSON")
+    s.add_argument("--new-world", action="store_true", help="导入后以此卡单独开启世界")
+    s.add_argument("--name", help="配合 --new-world 指定世界名")
+    s.set_defaults(fn=cmd_import_card)
+
+    s = sub.add_parser("add", help="下载 Chub 真卡并导入角色库")
     s.add_argument("full_path", help="Chub fullPath（如 Anon/some-character）或直贴的 chub.ai 链接")
-    s.add_argument("--name", help="世界名（默认用卡名）")
+    s.add_argument("--new-world", action="store_true", help="导入后以此卡单独开启世界")
+    s.add_argument("--name", help="配合 --new-world 指定世界名")
     s.set_defaults(fn=cmd_add)
 
     s = sub.add_parser("starter", help="列出/导入内置 starter 真卡（离线兜底 + 写原创卡的样板）")
     s.add_argument("which", nargs="?", help="序号或名字片段；不给=看列表")
-    s.add_argument("--name", help="世界名（默认用卡名）")
+    s.add_argument("--new-world", action="store_true", help="导入后以此卡单独开启世界")
+    s.add_argument("--name", help="配合 --new-world 指定世界名")
     s.set_defaults(fn=cmd_starter)
 
-    s = sub.add_parser("add-original", help="原创卡 JSON → 导入 → 开启世界")
+    s = sub.add_parser("add-original", help="导入原创角色卡 JSON 到角色库")
     s.add_argument("json", help="卡 JSON 文件路径，或 '-' 读 stdin")
-    s.add_argument("--name")
+    s.add_argument("--new-world", action="store_true", help="导入后以此卡单独开启世界")
+    s.add_argument("--name", help="配合 --new-world 指定世界名")
     s.set_defaults(fn=cmd_add_original)
 
     s = sub.add_parser("add-worldbook", help="世界设定 JSON → 导入（可挂世界）")
@@ -1342,6 +1718,24 @@ def main():
     s = sub.add_parser("new-world", help="开启空白世界")
     s.add_argument("--name", help="世界名")
     s.set_defaults(fn=cmd_new_world)
+
+    s = sub.add_parser("build-world", help="从一份清单原子创建完整世界；默认只预览")
+    s.add_argument("manifest", help="世界清单 JSON 文件路径，或 '-' 读 stdin")
+    s.add_argument("--apply", action="store_true", help="实际创建完整世界")
+    s.add_argument("--confirm", action="store_true", help="确认执行写入")
+    s.add_argument("--request-id", help="幂等请求 ID；重试时复用同一个值")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    s.set_defaults(fn=cmd_build_world)
+
+    s = sub.add_parser("verify-world", help="验证世界的角色、设定、我的角色和开场是否完整")
+    s.add_argument("world", help="世界 id 或唯一名字片段")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    s.set_defaults(fn=cmd_verify_world)
+
+    s = sub.add_parser("app-link", help="读取可生成 ClawChat Liveware 卡片的裸链接")
+    s.add_argument("--app", choices=("console", "actor"), default="console")
+    s.add_argument("--json", action="store_true", help="同时输出名称、app_id 和链接")
+    s.set_defaults(fn=cmd_app_link)
 
     s = sub.add_parser("attach-card", help="把角色库里的角色加入一个世界")
     s.add_argument("world", help="世界 id 或名字片段")
@@ -1375,13 +1769,13 @@ def main():
     s.add_argument("--no-profile", action="store_true", help="不读取故事档案，只按输入想法规划")
     s.set_defaults(fn=cmd_plan_world)
 
-    s = sub.add_parser("setup-world", help="从一句想法生成建世界方案；--apply --confirm 后创建空世界/挂角色/写设定")
+    s = sub.add_parser("setup-world", help="旧版兼容：只读生成建世界方案，不再写入")
     s.add_argument("idea", help="用户想玩的方向/题材/关系/一句话想法")
     s.add_argument("--name", help="世界名")
     s.add_argument("--card", action="append", help="要加入的本地角色卡 id 或名字片段，可重复")
     s.add_argument("--lore", action="append", help="要写入的自然语言设定，可重复；不填则写入 idea")
-    s.add_argument("--apply", action="store_true", help="实际创建世界/挂角色/写设定")
-    s.add_argument("--confirm", action="store_true", help="确认执行写入")
+    s.add_argument("--apply", action="store_true", help="已停用；完整创建请使用 build-world")
+    s.add_argument("--confirm", action="store_true", help="旧版兼容参数")
     s.set_defaults(fn=cmd_setup_world)
 
     s = sub.add_parser("card-audit", help="审计角色卡身份、开场、世界书混入和可玩性（只读）")
@@ -1431,23 +1825,6 @@ def main():
     s.add_argument("--apply", action="store_true", help="执行保守机械修复：收窄宽触发词、关闭 recursive")
     s.add_argument("--confirm", action="store_true", help="确认写入 worldbook 文件")
     s.set_defaults(fn=cmd_lore_fix)
-
-
-    s = sub.add_parser("story-fix", help="若棠修复剧情账本 story_state；默认只规划，--apply --confirm 后写入")
-    s.add_argument("world", help="世界 id 或名字片段")
-    s.add_argument("request", help="自然语言修复请求，如：钥匙现在在我手里，不在贝塔手里")
-    s.add_argument("--plan", action="store_true", default=True, help="只生成修复计划，不修改数据")
-    s.add_argument("--apply", action="store_true", help="按计划修改 story_state")
-    s.add_argument("--confirm", action="store_true", help="确认写入 production 状态文件")
-    s.set_defaults(fn=cmd_story_fix)
-
-    s = sub.add_parser("cast-fix", help="若棠修复角色/用户状态 runtime_cast；默认只规划，--apply --confirm 后写入")
-    s.add_argument("world", help="世界 id 或名字片段")
-    s.add_argument("request", help="自然语言修复请求，如：阿尔法的伤势已经恢复")
-    s.add_argument("--plan", action="store_true", default=True, help="只生成修复计划，不修改数据")
-    s.add_argument("--apply", action="store_true", help="按计划修改 runtime_cast")
-    s.add_argument("--confirm", action="store_true", help="确认写入 production 状态文件")
-    s.set_defaults(fn=cmd_cast_fix)
 
     s = sub.add_parser("model", help="大模型配置:帮用户配/切/删自定义 API(add 先实测再落盘)")
     ms = s.add_subparsers(dest="mcmd", required=True)

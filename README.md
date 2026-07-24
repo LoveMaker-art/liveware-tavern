@@ -5,7 +5,7 @@ Liveware Tavern is a stateful, multi-character story application for Hermes Agen
 ## Repository Layout
 
 - `skill/` - Tavern runtime, frontend source, and state-free offline starter cards.
-- `creative-skills/` - The lightweight Tavern router plus seven specialist Hermes skills.
+- `creative-skills/` - The lightweight Tavern router plus five specialist Hermes skills.
 - `updater-skill/` - Independent Hermes skill for verified in-place updates from GitHub Releases.
 - `bootstrap/` - One-time installer for legacy instances that do not have `tavern-updater` yet.
 - `scripts/build_release.py` - Builds the signed-by-hash release assets consumed by the updater.
@@ -36,7 +36,7 @@ dist/baseline-v1.14.12-manifest.json
 dist/tavern-baseline-v1.14.12.tar.gz
 ```
 
-Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Mirrored instances can then update the runtime, atomically replace the exact eight official creative-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical-baseline assets let legacy instances complete the same three-way review when their original version predates this repository's stable Releases.
+Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Mirrored instances can then update the runtime, atomically replace the exact six official creative-skill directories, delete the two obsolete construction-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical-baseline assets let legacy instances complete the same three-way review when their original version predates this repository's stable Releases.
 
 ## Bootstrap A Legacy Instance
 
@@ -73,7 +73,7 @@ Place `updater-skill/` at:
 /opt/data/skills/system/tavern-updater/
 ```
 
-The Agent can then check and install a verified stable release after explicit user confirmation. Any instance whose updater is older than `v1.22.0` must enter this transition through the one-command Bootstrap so the updater is upgraded before it reviews the current runtime allowlist and exact eight-directory skill manifest.
+The Agent can then check and install a verified stable release after explicit user confirmation. Any instance whose updater is older than `v1.23.0` must enter this transition through the one-command Bootstrap so the updater is upgraded before it reviews the current runtime allowlist and exact six-directory skill manifest.
 
 ## License
 
