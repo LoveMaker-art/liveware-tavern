@@ -603,6 +603,11 @@ def _normalize_runtime_cast_result(raw, previous, start_turn, end_turn, persona=
 
 def _runtime_cast_system_prompt(language):
     """Return the single semantic and serialization contract for cast updates."""
+    if language == "zh-Hant":
+        return (
+            _runtime_cast_system_prompt("zh")
+            + "\n\n# 語言\n\n所有輸出的文字值必須使用繁體中文；JSON 欄位名稱維持原樣。"
+        )
     schema = r'''{
   "reviewed_character_ids": ["<character_id>"],
   "user_reviewed": true,

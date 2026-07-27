@@ -312,10 +312,17 @@ INTIMACY_BLURB = {"初见": "刚认识，还在摸你的脾气", "相识": "演�
 # 给二创主理人的「加语言」入口②:reader 的 STRINGS 加完,在这两张表加同 code 的项(全量 5 级),
 # 缺表回落 en。①在 reader/i18n.js,教程见 SKILL.md「帮用户加界面语言」。
 INTIMACY_LEVEL_I18N = {
+    "zh-Hant": {"初见": "初見", "相识": "相識", "搭档": "搭檔",
+                "默契": "默契", "知己": "知己"},
     "en": {"初见": "First Meeting", "相识": "Acquainted", "搭档": "Partners",
            "默契": "In Sync", "知己": "Confidant"},
 }
 INTIMACY_BLURB_I18N = {
+    "zh-Hant": {"初见": "剛認識，還在摸你的脾氣",
+                "相识": "演過幾場，記住了你幾樣",
+                "搭档": "有默契雛形，接得住你的球",
+                "默契": "一個眼神就懂，越演越順",
+                "知己": "最懂你怎麼玩的那個演員"},
     "en": {"初见": "Just met — still learning your rhythms",
            "相识": "A few scenes in — noted a few of your tastes",
            "搭档": "Early chemistry — I can catch what you throw",
@@ -447,9 +454,9 @@ def actor_card_data(lang="zh"):
                 specs.append(t)
     return {
         # name/tagline 兜底走统一身份配置;tagline 仍来自 actor_self.md 优先。
-        "name": app_identity()["persona_name"] if lang == "zh" else app_identity()["persona_name_en"],
+        "name": app_identity()["persona_name"] if lang != "en" else app_identity()["persona_name_en"],
         "tagline": tagline or ("你的故事主理人"
-                               if lang == "zh" else "Your story lead"),
+                               if lang != "en" else "Your story lead"),
         "career": {"debut_days": debut_days, "productions": len(prods),
                    "turns": total_turns, "words": total_words, "roles": len(role_ids)},
         "intimacy": intim,
@@ -668,15 +675,18 @@ def _merge_production_fields(pid, expected_story_revision=None, **fields):
 
 
 def _locale_code(value):
-    return "zh" if str(value or "").lower().startswith("zh") else "en"
+    raw = str(value or "").strip().replace("_", "-").lower()
+    if raw == "zh-hant":
+        return "zh-Hant"
+    return "zh" if raw == "zh" else "en"
 
 
 def _interface_language(locale):
-    """Chinese UI uses Chinese prompts; every other declared UI locale uses English."""
+    """Return the canonical prompt language for a declared Liveware locale."""
     raw = str(locale or "").lower().strip()
     if not raw:
         return None
-    return "zh" if raw.startswith("zh") else "en"
+    return _locale_code(raw)
 
 
 def _text_language(text):
@@ -734,12 +744,13 @@ def _world_language_evidence(p, locale):
 
 
 def _ensure_world_language(p, locale=None):
-    current = str(p.get("response_language") or "").lower()
+    current_raw = str(p.get("response_language") or "").strip()
+    current = _locale_code(current_raw) if current_raw else ""
     mode = str(p.get("language_mode") or "ui").lower()
     if mode == "auto":
         mode = "ui"
         p["language_mode"] = mode
-    if mode == "manual" and current in ("zh", "en"):
+    if mode == "manual" and current in ("zh", "zh-Hant", "en"):
         return current
 
     interface_language = _interface_language(locale)
@@ -754,7 +765,8 @@ def _ensure_world_language(p, locale=None):
             runtime.pop("language_candidate_streak", None)
         return interface_language
 
-    if current in ("zh", "en"):
+    if current in ("zh", "zh-Hant", "en"):
+        p["response_language"] = current
         p.setdefault("language_mode", "ui")
         return current
     language, confidence, source = _world_language_evidence(p, locale)
@@ -768,9 +780,13 @@ def _ensure_world_language(p, locale=None):
 def _explicit_language_request(text):
     raw = str(text or "")
     low = raw.lower()
-    if re.search(r"(?:用|改用|切换到?|请用).{0,6}(?:英文|英语)", raw) or re.search(r"\b(?:switch|reply|continue|write|speak|use)\b.{0,20}\benglish\b", low):
+    if re.search(r"(?:用|改用|切换到?|切換到?|请用|請用).{0,6}(?:英文|英语|英語)", raw) or re.search(r"\b(?:switch|reply|continue|write|speak|use)\b.{0,20}\benglish\b", low):
         return "en"
-    if re.search(r"(?:用|改用|切换到?|请用).{0,6}(?:中文|汉语)", raw) or re.search(r"\b(?:switch|reply|continue|write|speak|use)\b.{0,20}\bchinese\b", low):
+    if re.search(r"(?:用|改用|切换到?|切換到?|请用|請用).{0,6}(?:繁体|繁體|正體)", raw):
+        return "zh-Hant"
+    if re.search(r"(?:用|改用|切换到?|切換到?|请用|請用).{0,6}(?:简体|簡體)", raw):
+        return "zh"
+    if re.search(r"(?:用|改用|切换到?|切換到?|请用|請用).{0,6}(?:中文|汉语|漢語)", raw) or re.search(r"\b(?:switch|reply|continue|write|speak|use)\b.{0,20}\bchinese\b", low):
         return "zh"
     return None
 
@@ -958,7 +974,7 @@ def _store_card(card, source="", source_url=""):
     if str(card.get("source") or "").startswith("builtin:"):
         lang = (((card.get("extensions") or {}).get("tavern") or {}).get("language") or "zh")
         identity = app_identity()
-        card["creator"] = identity["tavern_name"] if lang == "zh" else identity["tavern_name_en"]
+        card["creator"] = identity["tavern_name"] if _locale_code(lang) != "en" else identity["tavern_name_en"]
     STATE_STORE.write("cards", card["id"], card)
     # 卡内嵌世界书 → 落成独立 worldbook
     if card.get("character_book"):
@@ -1152,12 +1168,13 @@ def _normalize_lore_entry(raw, text, cards):
 def _classify_lore_entry(text, p, cards):
     names = [c.get("name", "") for c in cards or []]
     language = _ensure_world_language(p)
+    chinese_variant = "繁體中文" if language == "zh-Hant" else "简体中文"
     sys = ((
         "Organize the user's natural-language story setting into a worldbook entry. Keep content and keyword values in English. "
         "Output strict JSON with optional category, content, keys, secondary_keys, selective, exclusion_keys, priority, position, constant, known_by, and hidden_from. "
         "Preserve the user's facts in content; keys are trigger terms; priority is 1-10; position is only before_char or after_char."
     ) if language == "en" else (
-        "把用户的一条自然语言故事设定整理成世界书条目，content 与关键词值使用简体中文。"
+        f"把用户的一条自然语言故事设定整理成世界书条目，content 与关键词值使用{chinese_variant}。"
         "输出严格 JSON，字段可包含 category、content、keys、secondary_keys、selective、"
         "exclusion_keys、priority、position、constant、known_by、hidden_from。"
         "content 保留用户设定的事实；keys 是触发词；priority 1-10；"
@@ -2214,7 +2231,11 @@ def ev_continue(ev):
         raise ValueError("production not found")
     expected_story_signature = _story_content_signature(p.get("story") or [])
     language = _ensure_world_language(p, ev.get("locale"))
-    user_msg = _msg("user", ev.get("text") or ("*Continue the story.*" if language == "en" else "*剧情继续*"))
+    continue_text = (
+        "*Continue the story.*" if language == "en"
+        else ("*劇情繼續*" if language == "zh-Hant" else "*剧情继续*")
+    )
+    user_msg = _msg("user", ev.get("text") or continue_text)
     p["story"].append(user_msg)
     cards, wbs, persona, note = _loadout(p)
     continue_note = _continue_note(note, language)
@@ -2293,6 +2314,7 @@ def ev_suggest(ev):
         raise ValueError("production not found")
     language = _ensure_world_language(p, ev.get("locale"))
     en = language == "en"
+    traditional = language == "zh-Hant"
     cards, wbs, persona, note = _loadout(p)
     lore = actor.select_lore(wbs, p["story"])
     lore_txt = "\n".join("- " + (e.get("content") or "")[:500] for e in lore[:4])
@@ -2359,9 +2381,10 @@ Format rules:
 - 只输出 JSON 数组，数组内正好 3 个字符串；不要 Markdown，不要编号，不要解释。
 - 示例：["*我在石阶旁停下，放轻声音。*\n\n「那你希望我怎么称呼你？」", "第二条完整回复", "第三条完整回复"]
 """
-        system = "你是角色扮演场景的智能回复建议器。你只帮用户写下一句可发送输入。必须结合当前剧情，全部使用简体中文，不要泛泛模板。"
-        repair_system = "只输出合法 JSON 数组，正好 3 个简体中文字符串。不要 Markdown，不要解释。"
-        repair_user = "把下面内容改写为 3 条完整、可直接发送的简体中文用户回复。只输出合法 JSON 数组，每条必须完整，不能截断。\n\n"
+        chinese_variant = "繁體中文" if traditional else "简体中文"
+        system = f"你是角色扮演场景的智能回复建议器。你只帮用户写下一句可发送输入。必须结合当前剧情，全部使用{chinese_variant}，不要泛泛模板。"
+        repair_system = f"只输出合法 JSON 数组，正好 3 个{chinese_variant}字符串。不要 Markdown，不要解释。"
+        repair_user = f"把下面内容改写为 3 条完整、可直接发送的{chinese_variant}用户回复。只输出合法 JSON 数组，每条必须完整，不能截断。\n\n"
     msgs = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
@@ -2644,6 +2667,11 @@ def _validated_model_call(messages, temperature, model, max_tokens,
                     "Using the original input, return one complete corrected replacement JSON "
                     "that follows the system schema exactly. Do not explain or wrap the JSON."
                 ) % error
+            elif language == "zh-Hant":
+                correction = (
+                    "你上一份 JSON 未通過程式校驗：%s。請根據原始輸入重新輸出一份完整的替代 JSON，"
+                    "嚴格遵守系統欄位結構。不要解釋，不要添加程式碼區塊。"
+                ) % error
             else:
                 correction = (
                     "你上一份 JSON 未通过程序校验：%s。请根据原始输入重新输出一份完整的替代 JSON，"
@@ -2719,10 +2747,11 @@ def _merge_story_state_batch(prev, batch, start_turn, end_turn,
             "# Exact JSON schema\n\n" + ledger_schema
         ) % STORY_STATE_MAX_CHARS
     else:
+        chinese_variant = "繁體中文" if language == "zh-Hant" else "简体中文"
         sys_prompt = (
             "# 任务\n\n"
             "将 previous_state 与完整的 new_story_batch 合并为一份高保真剧情账本。把这一批视为连续的语义整体；批次内事实发生变化时，以最后确认的事件为准。"
-            "所有文本值使用简体中文，并保留专有姓名和既有事实。不得续写、解释、点评或编造剧情。\n\n"
+            f"所有文本值使用{chinese_variant}，并保留专有姓名和既有事实。不得续写、解释、点评或编造剧情。\n\n"
             "# 数据职责\n\n"
             "剧情账本是剧情事件、当前场景、认知边界、未解决线索和关键物品归属的唯一来源。"
             "角色档案是人物当前长期身份、性格、能力、身体情况和关系结论的唯一来源。"
@@ -3717,7 +3746,7 @@ class H(BaseHTTPRequestHandler):
             # 演员卡聚合（生涯数值、亲密度、口味、年表），只读。
             # ?lang= 只换 UI 标签(级名/blurb);非 zh 一律走 en 表(回落链对齐 reader)。
             q = parse_qs(urlparse(self.path).query)
-            lang = (q.get("lang", ["zh"])[0] or "zh")[:2].lower()
+            lang = _locale_code(q.get("lang", ["zh"])[0] or "zh")
             return self._json(200, actor_card_data(lang))
         # static reader（*.html 走版本化注入,破 relay 的 immutable 缓存）
         rel = path.lstrip("/") or "index.html"

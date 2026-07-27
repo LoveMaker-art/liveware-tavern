@@ -6,8 +6,12 @@ import re
 
 
 def language_code(value: str = "zh") -> str:
-    code = str(value or "zh").strip().lower()
-    return "en" if code.startswith("en") else "zh"
+    code = str(value or "zh").strip().replace("_", "-").lower()
+    if code == "zh-hant":
+        return "zh-Hant"
+    if code == "zh":
+        return "zh"
+    return "en"
 
 
 def continue_note(note: str = "", response_language: str = "zh") -> str:
@@ -16,6 +20,12 @@ def continue_note(note: str = "", response_language: str = "zh") -> str:
             "Continue from the current story in English and advance to the next natural narrative beat. "
             "Prefer the result of the next action, a new scene fragment, or a small passage of time so the situation changes perceptibly. "
             "Do not repeat the same emotion, action, or information. Keep action, environment, and dialogue coherent, and leave room for the user to respond."
+        )
+    elif language_code(response_language) == "zh-Hant":
+        instruction = (
+            "結合目前的劇情進展，使用繁體中文承接最後一條使用者輸入，推進到下一個自然劇情節點。"
+            "優先選擇下一個動作結果、下一個場景片段或輕微時間推進；讓局面出現可感知的新變化。"
+            "不要停留在原地反覆解釋同一種情緒、同一個動作或同一句資訊；推進要克制，動作、環境與角色對白要自然連貫，並留下可繼續回應的空間。"
         )
     else:
         instruction = (

@@ -271,7 +271,10 @@ def _fit_history(story: list, covered_turns: int = 0) -> list:
 
 
 def _language_code(value: str = "zh") -> str:
-    return "zh" if str(value or "").lower().startswith("zh") else "en"
+    raw = str(value or "").strip().replace("_", "-").lower()
+    if raw == "zh-hant":
+        return "zh-Hant"
+    return "zh" if raw == "zh" else "en"
 
 
 def _content_language(text: str):
@@ -319,9 +322,29 @@ def format_rules_zh() -> str:
     )
 
 
+def format_rules_zh_hant() -> str:
+    return (
+        "- 全部回覆使用繁體中文。保留專有名詞和明確引用的外語原文，但不要切換敘述語言。\n"
+        "- 歷史只作為劇情事實，不作為本輪格式或語言範例。\n"
+        "- 純旁白、動作、神態、環境段落用 *...*；只要段落裡有對白或引號，整段不要加星號。\n"
+        "- 對白使用「...」；多角色對白寫成 角色名：「...」。\n"
+        "- 使用完整中文標點：句末使用句號（。），停頓使用逗號（，），問句使用問號（？）。每個完整句子都必須正常斷句，不得輸出無標點長段。\n"
+        "- 正確示例：*光線湧入瞳孔，整個世界都被鍍上一層金色。父親的臉逆著光，下巴的線條堅硬而清晰。*\n"
+        "- 錯誤示例：*光線湧入瞳孔整個世界都被鍍上一層金色父親的臉逆著光下巴的線條堅硬而清晰*\n"
+        "- 同一個動作與緊接的對白可以放在同一段；一個完整語義段結束後再換行，不要把每句話都拆成新行。\n"
+        "- 只寫當前故事正文，不寫解釋、總結、標題、選項或系統說明；不要輸出 Markdown 粗體符號 **。\n"
+        "- 只寫當前故事的一條回覆。不要決定使用者說什麼或做什麼。至少寫一段，最多四個完整段落。描寫要具體、沉浸，提供登場角色的動作、情緒和環境細節，節奏有變化，並為使用者留下回應空間。"
+    )
+
+
 def format_rules(response_language: str = "zh") -> str:
     """Route to one independent language prompt; unsupported locales use English."""
-    return format_rules_zh() if _language_code(response_language) == "zh" else format_rules_en()
+    language = _language_code(response_language)
+    if language == "zh":
+        return format_rules_zh()
+    if language == "zh-Hant":
+        return format_rules_zh_hant()
+    return format_rules_en()
 
 
 def user_input_format_rules_en() -> str:
@@ -342,9 +365,22 @@ def user_input_format_rules_zh() -> str:
     )
 
 
+def user_input_format_rules_zh_hant() -> str:
+    return (
+        "- 每條建議全部使用繁體中文，並使用完整中文標點。\n"
+        "- 使用者的純動作、神態或旁白段落用 *...*。\n"
+        "- 使用者對白使用「...」，含對白的段落不要加星號。\n"
+        "- 每條建議必須是使用者可以直接傳送的完整訊息。"
+    )
+
+
 def user_input_format_rules(response_language: str = "zh") -> str:
-    return (user_input_format_rules_zh() if _language_code(response_language) == "zh"
-            else user_input_format_rules_en())
+    language = _language_code(response_language)
+    if language == "zh":
+        return user_input_format_rules_zh()
+    if language == "zh-Hant":
+        return user_input_format_rules_zh_hant()
+    return user_input_format_rules_en()
 
 
 
@@ -677,7 +713,8 @@ Character profiles own identity, personality, abilities, and current status. The
 
 def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
                       story_state_txt: str,
-                      turn_plan_txt: str, multi_rule: str) -> str:
+                      turn_plan_txt: str, multi_rule: str,
+                      response_language: str = "zh") -> str:
     return f"""# 任务
 写出当前登场角色在这场虚构故事中对用户最后行动的下一段回应。
 
@@ -716,7 +753,7 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 </turn_plan>
 
 ## 输出规范
-{format_rules_zh()}{multi_rule}
+{format_rules(response_language)}{multi_rule}
 - 段落应完整，承接用户最后一句，并自然留下可继续回应的空间。
 - 给角色一个身体：手里在做什么、呼吸、环境的声音光线。
 - 情绪藏细节，不直接喊。
@@ -750,7 +787,7 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
     sys = (_system_prompt_en(roles_txt, relationships_txt, lore_top_txt, persona_txt,
                              story_state_txt, turn_plan_txt, multi_rule) if en else
            _system_prompt_zh(roles_txt, relationships_txt, lore_top_txt, persona_txt,
-                             story_state_txt, turn_plan_txt, multi_rule))
+                             story_state_txt, turn_plan_txt, multi_rule, lang))
     msgs = [{"role": "system", "content": sys}]
     covered_turns = int((effective_story_state or {}).get("turns") or 0)
     for m in _fit_history(story, covered_turns=covered_turns):
@@ -762,7 +799,7 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
             # A wrong-language model reply must not become the style example for
             # every later turn. Scene state / story state preserve its facts.
             historical_language = _content_language(text)
-            if historical_language and historical_language != lang:
+            if historical_language and ((historical_language == "en") != (lang == "en")):
                 continue
             msgs.append({"role": "assistant", "content": text})
     if lore_near:

@@ -30,10 +30,11 @@ def closest_card_name(value, names):
 def scene_story_excerpt(production, max_items=12, response_language=None):
     language = response_language or (production or {}).get("response_language") or "zh"
     en = language == "en"
-    cname = "Story response" if en else "故事回复"
+    traditional = language == "zh-Hant"
+    cname = "Story response" if en else ("故事回覆" if traditional else "故事回复")
     lines = []
     for m in ((production or {}).get("story") or [])[-max_items:]:
-        who = ("User" if en else "用户") if m.get("role") == "user" else cname
+        who = ("User" if en else ("使用者" if traditional else "用户")) if m.get("role") == "user" else cname
         text = (m.get("text") or "").strip().replace("\r\n", "\n")
         if text:
             lines.append(f"{who}: {text[:700]}")
@@ -46,13 +47,15 @@ def build_turn_plan(production, cards, *, response_language, story_state,
         return {}
     language = response_language or "zh"
     en = language == "en"
+    traditional = language == "zh-Hant"
     names = card_names(cards)
     sys = ((
         "You schedule a multi-character interactive story. Based on the current scene, active characters, and the user's latest message, create a very short turn plan in English. "
         "Do not write story prose or explanations. Output strict JSON with only primary_speaker, supporting_characters, silent_characters, narration_goal, and do_not. "
         "primary_speaker is a string; the other fields are strings or string arrays. Not every character must speak. Prefer the addressed or most motivated character and preserve knowledge boundaries."
     ) if en else (
-        "你是互动故事的场面调度。根据当前场景、登场角色和用户最新输入，为下一次角色扮演回复制定极短的简体中文调度。"
+        "你是互动故事的场面调度。根据当前场景、登场角色和用户最新输入，为下一次角色扮演回复制定极短的"
+        + ("繁體中文" if traditional else "简体中文") + "调度。"
         "不要写正文，不要解释。输出严格 JSON，字段只有 primary_speaker、supporting_characters、silent_characters、"
         "narration_goal、do_not。primary_speaker 是字符串，其余是字符串数组或字符串。"
         "原则：不要求所有角色说话；优先回应被用户点名或最有动机的人；保护角色知识边界。"

@@ -56,12 +56,21 @@ def ensure_actor_reply(production, cards, worldbooks, persona, note, text, *,
     if text:
         return text
     language = ensure_world_language(production)
-    retry_instruction = (
-        "Continue from the user's latest message with one coherent story response in English. "
-        "Keep action, environment, and character dialogue naturally connected."
-        if language == "en" else
-        "承接最后一条用户输入，使用简体中文续写当前故事的一段内容。动作、环境与角色对白要自然连贯。"
-    )
+    if language == "en":
+        retry_instruction = (
+            "Continue from the user's latest message with one coherent story response in English. "
+            "Keep action, environment, and character dialogue naturally connected."
+        )
+    elif language == "zh-Hant":
+        retry_instruction = (
+            "承接最後一條使用者輸入，使用繁體中文續寫當前故事的一段內容。"
+            "動作、環境與角色對白要自然連貫。"
+        )
+    else:
+        retry_instruction = (
+            "承接最后一条用户输入，使用简体中文续写当前故事的一段内容。"
+            "动作、环境与角色对白要自然连贯。"
+        )
     retry_note = (note + "\n" if note else "") + retry_instruction
     if turn_plan is None:
         turn_plan = prepare_turn_plan(production, cards)

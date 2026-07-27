@@ -17,13 +17,13 @@ function fmt(s) {
 }
 function loc(obj, field) {
   if (!obj || typeof obj !== "object") return obj && obj[field];
-  const lang = I18N.lang === "zh" ? "zh" : "en";
+  const lang = I18N.lang;
   const pack = obj.i18n && obj.i18n[lang];
   let value = null;
   if (pack && pack[field] !== undefined && pack[field] !== null && String(pack[field]).trim() !== "") value = pack[field];
   else {
     const zh = obj.i18n && obj.i18n.zh;
-    if (I18N.lang === "zh" && zh && zh[field]) value = zh[field];
+    if (I18N.isChinese && zh && zh[field]) value = zh[field];
     else value = obj[field];
   }
   return I18N.renderName ? I18N.renderName(value) : value;
@@ -1257,7 +1257,9 @@ async function doContinue(btn) {
   const productionId = state.active.id;
   const startedAt = Date.now();
   state.busy = true; setCtlBusy(btn, t("contBusy")); setComposerSending(true);
-  const text = I18N.lang === "zh" ? "*剧情继续*" : "*Continue the story.*";
+  const text = I18N.lang === "zh"
+    ? "*剧情继续*"
+    : (I18N.lang === "zh-Hant" ? "*劇情繼續*" : "*Continue the story.*");
   const tempUser = { role: "user", text };
   const tempChar = { role: "char", text: t("thinking"), _temp: true };
   state.active.story.push(tempUser, tempChar);
@@ -2273,7 +2275,7 @@ function renderVoiceSheet() {
         <span class="mcCheck">✓</span><button class="mcDel" data-clone-delete="${esc(clone.id)}" aria-label="${esc(t("voiceCloneDelete"))}">${TRASH_SVG}</button></div>`).join("")
     + `<p class="voiceModelName voiceListLabel">${esc(t("voicePresetLabel"))}</p>`
     + (cfg.voices || []).map((voice) => {
-      const description = I18N.lang === "zh" ? voice.description : "";
+      const description = I18N.isChinese ? voice.description : "";
       const setting = cfg.preset_settings?.[voice.id] || { speed: 0.9, instructions: "" };
       const detail = setting.instructions || description || t(`voiceLang_${voice.language || "chinese"}`);
       const meta = `${Number(setting.speed || 0.9).toFixed(2)}× · ${detail}`;

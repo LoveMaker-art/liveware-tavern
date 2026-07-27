@@ -16,6 +16,15 @@ import turn_plan_service
 
 
 class RuntimeServiceRegressionTests(unittest.TestCase):
+    def test_traditional_chinese_runtime_prompts(self):
+        for locale in ("zh-Hant", "zh_Hant"):
+            self.assertEqual(reply_format.language_code(locale), "zh-Hant")
+        self.assertIn("使用繁體中文", reply_format.continue_note(response_language="zh-Hant"))
+        self.assertIn(
+            "所有輸出的文字值必須使用繁體中文",
+            runtime_cast_service._runtime_cast_system_prompt("zh-Hant"),
+        )
+
     def test_message_segments_detects_explicit_and_inferred_speakers(self):
         cards = [
             {"id": "c1", "name": "周婉"},

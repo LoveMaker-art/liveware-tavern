@@ -5,6 +5,15 @@ import actor
 
 
 class ActorHttpTests(unittest.TestCase):
+    def test_traditional_chinese_locale_and_format_contract(self):
+        for locale in ("zh-Hant", "zh_Hant"):
+            self.assertEqual(actor._language_code(locale), "zh-Hant")
+        self.assertEqual(actor._language_code("zh"), "zh")
+        self.assertEqual(actor._language_code("fr"), "en")
+        rules = actor.format_rules("zh-Hant")
+        self.assertIn("全部回覆使用繁體中文", rules)
+        self.assertNotIn("全部回复使用简体中文", rules)
+
     def test_reads_json_within_limit(self):
         self.assertEqual(actor._read_json_response(io.BytesIO(b'{"ok": true}'), 20), {"ok": True})
 

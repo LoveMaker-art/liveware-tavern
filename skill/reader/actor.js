@@ -16,7 +16,7 @@ async function loadIdentity() {
 // 累计字:zh ≥1万显「X.X万」;en 用 k(12.3k)。整数直显(actor-card §6 数值格式)。
 function fmtWords(n) {
   n = Math.round(n || 0);
-  if (I18N.lang === 'zh') return n >= 10000 ? (n / 10000).toFixed(1) + t('wan') : String(n);
+  if (I18N.isChinese) return n >= 10000 ? (n / 10000).toFixed(1) + t('wan') : String(n);
   return n >= 10000 ? (n / 1000).toFixed(1) + 'k' : String(n);
 }
 
