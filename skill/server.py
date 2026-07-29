@@ -676,9 +676,9 @@ def _merge_production_fields(pid, expected_story_revision=None, **fields):
 
 def _locale_code(value):
     raw = str(value or "").strip().replace("_", "-").lower()
-    if raw == "zh-hant":
+    if raw in ("zh-hant", "zh-tw", "zh-hk", "zh-mo"):
         return "zh-Hant"
-    return "zh" if raw == "zh" else "en"
+    return "zh" if raw == "zh" or raw.startswith("zh-") else "en"
 
 
 def _interface_language(locale):
@@ -2255,31 +2255,96 @@ def ev_continue(ev):
             "production_id": p["id"], "state_sync": state_sync}
 
 
-def _compact_story_context(card, story, max_turns=8, response_language="zh"):
+def _recent_suggestion_context(story, rounds=5, response_language="zh"):
+    """Render only the latest completed dialogue rounds for smart replies."""
+    messages = [
+        message for message in (story or [])
+        if message.get("role") in ("user", "char", "assistant")
+        and str(message.get("text") or "").strip()
+    ]
+    user_indexes = [
+        index for index, message in enumerate(messages)
+        if message.get("role") == "user"
+    ]
+    if len(user_indexes) >= rounds:
+        messages = messages[user_indexes[-rounds]:]
+
     lines = []
     en = _locale_code(response_language) == "en"
-    cname = card.get("name", "Character" if en else "角色")
-    for m in (story or [])[-max_turns:]:
-        who = ("User" if en else "用户") if m.get("role") == "user" else cname
-        text = (m.get("text") or "").strip().replace("\r\n", "\n")
-        lines.append(f"{who}: {text[:700]}")
+    for message in messages:
+        who = ("User" if en else "用户") if message.get("role") == "user" else (
+            "Story" if en else "故事"
+        )
+        text = str(message.get("text") or "").strip().replace("\r\n", "\n")
+        lines.append(f"{who}: {text}")
     return "\n".join(lines)
+
+
+def _escape_json_string_newlines(raw):
+    """Escape literal line breaks inside JSON strings without changing prose."""
+    output = []
+    in_string = False
+    escaped = False
+    for char in str(raw or ""):
+        if in_string:
+            if escaped:
+                output.append(char)
+                escaped = False
+            elif char == "\\":
+                output.append(char)
+                escaped = True
+            elif char == '"':
+                output.append(char)
+                in_string = False
+            elif char == "\n":
+                output.append("\\n")
+            elif char == "\r":
+                continue
+            else:
+                output.append(char)
+        else:
+            output.append(char)
+            if char == '"':
+                in_string = True
+    return "".join(output)
 
 
 def _parse_suggestions(raw):
     raw = (raw or "").strip()
     suggestions = []
-    try:
-        data = json.loads(raw)
-    except Exception:
-        start, end = raw.find("["), raw.rfind("]")
-        if start != -1 and end != -1 and end > start:
+
+    tagged = re.findall(
+        r"<suggestion(?:\s[^>]*)?>(.*?)</suggestion\s*>",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if len(tagged) >= 3:
+        for item in tagged[:3]:
+            x = _normalize_actor_reply(item.strip())
+            if x:
+                suggestions.append(x)
+        if len(suggestions) == 3:
+            return suggestions
+
+    candidates = [raw]
+    start, end = raw.find("["), raw.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        extracted = raw[start:end + 1]
+        if extracted != raw:
+            candidates.append(extracted)
+
+    data = None
+    for candidate in candidates:
+        for value in (candidate, _escape_json_string_newlines(candidate)):
             try:
-                data = json.loads(raw[start:end + 1])
+                data = json.loads(value)
+                break
             except Exception:
-                data = None
-        else:
-            data = None
+                continue
+        if data is not None:
+            break
+    if isinstance(data, dict):
+        data = data.get("suggestions") or data.get("replies") or data.get("options")
     if isinstance(data, list):
         for item in data:
             if isinstance(item, dict):
@@ -2312,29 +2377,13 @@ def ev_suggest(ev):
     p = load_production(ev["production_id"])
     if not p:
         raise ValueError("production not found")
-    language = _ensure_world_language(p, ev.get("locale"))
+    language = _interface_language(ev.get("locale")) or _ensure_world_language(p)
     en = language == "en"
     traditional = language == "zh-Hant"
-    cards, wbs, persona, note = _loadout(p)
-    lore = actor.select_lore(wbs, p["story"])
-    lore_txt = "\n".join("- " + (e.get("content") or "")[:500] for e in lore[:4])
-    persona_txt = actor.user_character_block(persona, language)
-    primary = cards[0] if cards else {}
-    ctx = _compact_story_context(primary, p["story"], response_language=language)
+    ctx = _recent_suggestion_context(p["story"], rounds=5, response_language=language)
     if en:
-        prompt = f"""# Character
-Name: {primary.get('name','')}
-Personality: {(primary.get('personality') or '')[:700]}
-Scenario: {(primary.get('scenario') or '')[:700]}
-
-# User persona
-{persona_txt or '(Not set)'}
-
-# Relevant world lore
-{lore_txt or '(None)'}
-
-# Recent story
-{ctx}
+        prompt = f"""# Latest five dialogue rounds
+{ctx or '(No dialogue yet)'}
 
 Write exactly three complete messages the user could send next. Every option must respond directly to the final character message above.
 Use three distinct directions:
@@ -2346,28 +2395,20 @@ Format rules:
 {actor.user_input_format_rules(language)}
 - Make every option specific to this story rather than a reusable template.
 - Do not invent intimacy, shared history, physical contact, or facts that have not appeared.
-- Output only a valid JSON array containing exactly three strings. No Markdown, numbering, or explanation.
-- Example: ["*I stop beside the stone steps and lower my voice.*\n\n「What would you like me to call you?」", "Second complete reply", "Third complete reply"]
+- Keep each option concise but complete, around 60–110 English words.
+- Write only the user's own actions, thoughts, or dialogue. Never write another character's speech, actions, or reaction.
+- Wrap every message in its own <suggestion>...</suggestion> block.
+- Output exactly three blocks and nothing else. Keep normal paragraph breaks inside each block.
+- Example: <suggestion>*I stop beside the stone steps and lower my voice.*
+
+「What would you like me to call you?」</suggestion>
 """
         system = "You generate smart reply options for a roleplay scene. Write only the user's next sendable messages, grounded in the current story, in English."
-        repair_system = "Output only a valid JSON array containing exactly three English strings. No Markdown or explanation."
-        repair_user = "Rewrite the content below as three complete messages the user can send. Return only a valid JSON array; do not truncate any item.\n\n"
     else:
-        prompt = f"""# 角色
-名字：{primary.get('name','')}
-性格：{(primary.get('personality') or '')[:700]}
-场景：{(primary.get('scenario') or '')[:700]}
+        prompt = f"""# 最近五轮对话
+{ctx or '（暂无对话）'}
 
-# 用户扮演者
-{persona_txt or '（未设置）'}
-
-# 相关世界设定
-{lore_txt or '（无）'}
-
-# 最近剧情
-{ctx}
-
-请给出 3 条用户接下来可直接发送的完整回复，必须紧扣【最近剧情】最后一条角色回复。
+请给出 3 条用户接下来可直接发送的完整回复，必须紧扣【最近五轮对话】最后一条角色回复。
 三条方向不同：
 1. 情绪回应：接住角色此刻情绪或态度。
 2. 人物互动：用靠近、追问、试探、递动作等方式推进两人关系。
@@ -2378,26 +2419,24 @@ Format rules:
 - 每条都必须是完整用户输入，不是短句提示；可以包含多段动作、心理和对白。
 - 每条都必须能看出它来自当前剧情，不要泛泛模板。
 - 不要假定未出现的亲密关系、共同过去、身体接触或剧情事实。
-- 只输出 JSON 数组，数组内正好 3 个字符串；不要 Markdown，不要编号，不要解释。
-- 示例：["*我在石阶旁停下，放轻声音。*\n\n「那你希望我怎么称呼你？」", "第二条完整回复", "第三条完整回复"]
+- 每条控制在 80–150 个汉字，短而完整。
+- 只写用户角色自己的动作、心理或对白；不得替任何登场角色发言、行动或反应。
+- 每条回复分别放进一个 <suggestion>...</suggestion> 标签。
+- 只输出正好 3 个标签，不要输出标签以外的文字；标签内正常分段。
+- 示例：<suggestion>*我在石阶旁停下，放轻声音。*
+
+「那你希望我怎么称呼你？」</suggestion>
 """
         chinese_variant = "繁體中文" if traditional else "简体中文"
         system = f"你是角色扮演场景的智能回复建议器。你只帮用户写下一句可发送输入。必须结合当前剧情，全部使用{chinese_variant}，不要泛泛模板。"
-        repair_system = f"只输出合法 JSON 数组，正好 3 个{chinese_variant}字符串。不要 Markdown，不要解释。"
-        repair_user = f"把下面内容改写为 3 条完整、可直接发送的{chinese_variant}用户回复。只输出合法 JSON 数组，每条必须完整，不能截断。\n\n"
     msgs = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
-    raw = actor.chat(msgs, temperature=0.75, model=_active_model())
+    raw = actor.chat(
+        msgs, temperature=0.75, model=_active_model(), max_tokens=600,
+    )
     suggestions = _parse_suggestions(raw)
-    if not suggestions:
-        repair = [
-            {"role": "system", "content": repair_system},
-            {"role": "user", "content": repair_user + raw},
-        ]
-        raw = actor.chat(repair, temperature=0.35, model=_active_model())
-        suggestions = _parse_suggestions(raw)
     return {"suggestions": suggestions[:3]}
 
 

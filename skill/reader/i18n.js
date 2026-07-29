@@ -1123,10 +1123,10 @@ const I18N = (() => {
   function normalizeLocale(value) {
     const raw = String(value || "").trim().replace(/_/g, "-").toLowerCase();
     if (!raw) return "en";
-    if (raw === "zh-hant") {
+    if (["zh-hant", "zh-tw", "zh-hk", "zh-mo"].includes(raw)) {
       return "zh-Hant";
     }
-    if (raw === "zh") return "zh";
+    if (raw === "zh" || raw.startsWith("zh-")) return "zh";
     return "en";
   }
 
