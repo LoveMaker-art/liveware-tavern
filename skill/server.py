@@ -2562,13 +2562,16 @@ def _refresh_taste_profile():
         return story_profile.set_taste_profile(STATE, SEED_ACTOR, empty)
     schema = {key: ["string"] for key in story_profile.TASTE_PROFILE_FIELDS}
     prompt = (
-        "你是故事口味档案整理员。根据已有的模型复盘条目，归纳用户稳定的故事偏好。\n"
+        "你负责把已经确认的故事复盘整理成稳定、可执行的用户故事档案。\n"
         "只归纳输入中有证据支持的内容，不补写剧情，不推测现实人格，不把临时剧情状态当成偏好。\n"
-        "相近内容合并；每个字段最多四项；证据不足的字段输出空数组。\n"
+        "相近内容合并；每个字段最多四项；所有字段都允许为空，证据不足时输出空数组。\n"
         "character_styles=偏爱的角色类型或特质；relationship_dynamics=偏爱的人物关系与互动张力；"
         "story_themes=偏爱的世界、题材与主题；pacing=节奏与推进偏好；"
-        "narrative_style=叙事视角、描写与文风；interaction_preferences=用户参与和选择方式；"
-        "boundaries=明确不希望出现的模式。\n"
+        "narrative_style=叙事视角、描写与文风；interaction_preferences=用户在故事中的参与和选择方式；"
+        "response_adaptations=主理人在推荐、整理和讨论故事时应采用的具体回应方式，"
+        "每项写成‘情境 + 回应动作’，例如‘推荐时先给最贴合的一项，并说明它对应了用户哪种稳定口味’；"
+        "重点写主理人怎么回应，不再次罗列用户喜欢的题材或剧情元素；"
+        "boundaries=用户明确表达的不希望出现的故事模式。\n"
         "只输出严格 JSON，键必须完整且只能使用以下结构：\n"
         + json.dumps(schema, ensure_ascii=False)
     )

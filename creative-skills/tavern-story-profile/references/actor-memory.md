@@ -39,12 +39,14 @@ Storage contract:
 - `profile_eras.json` contains bounded phase summaries generated from archived events.
 - `actor_self.md` is a rendered compatibility view, not a writable source.
 - Fixed Tavern marker blocks in `USER.md` and `MEMORY.md` are projections. Replace them; never append a second copy.
+- `USER.md` may contain a separate, human-maintained interaction section outside the Tavern marker. Preserve it. Technical operating rules belong in `AGENTS.md` or specialist references, not user memory.
+- `MEMORY.md` may contain a small curated shared-history section outside the Tavern marker. Keep it relational and durable; do not store logs, commands, cache details, or transient runtime state.
 - Hermes natively loads `USER.md` and `MEMORY.md` into its system context. Do not add a second prompt hook for these projections.
 
 Memory boundary:
 
-- Tavern acting preferences go through `learn`/`reflect`. When a new durable preference is accepted, the runtime asks the configured model to aggregate the confirmed notes into bounded taste fields for `USER.md`.
-- Concrete story memories come only from successful model-generated `story_state.timeline` and `story_state.open_threads` checkpoints. They are projected into `MEMORY.md` without program-written semantic summaries.
+- Tavern acting preferences go through `learn`/`reflect`. When a new durable preference is accepted, the runtime asks the configured model to aggregate the confirmed notes into bounded taste fields and evidence-based `response_adaptations` for `USER.md`.
+- Concrete story memories come only from successful model-generated `story_state.timeline` and `story_state.open_threads` checkpoints. They are projected into `MEMORY.md` as complete bounded lines without program-written semantic summaries.
 - General life facts about the user belong in ordinary Hermes memory, not tavern runtime state.
 - Fictional story events remain explicitly labeled as story memory and must not be treated as real-life facts.
 

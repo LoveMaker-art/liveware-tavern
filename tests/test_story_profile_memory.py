@@ -42,6 +42,7 @@ class StoryProfileMemoryTests(unittest.TestCase):
             "story_themes": [],
             "narrative_style": [],
             "interaction_preferences": [],
+            "response_adaptations": ["推荐时优先给出一个最贴合的选择，并简要说明理由。"],
             "boundaries": [],
         }
         profile["shared_story_memory"] = [{
@@ -65,8 +66,11 @@ class StoryProfileMemoryTests(unittest.TestCase):
         user = (self.memories / "USER.md").read_text(encoding="utf-8")
         memory = (self.memories / "MEMORY.md").read_text(encoding="utf-8")
         self.assertIn("剧情节奏：克制推进", user)
+        self.assertIn("## 与用户共创时", user)
+        self.assertIn("推荐时优先给出一个最贴合的选择", user)
         self.assertIn("# Existing user facts", user)
         self.assertIn("TAVERN_SHARED_MEMORY_START", memory)
+        self.assertIn("以下均为酒馆中的虚构故事", memory)
         self.assertIn("### 雨夜钟楼（账本整理至第 15 轮）", memory)
         self.assertIn("用户与守塔人找到了地下室入口。", memory)
         self.assertNotIn("- 虚构剧情", memory)
@@ -93,6 +97,24 @@ class StoryProfileMemoryTests(unittest.TestCase):
         memory = (self.memories / "MEMORY.md").read_text(encoding="utf-8")
         self.assertIn("确认守塔人的真实身份。", memory)
         self.assertIn("密道尽头仍未探索。", memory)
+
+    def test_memory_projection_keeps_complete_lines_when_bounded(self):
+        profile = story_profile.ensure_profile(self.state, self.seed)
+        profile["shared_story_memory"] = [{
+            "world": f"世界 {index}",
+            "covered_turns": 30,
+            "events": [f"完整事件 {index}-{event}。" + ("细节" * 80) for event in range(8)],
+            "open_threads": [f"未结束线索 {index}-{thread}。" for thread in range(4)],
+        } for index in range(8)]
+
+        projection = story_profile.memory_preview(profile)["memory"]
+
+        self.assertLessEqual(len(projection), story_profile.MEMORY_PROJECTION_MAX_CHARS)
+        self.assertIn("### 世界 0（账本整理至第 30 轮）", projection)
+        self.assertNotIn("### 世界 5", projection)
+        for line in projection.splitlines():
+            if line.startswith("- 完整事件"):
+                self.assertTrue(line.endswith("细节"))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 ---
 name: tavern-world
 description: Build complete Tavern worlds from an idea or existing material, including research, character cards, worldbooks, the user's persona, opening scene, atomic import, and verification.
-version: 1.23.3
+version: 1.23.4
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

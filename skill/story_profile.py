@@ -21,6 +21,11 @@ except ImportError:  # pragma: no cover - non-POSIX development environments
 SCHEMA_VERSION = 1
 RECENT_TIMELINE_LIMIT = 8
 ERA_EVENT_LIMIT = 20
+USER_PROJECTION_MAX_CHARS = 900
+MEMORY_PROJECTION_MAX_CHARS = 1300
+SHARED_STORY_WORLD_LIMIT = 3
+SHARED_STORY_EVENT_LIMIT = 4
+SHARED_STORY_THREAD_LIMIT = 2
 PROFILE_FILENAME = "story_profile.json"
 EVENTS_FILENAME = "profile_events.jsonl"
 ERAS_FILENAME = "profile_eras.json"
@@ -39,7 +44,7 @@ _SENSITIVE_STORY_TERMS = (
 )
 TASTE_PROFILE_FIELDS = (
     "character_styles", "relationship_dynamics", "story_themes", "pacing",
-    "narrative_style", "interaction_preferences", "boundaries",
+    "narrative_style", "interaction_preferences", "response_adaptations", "boundaries",
 )
 
 
@@ -445,6 +450,21 @@ def _replace_block(text: str, start: str, end: str, body: str) -> str:
     return result.rstrip() + "\n"
 
 
+def _bounded_markdown(lines: list[str], max_chars: int) -> str:
+    """Keep complete Markdown lines within a bounded projection."""
+    kept = []
+    size = 0
+    for line in lines:
+        addition = len(line) + (1 if kept else 0)
+        if kept and size + addition > max_chars:
+            break
+        if not kept and len(line) > max_chars:
+            return line[:max_chars].rstrip()
+        kept.append(line)
+        size += addition
+    return "\n".join(kept).rstrip()
+
+
 def _user_projection(profile: dict) -> str:
     labels = (
         ("character_styles", "偏爱的角色风格"),
@@ -452,7 +472,7 @@ def _user_projection(profile: dict) -> str:
         ("story_themes", "偏爱的世界与题材"),
         ("pacing", "剧情节奏"),
         ("narrative_style", "叙事方式"),
-        ("interaction_preferences", "互动方式"),
+        ("interaction_preferences", "偏好的故事参与方式"),
         ("boundaries", "明确边界"),
     )
     taste = profile.get("taste_profile") or {}
@@ -463,25 +483,38 @@ def _user_projection(profile: dict) -> str:
             lines.append(f"- {label}：" + "；".join(values[:4]))
     if len(lines) == 1:
         lines.append("- 档案室尚未形成稳定的故事口味总结。")
-    return "\n".join(lines)[:1400]
+
+    adaptations = [
+        str(item).strip()
+        for item in taste.get("response_adaptations", [])
+        if str(item).strip()
+    ]
+    if adaptations:
+        lines += ["", "## 与用户共创时"]
+        lines.extend(f"- {item}" for item in adaptations[:4])
+    return _bounded_markdown(lines, USER_PROJECTION_MAX_CHARS)
 
 
 def _memory_projection(profile: dict) -> str:
-    lines = ["## 与用户的故事记忆"]
-    for world in profile.get("shared_story_memory") or []:
+    lines = [
+        "## 与用户共同记得的故事",
+        "> 以下均为酒馆中的虚构故事，只在相关话题中自然使用。",
+    ]
+    worlds = (profile.get("shared_story_memory") or [])[:SHARED_STORY_WORLD_LIMIT]
+    for world in worlds:
         name = str(world.get("world") or "未命名世界").strip()
         turns = int(world.get("covered_turns") or 0)
         lines += ["", f"### {name}" + (f"（账本整理至第 {turns} 轮）" if turns else "")]
-        for event in (world.get("events") or [])[-8:]:
+        for event in (world.get("events") or [])[-SHARED_STORY_EVENT_LIMIT:]:
             clean = str(event).strip()
             if clean:
                 lines.append("- " + clean)
         threads = [str(item).strip() for item in world.get("open_threads", []) if str(item).strip()]
         if threads:
-            lines.append("- 尚未结束：" + "；".join(threads[:3]))
-    if len(lines) == 1:
+            lines.append("- 尚未结束：" + "；".join(threads[:SHARED_STORY_THREAD_LIMIT]))
+    if not worlds:
         lines.append("- 还没有完成账本整理的共同故事。")
-    return "\n".join(lines)[:1900]
+    return _bounded_markdown(lines, MEMORY_PROJECTION_MAX_CHARS)
 
 
 def sync_hermes_memories(profile: dict, memories_dir: str | Path | None = None) -> dict:
@@ -625,7 +658,7 @@ def sync_story_states(
             "updated_at": int(state.get("updated_at") or production.get("updated_at") or 0),
         })
     worlds.sort(key=lambda item: (item["updated_at"], item["covered_turns"]), reverse=True)
-    worlds = worlds[:8]
+    worlds = worlds[:SHARED_STORY_WORLD_LIMIT]
 
     profile_path, _, eras_path, actor_path = _paths(state_dir)
     with _LOCK:

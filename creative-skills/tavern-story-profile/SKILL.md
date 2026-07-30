@@ -1,7 +1,7 @@
 ---
 name: tavern-story-profile
 description: Recall stories, maintain the structured story profile, and synchronize model-aggregated taste and bounded plot-ledger memory into Hermes.
-version: 1.23.3
+version: 1.23.4
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -30,7 +30,8 @@ Do not store one-off plot facts, role state, model failures, or formatting bugs 
 7. Treat `/opt/data/tavern-state/story_profile.json` as the only active story-profile source. `actor_self.md` is a rendered compatibility view.
 8. Use `memory-preview` before a manual profile sync. Never append Tavern material directly to `USER.md` or `MEMORY.md`.
 9. The compact taste profile is model-aggregated from confirmed reflection notes. Runtime code may validate and render it, but must not derive taste through keyword rules.
-10. Concrete shared events come from each world's successful model-generated `story_state`; never infer plot memory from preference notes.
+10. The model-generated profile must include bounded `response_adaptations`: concrete ways the story curator should recommend, organize, or discuss stories based only on confirmed taste evidence.
+11. Concrete shared events come from each world's successful model-generated `story_state`; never infer plot memory from preference notes.
 
 Commands:
 
@@ -56,11 +57,11 @@ Before writing state, load the Tavern shared contract.
 ## Pitfalls
 
 - Ordinary chat memory is not the Tavern story profile.
-- Story preferences may inform recommendations and the story curator's understanding of how the user likes to play.
+- Story preferences should alter recommendations and co-creation behavior through the managed `response_adaptations` field. They must not be treated as real-life personality evidence.
 - Story events belong to the story ledger, not actor_self.md.
 - Temporary emotion and current relationship state are not durable user preferences.
 - A director note is world-local and may be invisible in the frontend; do not use it as hidden corrective prompt storage.
 
 ## Verification
 
-After learn or reflect, run `profile_memory.py audit`. Confirm the new item is durable, specific, attributable to the user, and free of private or unrelated facts. `USER.md` receives the bounded model-aggregated taste profile; `MEMORY.md` receives bounded concrete events from successful model-generated story ledgers. Both fixed marker blocks are replaced atomically and never appended without limit.
+After learn or reflect, run `profile_memory.py audit`. Confirm the new item is durable, specific, attributable to the user, and free of private or unrelated facts. `USER.md` receives bounded model-aggregated taste and response adaptations; `MEMORY.md` receives complete, bounded event lines from successful model-generated story ledgers. Both fixed marker blocks are replaced atomically and never appended without limit.
