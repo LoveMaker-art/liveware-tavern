@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 from contextlib import contextmanager
@@ -34,6 +35,7 @@ USER_START = "<!-- TAVERN_USER_PROFILE_START -->"
 USER_END = "<!-- TAVERN_USER_PROFILE_END -->"
 MEMORY_START = "<!-- TAVERN_SHARED_MEMORY_START -->"
 MEMORY_END = "<!-- TAVERN_SHARED_MEMORY_END -->"
+PROJECTION_REVISION_PREFIX = "<!-- TAVERN_PROJECTION_REVISION:"
 
 _LOCK = threading.RLock()
 
@@ -465,6 +467,11 @@ def _bounded_markdown(lines: list[str], max_chars: int) -> str:
     return "\n".join(kept).rstrip()
 
 
+def _projection_marker(profile: dict) -> str:
+    revision = max(0, int(profile.get("revision") or 0))
+    return f"{PROJECTION_REVISION_PREFIX}{revision} -->"
+
+
 def _user_projection(profile: dict) -> str:
     labels = (
         ("character_styles", "偏爱的角色风格"),
@@ -476,12 +483,12 @@ def _user_projection(profile: dict) -> str:
         ("boundaries", "明确边界"),
     )
     taste = profile.get("taste_profile") or {}
-    lines = ["## 用户的故事口味"]
+    lines = [_projection_marker(profile), "## 用户的故事口味"]
     for key, label in labels:
         values = [str(item).strip() for item in taste.get(key, []) if str(item).strip()]
         if values:
             lines.append(f"- {label}：" + "；".join(values[:4]))
-    if len(lines) == 1:
+    if len(lines) == 2:
         lines.append("- 档案室尚未形成稳定的故事口味总结。")
 
     adaptations = [
@@ -497,6 +504,7 @@ def _user_projection(profile: dict) -> str:
 
 def _memory_projection(profile: dict) -> str:
     lines = [
+        _projection_marker(profile),
         "## 与用户共同记得的故事",
         "> 以下均为酒馆中的虚构故事，只在相关话题中自然使用。",
     ]
@@ -517,7 +525,63 @@ def _memory_projection(profile: dict) -> str:
     return _bounded_markdown(lines, MEMORY_PROJECTION_MAX_CHARS)
 
 
-def sync_hermes_memories(profile: dict, memories_dir: str | Path | None = None) -> dict:
+def _invalidate_hermes_prompt_cache(
+    profile: dict,
+    state_db: str | Path | None = None,
+) -> dict:
+    """Expire active ClawChat prompts that predate this projection revision."""
+    path = Path(state_db or os.environ.get("TAVERN_HERMES_STATE_DB", "/opt/data/state.db"))
+    if not path.exists():
+        return {"checked": False, "invalidated": 0}
+
+    marker = _projection_marker(profile)
+    try:
+        with sqlite3.connect(path, timeout=2.0) as connection:
+            session_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(sessions)")
+            }
+            required = {"id", "source", "system_prompt", "ended_at"}
+            if not required.issubset(session_columns):
+                return {"checked": False, "invalidated": 0, "reason": "unsupported sessions schema"}
+
+            result = connection.execute(
+                """
+                UPDATE sessions
+                   SET system_prompt = NULL
+                 WHERE source = 'clawchat'
+                   AND ended_at IS NULL
+                   AND system_prompt IS NOT NULL
+                   AND instr(system_prompt, ?) = 0
+                """,
+                (marker,),
+            )
+            meta_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'state_meta'"
+            ).fetchone()
+            if meta_table:
+                connection.execute(
+                    """
+                    INSERT INTO state_meta(key, value)
+                    VALUES('tavern_projection_revision', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (str(max(0, int(profile.get("revision") or 0))),),
+                )
+            return {"checked": True, "invalidated": max(0, int(result.rowcount or 0))}
+    except sqlite3.Error as error:
+        return {
+            "checked": False,
+            "invalidated": 0,
+            "reason": f"{type(error).__name__}: {error}",
+        }
+
+
+def sync_hermes_memories(
+    profile: dict,
+    memories_dir: str | Path | None = None,
+    *,
+    state_db: str | Path | None = None,
+) -> dict:
     root = Path(memories_dir or os.environ.get("TAVERN_HERMES_MEMORIES_DIR", "/opt/data/memories"))
     root.mkdir(parents=True, exist_ok=True)
     targets = (
@@ -532,7 +596,16 @@ def sync_hermes_memories(profile: dict, memories_dir: str | Path | None = None) 
             if new != old:
                 _atomic_text(path, new)
                 changed.append(str(path))
-    return {"revision": int(profile.get("revision") or 0), "changed": changed}
+    prompt_cache = (
+        _invalidate_hermes_prompt_cache(profile, state_db)
+        if changed and (state_db is not None or memories_dir is None)
+        else {"checked": False, "invalidated": 0}
+    )
+    return {
+        "revision": int(profile.get("revision") or 0),
+        "changed": changed,
+        "prompt_cache": prompt_cache,
+    }
 
 
 def memory_preview(profile: dict) -> dict:

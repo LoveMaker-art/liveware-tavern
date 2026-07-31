@@ -42,6 +42,7 @@ Storage contract:
 - `USER.md` may contain a separate, human-maintained interaction section outside the Tavern marker. Preserve it. Technical operating rules belong in `AGENTS.md` or specialist references, not user memory.
 - `MEMORY.md` may contain a small curated shared-history section outside the Tavern marker. Keep it relational and durable; do not store logs, commands, cache details, or transient runtime state.
 - Hermes natively loads `USER.md` and `MEMORY.md` into its system context. Do not add a second prompt hook for these projections.
+- The managed blocks carry a projection revision marker. A successful projection update expires only active ClawChat prompt snapshots that do not contain that revision, so Hermes reloads memory on the next user turn while preserving the conversation.
 
 Memory boundary:
 

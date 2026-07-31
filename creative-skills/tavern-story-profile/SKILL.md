@@ -1,7 +1,7 @@
 ---
 name: tavern-story-profile
 description: Recall stories, maintain the structured story profile, and synchronize model-aggregated taste and bounded plot-ledger memory into Hermes.
-version: 1.23.4
+version: 1.23.5
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -32,6 +32,7 @@ Do not store one-off plot facts, role state, model failures, or formatting bugs 
 9. The compact taste profile is model-aggregated from confirmed reflection notes. Runtime code may validate and render it, but must not derive taste through keyword rules.
 10. The model-generated profile must include bounded `response_adaptations`: concrete ways the story curator should recommend, organize, or discuss stories based only on confirmed taste evidence.
 11. Concrete shared events come from each world's successful model-generated `story_state`; never infer plot memory from preference notes.
+12. Each managed projection carries the canonical story-profile revision. When projected content changes, only stale active ClawChat system-prompt caches are invalidated; the next user turn rebuilds them from disk without deleting messages or changing the session id.
 
 Commands:
 

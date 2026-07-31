@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -115,6 +116,91 @@ class StoryProfileMemoryTests(unittest.TestCase):
         for line in projection.splitlines():
             if line.startswith("- 完整事件"):
                 self.assertTrue(line.endswith("细节"))
+
+    def test_projection_invalidates_only_stale_active_clawchat_prompts(self):
+        database = self.root / "state.db"
+        with sqlite3.connect(database) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    system_prompt TEXT,
+                    ended_at REAL
+                );
+                CREATE TABLE state_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                """
+            )
+
+        profile = story_profile.ensure_profile(self.state, self.seed)
+        profile["revision"] = 7
+        marker = "<!-- TAVERN_PROJECTION_REVISION:7 -->"
+        rows = (
+            ("active-stale", "clawchat", "old prompt", None),
+            ("active-current", "clawchat", "prompt\n" + marker, None),
+            ("ended-stale", "clawchat", "old prompt", 1.0),
+            ("other-platform", "cli", "old prompt", None),
+        )
+        with sqlite3.connect(database) as connection:
+            connection.executemany(
+                "INSERT INTO sessions(id, source, system_prompt, ended_at) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+
+        result = story_profile.sync_hermes_memories(
+            profile,
+            self.memories,
+            state_db=database,
+        )
+
+        self.assertEqual(result["prompt_cache"]["invalidated"], 1)
+        with sqlite3.connect(database) as connection:
+            prompts = dict(connection.execute("SELECT id, system_prompt FROM sessions"))
+            revision = connection.execute(
+                "SELECT value FROM state_meta WHERE key = 'tavern_projection_revision'"
+            ).fetchone()[0]
+        self.assertIsNone(prompts["active-stale"])
+        self.assertIn(marker, prompts["active-current"])
+        self.assertEqual(prompts["ended-stale"], "old prompt")
+        self.assertEqual(prompts["other-platform"], "old prompt")
+        self.assertEqual(revision, "7")
+
+    def test_same_projection_does_not_invalidate_again(self):
+        database = self.root / "state.db"
+        marker = "<!-- TAVERN_PROJECTION_REVISION:4 -->"
+        with sqlite3.connect(database) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    system_prompt TEXT,
+                    ended_at REAL
+                );
+                """
+            )
+            connection.execute(
+                "INSERT INTO sessions(id, source, system_prompt, ended_at) VALUES (?, ?, ?, ?)",
+                ("active", "clawchat", "prompt\n" + marker, None),
+            )
+
+        profile = story_profile.ensure_profile(self.state, self.seed)
+        profile["revision"] = 4
+        result = story_profile.sync_hermes_memories(
+            profile,
+            self.memories,
+            state_db=database,
+        )
+
+        self.assertEqual(result["prompt_cache"]["invalidated"], 0)
+        with sqlite3.connect(database) as connection:
+            prompt = connection.execute(
+                "SELECT system_prompt FROM sessions WHERE id = 'active'"
+            ).fetchone()[0]
+        self.assertIn(marker, prompt)
 
 
 if __name__ == "__main__":
