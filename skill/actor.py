@@ -156,7 +156,7 @@ def _entry_probability_allows(e: dict, seed_text: str) -> bool:
     return roll <= chance
 
 
-def _lore_extra_text(story_state=None, turn_plan=None) -> str:
+def _lore_extra_text(story_state=None) -> str:
     parts = []
 
     def add_obj(obj):
@@ -174,7 +174,6 @@ def _lore_extra_text(story_state=None, turn_plan=None) -> str:
     if isinstance(story_state, dict):
         add_obj({key: story_state.get(key) for key in
                  ("timeline", "facts", "open_threads", "objects", "secrets", "scene", "style_notes")})
-    add_obj(turn_plan)
     return " ".join(parts)
 
 
@@ -634,29 +633,9 @@ def _story_state_block(story_state: dict, response_language: str = "zh") -> str:
     return ("## Story state" if en else "## 故事状态") + suffix + "\n" + "\n\n".join(parts)
 
 
-def _turn_plan_block(turn_plan: dict, response_language: str = "zh") -> str:
-    if not isinstance(turn_plan, dict) or not turn_plan:
-        return ""
-    en = _language_code(response_language) == "en"
-
-    def val(key):
-        v = turn_plan.get(key)
-        if isinstance(v, list):
-            return "、".join(str(x).strip() for x in v if str(x).strip())
-        return str(v or "").strip()
-
-    rows = []
-    labels = (("Primary speaker", "primary_speaker"), ("Supporting characters", "supporting_characters"), ("Silent / offstage", "silent_characters"), ("Narration goal", "narration_goal"), ("Avoid", "do_not")) if en else (("本轮主要回应", "primary_speaker"), ("辅助出场", "supporting_characters"), ("保持沉默/不出场", "silent_characters"), ("旁白目标", "narration_goal"), ("不要做", "do_not"))
-    for title, key in labels:
-        v = val(key)
-        if v:
-            rows.append(f"- {title}：{v}")
-    return ("## Turn plan\n" if en else "## 本轮调度\n") + "\n".join(rows) if rows else ""
-
-
 def _multi_character_rules_en(names: str) -> str:
     return (
-        f"\n- This is a multi-character world with: {names}. Schedule characters according to the scene; not everyone must speak in every reply."
+        f"\n- This is a multi-character world with: {names}. Write only characters naturally present or relevant to this moment; not everyone must speak in every reply."
         "\n- Identify each speaker as Character Name: 「Dialogue.」 and make narrated actions belong to a clear character."
         "\n- Preserve each character's distinct voice, motives, and knowledge boundaries."
     )
@@ -664,19 +643,18 @@ def _multi_character_rules_en(names: str) -> str:
 
 def _multi_character_rules_zh(names: str) -> str:
     return (
-        f"\n- 这是一个多角色世界，登场角色包括：{names}。你可以根据场景调度他们，不要求每轮所有人都说话。"
+        f"\n- 这是一个多角色世界，登场角色包括：{names}。只写此刻自然在场或与当前行动相关的角色，不要求每轮所有人都说话。"
         "\n- 多角色发言时标明说话人，格式如：角色名：「对白」。叙述动作时也尽量让动作归属于明确角色。"
         "\n- 保持每个角色独立的语气、动机和信息边界，不要把所有角色写成同一种声音。"
     )
 
 
 def _system_prompt_en(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
-                      story_state_txt: str,
-                      turn_plan_txt: str, multi_rule: str) -> str:
+                      story_state_txt: str, multi_rule: str) -> str:
     return f"""# Task
 Write the next response by the active character or characters to the user's latest action in this fictional story.
 
-Use the character profiles, world lore, story state, turn plan, and conversation history below. Continue the story directly.
+Use the character profiles, world lore, story state, and conversation history below. Continue the story directly.
 Character profiles own identity, personality, abilities, and current status. The user character is context only: never write the user's actions, speech, thoughts, feelings, or decisions. The relationship graph is the sole source of character relationships. Story state and the raw conversation that follows it own locations, activities, knowledge boundaries, and object custody; newer raw conversation takes precedence.
 
 <characters>
@@ -699,10 +677,6 @@ Character profiles own identity, personality, abilities, and current status. The
 {html.escape(story_state_txt or '(None)', quote=False)}
 </story_state>
 
-<turn_plan>
-{html.escape(turn_plan_txt or '(None)', quote=False)}
-</turn_plan>
-
 ## Output policy
 {format_rules_en()}{multi_rule}
 - Complete the response from the user's latest message and leave a natural opening for the next interaction.
@@ -712,8 +686,7 @@ Character profiles own identity, personality, abilities, and current status. The
 
 
 def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, persona_txt: str,
-                      story_state_txt: str,
-                      turn_plan_txt: str, multi_rule: str,
+                      story_state_txt: str, multi_rule: str,
                       response_language: str = "zh") -> str:
     return f"""# 任务
 写出当前登场角色在这场虚构故事中对用户最后行动的下一段回应。
@@ -722,7 +695,6 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 - 登场角色资料
 - 世界设定
 - 故事状态
-- 本轮调度
 - 历史对话
 
 输出当前故事的下一段内容。
@@ -748,10 +720,6 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 {html.escape(story_state_txt or '（无）', quote=False)}
 </story_state>
 
-<turn_plan>
-{html.escape(turn_plan_txt or '（无）', quote=False)}
-</turn_plan>
-
 ## 输出规范
 {format_rules(response_language)}{multi_rule}
 - 段落应完整，承接用户最后一句，并自然留下可继续回应的空间。
@@ -762,7 +730,7 @@ def _system_prompt_zh(roles_txt: str, relationships_txt: str, lore_txt: str, per
 
 def build_messages(card: dict, lore: list, persona: dict, story: list,
                    note: str = "", story_state: dict = None,
-                   turn_plan: dict = None, response_language: str = "zh") -> list:
+                   response_language: str = "zh") -> list:
     """组成 chat-completion 消息序列。card 可为单角色 dict，也可为多角色 list。"""
     lang = _language_code(response_language)
     en = lang == "en"
@@ -777,7 +745,6 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
     relationships_txt = _relationships_block(cards, lang)
     effective_story_state = _validated_story_state(story_state, story)
     story_state_txt = _story_state_block(effective_story_state or {}, lang)
-    turn_plan_txt = _turn_plan_block(turn_plan or {}, lang)
     multi_rule = ""
     if len(cards) > 1:
         names = (", " if en else "、").join(c.get("name", "Character" if en else "角色") for c in cards)
@@ -785,9 +752,9 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
                       else _multi_character_rules_zh(names))
 
     sys = (_system_prompt_en(roles_txt, relationships_txt, lore_top_txt, persona_txt,
-                             story_state_txt, turn_plan_txt, multi_rule) if en else
+                             story_state_txt, multi_rule) if en else
            _system_prompt_zh(roles_txt, relationships_txt, lore_top_txt, persona_txt,
-                             story_state_txt, turn_plan_txt, multi_rule, lang))
+                             story_state_txt, multi_rule, lang))
     msgs = [{"role": "system", "content": sys}]
     covered_turns = int((effective_story_state or {}).get("turns") or 0)
     for m in _fit_history(story, covered_turns=covered_turns):
@@ -913,12 +880,10 @@ def chat(messages: list, temperature: float = None, model: dict = None, max_toke
 
 def perform(card: dict, worldbooks: list, persona: dict, story: list,
             note: str = "", model: dict = None, story_state: dict = None,
-            turn_plan: dict = None,
             response_language: str = "zh") -> str:
     """一回合演出：选世界书 → 拼 prompt → 生成。model = 用户自配 override（None=内置模型）。"""
-    lore = select_lore(worldbooks, story, extra_text=_lore_extra_text(story_state, turn_plan))
+    lore = select_lore(worldbooks, story, extra_text=_lore_extra_text(story_state))
     msgs = build_messages(card, lore, persona, story, note, story_state=story_state,
-                          turn_plan=turn_plan,
                           response_language=response_language)
     return chat(msgs, model=model, max_tokens=ACTOR_MAX_TOKENS)
 

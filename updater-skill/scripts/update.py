@@ -100,6 +100,9 @@ OBSOLETE_CREATIVE_SKILL_NAMES = (
 SAFE_CREATIVE_SKILL_NAMES = CREATIVE_SKILL_NAMES + OBSOLETE_CREATIVE_SKILL_NAMES
 CREATIVE_SKILL_FILES = {
     "tavern/SKILL.md",
+    "tavern/hooks/tavern-liveware-register/HOOK.yaml",
+    "tavern/hooks/tavern-liveware-register/handler.py",
+    "tavern/hooks/tavern-liveware-register/run.sh",
     "tavern/references/conversation-cards.md",
     "tavern/references/shared-contract.md",
     "tavern/scripts/bringup.sh",
@@ -202,7 +205,7 @@ EXPANDED_RUNTIME_FILES = LEGACY_RUNTIME_FILES | {
     "tts_service.py",
     "web/security.js",
 }
-RUNTIME_FILES = EXPANDED_RUNTIME_FILES | {
+MODULAR_RUNTIME_FILES = EXPANDED_RUNTIME_FILES | {
     "generation_service.py",
     "message_segments.py",
     "reply_format.py",
@@ -210,10 +213,16 @@ RUNTIME_FILES = EXPANDED_RUNTIME_FILES | {
     "story_state_service.py",
     "turn_plan_service.py",
 }
+RUNTIME_FILES = MODULAR_RUNTIME_FILES - {"turn_plan_service.py"}
+OBSOLETE_MANAGED_FILES = {
+    "runtime/turn_plan_service.py",
+}
+ALLOWED_OBSOLETE |= OBSOLETE_MANAGED_FILES
 EXPANDED_RUNTIME_VERSION = (1, 21, 0)
 MODULAR_RUNTIME_VERSION = (1, 22, 0)
+SINGLE_PASS_RUNTIME_VERSION = (1, 23, 6)
 ALLOWED_MANAGED = {
-    "runtime": RUNTIME_FILES,
+    "runtime": MODULAR_RUNTIME_FILES,
     "updater": {
         "SKILL.md",
         "agents/openai.yaml",
@@ -235,8 +244,10 @@ def version_key(value):
 
 def runtime_files_for_version(version):
     key = version_key(version)
-    if key >= MODULAR_RUNTIME_VERSION:
+    if key >= SINGLE_PASS_RUNTIME_VERSION:
         return RUNTIME_FILES
+    if key >= MODULAR_RUNTIME_VERSION:
+        return MODULAR_RUNTIME_FILES
     if key >= EXPANDED_RUNTIME_VERSION:
         return EXPANDED_RUNTIME_FILES
     return LEGACY_RUNTIME_FILES
@@ -1000,6 +1011,16 @@ def remove_obsolete_updater_files():
             pass
 
 
+def remove_obsolete_managed_files(obsolete_files):
+    for key in sorted(set(obsolete_files or [])):
+        if key not in ALLOWED_OBSOLETE:
+            raise RuntimeError(f"release retires an unsupported path: {key}")
+        area, separator, name = key.partition("/")
+        if not separator or area not in TARGETS:
+            raise RuntimeError(f"release retires an invalid path: {key}")
+        remove_path(TARGETS[area] / name)
+
+
 def backup_current(version, managed_files, obsolete_files=None):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = BACKUPS / f"{version}-{stamp}-{uuid.uuid4().hex[:8]}"
@@ -1033,12 +1054,23 @@ def backup_current(version, managed_files, obsolete_files=None):
         if current.is_file():
             copy_file(current, backup / "obsolete/updater" / name)
             obsolete_present.append("updater/" + name)
+    managed_obsolete_present = []
+    for key in sorted(set(obsolete_files or [])):
+        if key not in ALLOWED_OBSOLETE:
+            raise RuntimeError(f"release retires an unsupported path: {key}")
+        area, _, name = key.partition("/")
+        current = TARGETS[area] / name
+        if current.is_file():
+            copy_file(current, backup / "obsolete-managed" / area / name)
+            managed_obsolete_present.append(key)
     metadata = {
         "schema": 2,
         "managed_files": sorted(managed_files),
         "missing": missing,
         "baseline_present": BASELINE.is_dir(),
         "obsolete_present": obsolete_present,
+        "managed_obsolete_files": sorted(set(obsolete_files or [])),
+        "managed_obsolete_present": managed_obsolete_present,
         "skill_directories_present": skill_directories_present,
         "agents_present": agents_present,
     }
@@ -1080,6 +1112,16 @@ def restore(backup):
                 prune_empty_parents(target, TARGETS[area])
             else:
                 copy_file(backup / "installed" / area / name, target)
+    managed_obsolete_present = set(metadata.get("managed_obsolete_present") or [])
+    for key in metadata.get("managed_obsolete_files") or []:
+        if key not in ALLOWED_OBSOLETE:
+            continue
+        area, _, name = key.partition("/")
+        target = TARGETS[area] / name
+        if key in managed_obsolete_present:
+            copy_file(backup / "obsolete-managed" / area / name, target)
+        else:
+            remove_path(target)
     obsolete_present = set(metadata.get("obsolete_present") or [])
     for name in OBSOLETE_UPDATER_FILES:
         key = "updater/" + name
@@ -1201,7 +1243,7 @@ def command_review(_args):
         target_work = work / "target"
         release, manifest, archive, skill_manifest, skill_archive = release_material(target_work)
         managed_files = sorted(set(manifest["managed_files"] + canonical_skill_managed(skill_manifest)))
-        obsolete_files = []
+        obsolete_files = sorted(OBSOLETE_MANAGED_FILES)
         if version_key(manifest["version"]) < version_key(installed):
             raise RuntimeError("latest release is older than the installed version")
         unpacked = target_work / "unpacked"
@@ -1441,6 +1483,7 @@ def command_apply(args):
     try:
         stop_server()
         install_managed(staged, managed_files, areas={"runtime"})
+        remove_obsolete_managed_files(obsolete_files)
         replace_official_skills(staged / "skills")
         atomic_write_text(AGENTS_PATH, staged_agents.read_text(encoding="utf-8"))
         skill_report = validate_installed_skills()

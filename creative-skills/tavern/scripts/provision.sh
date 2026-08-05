@@ -60,15 +60,33 @@ cd "$PLUGIN" && HERMES_HOME=/opt/data "$PY" -c \
 # 2. 解析或创建两个 app → 写 apps.json（python 干重活：查 list 复用 / 缺则 create / 取域名）
 echo "== resolve/create apps =="
 HERMES_HOME=/opt/data "$PY" - "$LW" "$APPS" "$CONSOLE_APP_NAME" "$ACTOR_APP_NAME" "$CONSOLE_NAME" "$ACTOR_NAME" <<'PY'
-import json, subprocess, sys
+import json, subprocess, sys, time
 lw, apps_path, console_app_name, actor_app_name, console_name, actor_name = sys.argv[1:7]
 
 def app_list():
     r = subprocess.run([lw, "app", "list", "--json"], capture_output=True, text=True)
     try:
-        return json.loads(r.stdout)
+        payload = json.loads(r.stdout)
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict) and isinstance(payload.get("apps"), list):
+            return payload["apps"]
+        return []
     except Exception:
         return []
+
+def created_app_id(output):
+    try:
+        payload = json.loads(output)
+        if isinstance(payload, dict):
+            return (payload.get("appId") or payload.get("app_id") or "").strip()
+    except Exception:
+        pass
+    for line in output.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] in {"appId", "app_id"}:
+            return parts[-1].strip()
+    return ""
 
 def find(name, apps):
     for a in apps:
@@ -102,10 +120,28 @@ def ensure(key, name):
         print("  reuse:", name, a["appId"])
         return a
     print("  create:", name, "(app list 无同名 active，新建——会消耗 owner 配额)")
-    subprocess.run([lw, "app", "create", name, "--agent-type", "hermes"], check=True)
-    a = find(name, app_list())
+    result = subprocess.run(
+        [lw, "app", "create", name, "--agent-type", "hermes"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr)
+    new_id = created_app_id(result.stdout)
+    a = None
+    for attempt in range(30):
+        apps = app_list()
+        a = find_id(new_id, apps) if new_id else find(name, apps)
+        if a:
+            break
+        if attempt < 29:
+            time.sleep(2)
     if not a:
-        raise SystemExit("  ✗ 创建后仍未在 app list 找到 " + name)
+        identity = new_id or name
+        raise SystemExit("  ✗ 创建成功，但 60 秒内未在 app list 确认 active: " + identity)
     print("  created:", name, a["appId"])
     return a
 

@@ -18,40 +18,36 @@ def loadout(production, *, ensure_production_session):
 
 
 def perform_loaded(cards, worldbooks, persona, story, note, *,
-                   actor_module, model, story_state, turn_plan, response_language):
+                   actor_module, model, story_state, response_language):
     return actor_module.perform(
         cards, worldbooks, persona, story, note,
         model=model,
         story_state=story_state,
-        turn_plan=turn_plan,
         response_language=response_language,
     )
 
 
-def perform_into(production, *, turn_plan=None, actor_module, active_model,
+def perform_into(production, *, actor_module, active_model,
                  effective_story_state, ensure_world_language,
-                 prepare_turn_plan, ensure_production_session):
+                 ensure_production_session):
     cards, worldbooks, persona, note = loadout(
         production,
         ensure_production_session=ensure_production_session,
     )
-    if turn_plan is None:
-        turn_plan = prepare_turn_plan(production, cards)
     language = ensure_world_language(production)
     return perform_loaded(
         cards, worldbooks, persona, production["story"], note,
         actor_module=actor_module,
         model=active_model(),
         story_state=effective_story_state(production),
-        turn_plan=turn_plan,
         response_language=language,
     )
 
 
 def ensure_actor_reply(production, cards, worldbooks, persona, note, text, *,
-                       turn_plan=None, actor_module, active_model,
+                       actor_module, active_model,
                        effective_story_state, ensure_world_language,
-                       prepare_turn_plan, normalize_actor_reply):
+                       normalize_actor_reply):
     text = normalize_actor_reply(text)
     if text:
         return text
@@ -72,15 +68,12 @@ def ensure_actor_reply(production, cards, worldbooks, persona, note, text, *,
             "动作、环境与角色对白要自然连贯。"
         )
     retry_note = (note + "\n" if note else "") + retry_instruction
-    if turn_plan is None:
-        turn_plan = prepare_turn_plan(production, cards)
     try:
         text = normalize_actor_reply(perform_loaded(
             cards, worldbooks, persona, production["story"], retry_note,
             actor_module=actor_module,
             model=active_model(),
             story_state=effective_story_state(production),
-            turn_plan=turn_plan,
             response_language=language,
         ))
     except Exception as e:  # noqa: BLE001

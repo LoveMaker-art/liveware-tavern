@@ -58,7 +58,6 @@ runtime/
   story_profile.py
   story_state_service.py
   tts_service.py
-  turn_plan_service.py
   .tavern-release-version
   web/
     actor.html

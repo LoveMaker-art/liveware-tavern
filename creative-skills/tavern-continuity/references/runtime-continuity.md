@@ -46,9 +46,9 @@ If the plot ledger is invalid or explicitly rebuilt:
 3. Move the preserved cast checkpoint to the rebuilt ledger boundary.
 4. Do not call the character-state model during ledger rebuild.
 
-## Turn Planning
+## Multi-Character Generation
 
-Multi-character per-turn scheduling lives in `/opt/data/apps/tavern-runtime/turn_plan_service.py`. It builds the short `turn_plan` for multi-character replies, using the current cast, effective story_state, response language, and recent raw story excerpt. The runtime caller provides the active model/chat function and JSON parser. Failure returns `{}` so generation can continue. A foreground turn should generate one plan and reuse it for empty-reply retry.
+Foreground generation does not call a separate turn-planning model. The story model receives the active cast, relationship graph, relevant world lore, effective story state, and recent raw dialogue in one request. It decides which currently present or relevant characters should respond while preserving each character's voice, motive, and knowledge boundary. Not every character must speak in every reply.
 
 ## Reply Formatting
 
@@ -75,8 +75,8 @@ Generation orchestration lives in `/opt/data/apps/tavern-runtime/generation_serv
 Responsibilities:
 
 - load cards, worldbooks, persona, story, and author note for a production;
-- call `actor.perform` with the active model, effective `story_state`, response language, and optional `turn_plan`;
-- preserve the one-turn-plan-per-foreground-turn rule by accepting a caller-provided `turn_plan`;
+- call `actor.perform` once with the active model, effective `story_state`, response language, and complete active cast;
+- let the story model decide which present or relevant characters should respond within that same foreground request;
 - route empty-reply retry through the same generation service while applying reply normalization at the server boundary.
 
 It should remain orchestration-only: no direct persistence writes, no compression, no cast mutation, and no hidden frontend behavior. `server.py` keeps route/event ownership and wraps this module with runtime dependencies such as the active model and language resolver.
@@ -104,7 +104,7 @@ cd /opt/data/apps/tavern-runtime
 /opt/hermes/.venv/bin/python -m unittest tests.test_runtime_services -v
 ```
 
-The suite currently covers message segmentation, reply formatting, turn-plan success/failure behavior, empty-reply retry reusing the supplied `turn_plan`, story-ledger deterministic helpers, and runtime-cast evidence/audit/application rules. Run this before and after changing continuity prompts, generation orchestration, or repair flows.
+The suite currently covers message segmentation, reply formatting, single-pass generation, empty-reply retry using the same story context, story-ledger deterministic helpers, and runtime-cast evidence/audit/application rules. Run this before and after changing continuity prompts, generation orchestration, or repair flows.
 
 ## Diagnostic Checks
 

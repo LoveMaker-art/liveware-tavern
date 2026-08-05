@@ -1,0 +1,4 @@
+name: tavern-liveware-register
+description: Ensure the agent's built-in Tavern liveware apps are provisioned, registered, and bound on gateway startup.
+events:
+  - gateway:startup

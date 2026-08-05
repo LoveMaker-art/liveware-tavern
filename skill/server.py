@@ -26,7 +26,6 @@ import generation_service  # noqa: E402
 import story_profile  # noqa: E402
 import story_state_service  # noqa: E402
 import runtime_cast_service  # noqa: E402
-import turn_plan_service  # noqa: E402
 from background_jobs import tavern_job_runner  # noqa: E402
 from continuity_model import (  # noqa: E402
     canonical_profile_snapshot as _canonical_profile_snapshot,
@@ -1165,6 +1164,24 @@ def _normalize_lore_entry(raw, text, cards):
     return entry
 
 
+def _recent_story_excerpt(production, max_items=12, response_language=None):
+    """Render recent dialogue for lore editing without invoking a model."""
+    language = response_language or (production or {}).get("response_language") or "zh"
+    en = language == "en"
+    traditional = language == "zh-Hant"
+    story_label = "Story response" if en else ("故事回覆" if traditional else "故事回复")
+    lines = []
+    for message in ((production or {}).get("story") or [])[-max_items:]:
+        if message.get("role") == "user":
+            speaker = "User" if en else ("使用者" if traditional else "用户")
+        else:
+            speaker = story_label
+        text = (message.get("text") or "").strip().replace("\r\n", "\n")
+        if text:
+            lines.append(f"{speaker}: {text[:700]}")
+    return "\n".join(lines)
+
+
 def _classify_lore_entry(text, p, cards):
     names = [c.get("name", "") for c in cards or []]
     language = _ensure_world_language(p)
@@ -1185,7 +1202,7 @@ def _classify_lore_entry(text, p, cards):
         "characters": names,
         "response_language": language,
         "story_state": _effective_story_state(p),
-        "recent_story": turn_plan_service.scene_story_excerpt(p, response_language=language),
+        "recent_story": _recent_story_excerpt(p, response_language=language),
     }, ensure_ascii=False)
     try:
         out = actor.chat([{ "role": "system", "content": sys }, { "role": "user", "content": user }],
@@ -1841,7 +1858,7 @@ def _ev_update_cast_locked(ev):
     runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
     runtime_cast["updated_at"] = int(time.time())
     _hydrate_runtime_cards(p)
-    p["turn_plan"] = {}
+    p.pop("turn_plan", None)
     save_production(p)
     return {"production": p, "card": card}
 
@@ -2108,11 +2125,11 @@ def _ensure_production_session(p):
     p["worldbooks"] = _snapshot_worldbooks(p.get("worldbook_ids") or [])
     p.setdefault("story", [])
     p.setdefault("runtime", {})
+    p.pop("turn_plan", None)
     return p
 
 
 def _mark_context_state_stale(p, reason="context_changed"):
-    p["turn_plan"] = {}
     p.setdefault("runtime", {})["state_stale_reason"] = reason
     p["runtime"].pop("last_prompt_debug", None)
 
@@ -2131,27 +2148,24 @@ def _loadout(p):
     )
 
 
-def _perform_loaded(cards, wbs, persona, story, note, turn_plan=None, language=None, production=None):
+def _perform_loaded(cards, wbs, persona, story, note, language=None, production=None):
     p = production or {}
     return generation_service.perform_loaded(
         cards, wbs, persona, story, note,
         actor_module=actor,
         model=_active_model(),
         story_state=_effective_story_state(p),
-        turn_plan=turn_plan,
         response_language=language or _ensure_world_language(p),
     )
 
 
-def _perform_into(p, turn_plan=None):
+def _perform_into(p):
     return generation_service.perform_into(
         p,
-        turn_plan=turn_plan,
         actor_module=actor,
         active_model=_active_model,
         effective_story_state=_effective_story_state,
         ensure_world_language=_ensure_world_language,
-        prepare_turn_plan=_prepare_turn_plan,
         ensure_production_session=_ensure_production_session,
     )  # 用户自配大模型;None=内置模型
 
@@ -2165,10 +2179,8 @@ def ev_send_message(ev):
     user_msg = _msg("user", ev["text"])
     p["story"].append(user_msg)
     cards, wbs, persona, note = _loadout(p)
-    turn_plan = _prepare_turn_plan(p, cards)
     reply = _ensure_actor_reply(p, cards, wbs, persona, note,
-                                _perform_into(p, turn_plan=turn_plan),
-                                turn_plan=turn_plan)
+                                _perform_into(p))
     _raise_if_generation_cancelled(ev)
     m = _msg("char", reply, cards)
     p["story"].append(m)
@@ -2195,10 +2207,8 @@ def ev_regenerate(ev):
     p["story"] = trimmed
     _mark_context_state_stale(p, "regenerate")
     cards, wbs, persona, note = _loadout(p)
-    turn_plan = _prepare_turn_plan(p, cards)
     reply = _ensure_actor_reply(p, cards, wbs, persona, note,
-                                _perform_into(p, turn_plan=turn_plan),
-                                turn_plan=turn_plan)
+                                _perform_into(p))
     _raise_if_generation_cancelled(ev)
     last["alts"].append(reply)
     last["active_alt"] = len(last["alts"]) - 1
@@ -2212,15 +2222,13 @@ def ev_regenerate(ev):
 
 
 
-def _ensure_actor_reply(p, cards, wbs, persona, note, text, turn_plan=None):
+def _ensure_actor_reply(p, cards, wbs, persona, note, text):
     return generation_service.ensure_actor_reply(
         p, cards, wbs, persona, note, text,
-        turn_plan=turn_plan,
         actor_module=actor,
         active_model=_active_model,
         effective_story_state=_effective_story_state,
         ensure_world_language=_ensure_world_language,
-        prepare_turn_plan=_prepare_turn_plan,
         normalize_actor_reply=_normalize_actor_reply,
     )
 
@@ -2239,11 +2247,9 @@ def ev_continue(ev):
     p["story"].append(user_msg)
     cards, wbs, persona, note = _loadout(p)
     continue_note = _continue_note(note, language)
-    turn_plan = _prepare_turn_plan(p, cards)
     reply = _perform_loaded(cards, wbs, persona, p["story"], continue_note,
-                            turn_plan=turn_plan, language=language, production=p)
-    reply = _ensure_actor_reply(p, cards, wbs, persona, continue_note, reply,
-                                turn_plan=turn_plan)
+                            language=language, production=p)
+    reply = _ensure_actor_reply(p, cards, wbs, persona, continue_note, reply)
     _raise_if_generation_cancelled(ev)
     m = _msg("char", reply, cards)
     p["story"].append(m)
@@ -2602,16 +2608,6 @@ def ev_refresh_story_profile(ev):
         "profile": story_profile.audit(STATE, SEED_ACTOR),
     }
 
-
-def _prepare_turn_plan(p, cards):
-    return turn_plan_service.prepare_turn_plan(
-        p, cards,
-        response_language=_ensure_world_language(p),
-        story_state=_effective_story_state(p),
-        chat=actor.chat,
-        model=_active_model(),
-        json_from_model_text=_json_from_model_text,
-    )
 
 def _world_turns(story):
     return story_state_service.world_turns(story)
@@ -3348,7 +3344,7 @@ def ev_set_persona(ev):
         runtime_cast["user_status"] = status
         runtime_cast["revision"] = int(runtime_cast.get("revision") or 0) + 1
         runtime_cast["updated_at"] = int(time.time())
-        p["turn_plan"] = {}
+        p.pop("turn_plan", None)
         _hydrate_user_persona(p)
         save_production(p)
         return {"persona": p["persona"], "production": p}

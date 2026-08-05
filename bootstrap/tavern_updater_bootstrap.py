@@ -46,6 +46,9 @@ CREATIVE_SKILL_NAMES = (
 )
 SKILL_FILES = (
     "tavern/SKILL.md",
+    "tavern/hooks/tavern-liveware-register/HOOK.yaml",
+    "tavern/hooks/tavern-liveware-register/handler.py",
+    "tavern/hooks/tavern-liveware-register/run.sh",
     "tavern/references/conversation-cards.md",
     "tavern/references/shared-contract.md",
     "tavern/scripts/bringup.sh",

@@ -25,6 +25,7 @@ Operational boundaries:
 
 - `provision.sh` creates or reuses liveware apps and registers them with ClawChat.
 - `bringup.sh` starts the tavern server and binds both liveware apps to the local server.
+- `tavern/hooks/tavern-liveware-register/` is the release-managed source for the native Hermes `gateway:startup` hook. `bringup.sh` synchronizes it to `/opt/data/hooks/tavern-liveware-register/`; the current run restores Tavern immediately, and later gateway starts trigger the same idempotent provision-and-bind check automatically.
 - Runtime state must stay in `/opt/data/tavern-state`, not inside the skill package.
 - `SOUL.md` remains `/opt/data/SOUL.md`; do not put persona files in the skill.
 - First ClawChat greeting is controlled by `/opt/data/clawchat/greeting.md`; do not add a legacy first-greeting hook.

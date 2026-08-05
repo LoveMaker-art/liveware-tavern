@@ -93,7 +93,6 @@ class RepositoryHygieneTests(unittest.TestCase):
             "runtime/story_profile.py",
             "runtime/story_state_service.py",
             "runtime/tts_service.py",
-            "runtime/turn_plan_service.py",
             "runtime/web/security.js",
         }
         self.assertTrue(expected.issubset(set(manifest["managed_files"])))
@@ -150,6 +149,11 @@ class RepositoryHygieneTests(unittest.TestCase):
             "skills/tavern/references/conversation-cards.md",
             manifest["managed_files"],
         )
+        for hook_file in ("HOOK.yaml", "handler.py", "run.sh"):
+            self.assertIn(
+                f"skills/tavern/hooks/tavern-liveware-register/{hook_file}",
+                manifest["managed_files"],
+            )
         self.assertNotIn("skills/tavern-cards/SKILL.md", manifest["managed_files"])
         self.assertNotIn("skills/tavern-worldbooks/SKILL.md", manifest["managed_files"])
         with tarfile.open(archive, "r:gz") as package:

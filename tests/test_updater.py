@@ -157,10 +157,34 @@ class UpdaterMergeTests(unittest.TestCase):
         )
         self.assertEqual(
             UPDATER.runtime_files_for_version("1.22.0"),
+            UPDATER.MODULAR_RUNTIME_FILES,
+        )
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.23.6"),
             UPDATER.RUNTIME_FILES,
         )
         self.assertIn("generation_service.py", UPDATER.RUNTIME_FILES)
         self.assertNotIn("generation_service.py", UPDATER.EXPANDED_RUNTIME_FILES)
+        self.assertIn("turn_plan_service.py", UPDATER.MODULAR_RUNTIME_FILES)
+        self.assertNotIn("turn_plan_service.py", UPDATER.RUNTIME_FILES)
+
+    def test_obsolete_runtime_file_is_removed_and_restored_on_rollback(self):
+        obsolete = self.write(
+            UPDATER.TARGETS["runtime"],
+            "turn_plan_service.py",
+            "legacy planner\n",
+        )
+        backup = UPDATER.backup_current(
+            "1.23.5",
+            ["runtime/server.py"],
+            ["runtime/turn_plan_service.py"],
+        )
+
+        UPDATER.remove_obsolete_managed_files(["runtime/turn_plan_service.py"])
+        self.assertFalse(obsolete.exists())
+
+        UPDATER.restore(backup)
+        self.assertEqual(obsolete.read_text(encoding="utf-8"), "legacy planner\n")
 
     def test_unknown_transitional_runtime_still_conflicts(self):
         base = self.root / "base/runtime"

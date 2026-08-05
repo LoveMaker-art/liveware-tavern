@@ -18,7 +18,21 @@ set -u
 TAVERN_SKILL=/opt/data/skills/creative/tavern
 TAVERN_APP=/opt/data/apps/tavern-runtime
 TAVERN_STATE=/opt/data/tavern-state
+HOOK_SOURCE="$TAVERN_SKILL/hooks/tavern-liveware-register"
+HOOK_TARGET=/opt/data/hooks/tavern-liveware-register
 LW_DIR=/opt/data/clawchat/liveware
+
+# Keep the gateway-startup hook aligned with the installed Tavern skill. The
+# current run restores the service immediately; the next gateway start loads
+# these files through Hermes' native ~/.hermes/hooks discovery.
+if [ -f "$HOOK_SOURCE/HOOK.yaml" ] && [ -f "$HOOK_SOURCE/handler.py" ] && [ -f "$HOOK_SOURCE/run.sh" ]; then
+  mkdir -p "$HOOK_TARGET"
+  cp "$HOOK_SOURCE/HOOK.yaml" "$HOOK_TARGET/HOOK.yaml"
+  cp "$HOOK_SOURCE/handler.py" "$HOOK_TARGET/handler.py"
+  cp "$HOOK_SOURCE/run.sh" "$HOOK_TARGET/run.sh"
+  chmod 755 "$HOOK_TARGET/run.sh"
+fi
+
 LW_BIN="${LIVEWARE_BIN:-}"
 if [ -z "$LW_BIN" ]; then
   if command -v liveware >/dev/null 2>&1; then

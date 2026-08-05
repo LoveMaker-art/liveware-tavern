@@ -12,7 +12,6 @@ import message_segments
 import reply_format
 import runtime_cast_service
 import story_state_service
-import turn_plan_service
 
 
 class RuntimeServiceRegressionTests(unittest.TestCase):
@@ -46,38 +45,7 @@ class RuntimeServiceRegressionTests(unittest.TestCase):
         self.assertIn("周婉：「来了。」", result)
         self.assertIn("*她推开门。*", result)
 
-    def test_turn_plan_success_and_failure_are_safe(self):
-        cards = [{"id": "c1", "name": "周婉"}, {"id": "c2", "name": "陈雅琳"}]
-
-        def fake_chat(messages, temperature, model):
-            self.assertEqual(temperature, 0.15)
-            return '{"primary_speaker":"周婉","supporting_characters":["陈雅琳"],"silent_characters":[],"narration_goal":"推进","do_not":["抢答"]}'
-
-        plan = turn_plan_service.prepare_turn_plan(
-            {"story": [{"role": "user", "text": "周婉，你怎么看？"}]},
-            cards,
-            response_language="zh",
-            story_state={},
-            chat=fake_chat,
-            model={"model": "fake"},
-            json_from_model_text=lambda text: __import__("json").loads(text),
-        )
-
-        self.assertEqual(plan["primary_speaker"], "周婉")
-        self.assertEqual(plan["supporting_characters"], ["陈雅琳"])
-
-        failed = turn_plan_service.prepare_turn_plan(
-            {"story": []},
-            cards,
-            response_language="zh",
-            story_state={},
-            chat=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
-            model={},
-            json_from_model_text=lambda text: {},
-        )
-        self.assertEqual(failed, {})
-
-    def test_generation_retry_reuses_supplied_turn_plan(self):
+    def test_generation_retry_reuses_loaded_context_without_planner(self):
         class FakeActor:
             def __init__(self):
                 self.calls = []
@@ -87,7 +55,6 @@ class RuntimeServiceRegressionTests(unittest.TestCase):
                 return "周婉：「收到。」"
 
         actor = FakeActor()
-        turn_plan = {"primary_speaker": "周婉"}
         production = {"story": [{"role": "user", "text": "继续"}], "response_language": "zh"}
 
         result = generation_service.ensure_actor_reply(
@@ -97,19 +64,16 @@ class RuntimeServiceRegressionTests(unittest.TestCase):
             {},
             "",
             "",
-            turn_plan=turn_plan,
             actor_module=actor,
             active_model=lambda: {"model": "fake"},
             effective_story_state=lambda p: {"turns": 0},
             ensure_world_language=lambda p: "zh",
-            prepare_turn_plan=lambda *a, **k: (_ for _ in ()).throw(
-                AssertionError("retry must not rebuild turn_plan")),
             normalize_actor_reply=reply_format.normalize_actor_reply,
         )
 
         self.assertIn("周婉：「收到。」", result)
         self.assertEqual(len(actor.calls), 1)
-        self.assertIs(actor.calls[0]["turn_plan"], turn_plan)
+        self.assertNotIn("turn_plan", actor.calls[0])
 
     def test_story_state_service_turn_boundaries_and_normalization(self):
         story = [
