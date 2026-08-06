@@ -15,12 +15,18 @@ Use `/opt/data/skills/creative/tavern/SKILL.md` as the lightweight router. Load 
 Use `/opt/data/skills/system/tavern-updater` for version checks, review, installation, and rollback. Never improvise `git pull` or overwrite the runtime or skill directories.
 
 ```sh
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py check
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py review
-python3 /opt/data/skills/system/tavern-updater/scripts/update.py report --plan <PLAN_ID>
+curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh
 ```
 
-After `report`, show one concise summary and wait for a new explicit approval. Only then run:
+Always start through this verified Bootstrap, even when `tavern-updater` is
+already installed. It refreshes only the updater first, then uses the target
+release's own rules to produce `check`, `review`, and `report`. If an old updater
+reports an allowlist, schema, or managed-file mismatch, automatically restart
+the review through Bootstrap instead of asking the user to choose a recovery
+method. Bootstrap review does not update Tavern code, official creative skills,
+`AGENTS.md`, or user data.
+
+After its `report`, show one concise summary and wait for a new explicit approval. Only then run:
 
 ```sh
 python3 /opt/data/skills/system/tavern-updater/scripts/update.py apply --plan <PLAN_ID> --confirm

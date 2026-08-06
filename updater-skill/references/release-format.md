@@ -102,9 +102,10 @@ Legacy versions without their own GitHub Release may be represented by two addit
 modules and `web/security.js`; `v1.21.3` expands the exact skill manifest from
 seven to eight directories; `v1.22.0` adds generation and continuity service
 modules; `v1.23.0` consolidates world, card, and worldbook construction into one
-atomic six-directory skill suite. Installations carrying an updater older than
-`v1.23.0` must use the verified one-command Bootstrap, which installs the target
-release's updater before it reviews or applies the current manifests.
+atomic six-directory skill suite. Every release review starts through the
+verified Bootstrap, which installs the target release's updater before it
+reviews or applies the current manifests. This avoids coupling manifest
+compatibility to the previously installed updater version.
 Historical releases continue to validate against the allowlist active for their
 version, and the `v1.14.12` bundled baseline remains restricted to its original
 4-backend/7-frontend allowlist.

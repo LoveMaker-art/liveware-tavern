@@ -207,19 +207,6 @@ def extract_updater(archive_path, manifest, destination):
     (destination / "scripts/update.py").chmod(0o755)
 
 
-def atomic_write(path, content):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.parent / ("." + path.name + ".next-" + uuid.uuid4().hex[:8])
-    try:
-        pending.write_text(content, encoding="utf-8")
-        os.replace(pending, path)
-    finally:
-        try:
-            pending.unlink()
-        except OSError:
-            pass
-
-
 def backup_existing(data_root, updater_target, agents_path):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = data_root / "tavern-updates/bootstrap-backups" / stamp
@@ -253,17 +240,6 @@ def install_updater(staged, target):
             (target / name).unlink()
         except FileNotFoundError:
             pass
-
-
-def replace_agents(path, source):
-    desired = source.read_text(encoding="utf-8")
-    if not desired.strip() or not desired.startswith("# AGENTS.md"):
-        raise RuntimeError("release AGENTS.md is malformed")
-    current = path.read_text(encoding="utf-8") if path.is_file() else ""
-    if desired != current:
-        atomic_write(path, desired)
-        return True
-    return False
 
 
 def run_json(command, env):
@@ -326,8 +302,6 @@ def main():
         backup = backup_existing(data_root, updater_target, agents_path)
         install_updater(staged_updater, updater_target)
         agents_changed = False
-        if not args.apply:
-            agents_changed = replace_agents(agents_path, staged_updater / AGENTS_RELEASE_FILE)
 
     result = {
         "ok": True,

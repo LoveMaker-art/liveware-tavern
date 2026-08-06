@@ -42,10 +42,11 @@ Create a stable GitHub Release tagged `v<VERSION>` and attach every generated as
 
 Download `tavern-updater-bootstrap.py` and `bootstrap-manifest.json` from the
 latest stable GitHub Release. Verify the script SHA256 against the manifest,
-then run it with Python 3. The bootstrap installs only the updater skill,
-backs up and completely replaces `/opt/data/AGENTS.md` with the verified release file,
-and automatically generates `check`, `review`, and `report` output. It never
-applies the Tavern update without a new explicit user approval.
+then run it with Python 3. The bootstrap backs up and refreshes only the updater
+skill, then automatically generates `check`, `review`, and `report` output with
+the target release's own compatibility rules. It does not replace
+`/opt/data/AGENTS.md`, runtime code, creative skills, frontend code, or user data
+during review, and never applies the Tavern update without explicit approval.
 
 Release assets use these stable names:
 
@@ -73,7 +74,7 @@ Place `updater-skill/` at:
 /opt/data/skills/system/tavern-updater/
 ```
 
-The Agent can then check and install a verified stable release after explicit user confirmation. Any instance whose updater is older than `v1.23.0` must enter this transition through the one-command Bootstrap so the updater is upgraded before it reviews the current runtime allowlist and exact six-directory skill manifest.
+The Agent can then check and install a verified stable release after explicit user confirmation. Every update review starts through the verified Bootstrap, even when the updater is already installed, so managed-file additions or removals can never make an older updater reject a newer release format before it has refreshed itself.
 
 ## License
 

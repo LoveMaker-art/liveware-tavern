@@ -60,11 +60,16 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_bootstrap_transition_guidance_is_consistent(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         updater_skill = (ROOT / "updater-skill/SKILL.md").read_text(encoding="utf-8")
+        updater_agents = (ROOT / "updater-skill/references/AGENTS.md").read_text(encoding="utf-8")
+        bootstrap_source = (ROOT / "bootstrap/tavern_updater_bootstrap.py").read_text(encoding="utf-8")
         updater_source = (ROOT / "updater-skill/scripts/update.py").read_text(encoding="utf-8")
 
-        self.assertIn("older than `v1.23.0`", readme)
-        self.assertRegex(updater_skill, r"older\s+than `v1\.23\.0`")
-        self.assertNotIn("older than `v1.20.0`", updater_skill)
+        command = "install-tavern-updater.sh | sh"
+        self.assertIn(command, readme)
+        self.assertIn(command, updater_skill)
+        self.assertIn(command, updater_agents)
+        self.assertIn("Every check, review, or update request must begin", updater_skill)
+        self.assertNotIn("replace_agents(", bootstrap_source)
         self.assertIn("EXPANDED_RUNTIME_VERSION = (1, 21, 0)", updater_source)
         self.assertIn("MODULAR_RUNTIME_VERSION = (1, 22, 0)", updater_source)
         self.assertNotIn(">= (1, 21, 0)", updater_source)
