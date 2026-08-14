@@ -46,6 +46,9 @@ BACKEND_FILES = (
     "story_state_service.py",
     "tts_service.py",
 )
+RUNTIME_DATA_FILES = (
+    "qwen_audio_voices.json",
+)
 LEGACY_FRONTEND_FILES = (
     "actor.html",
     "actor.js",
@@ -92,6 +95,8 @@ def main():
     (STAGE / "runtime").mkdir(parents=True)
     (STAGE / "updater").mkdir(parents=True)
     for name in BACKEND_FILES:
+        copy(SOURCE / name, STAGE / "runtime" / name)
+    for name in RUNTIME_DATA_FILES:
         copy(SOURCE / name, STAGE / "runtime" / name)
     for name in FRONTEND_FILES:
         copy(SOURCE / "reader" / name, STAGE / "runtime/web" / name)

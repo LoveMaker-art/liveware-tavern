@@ -433,6 +433,16 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .voiceSheetModel{display:flex;align-items:center;justify-content:space-between;gap:12px;
   margin:0 2px 12px;color:var(--ink);font-size:13px;font-weight:600}
 .voiceSheetModel .actorMore{flex:0 0 auto}
+.voiceCatalogTools{display:grid;gap:9px;margin:3px 0 8px}
+.voiceSearch{height:38px!important;padding:8px 11px!important;background:var(--bg)!important}
+.voiceFilters{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}
+.voiceFilterChip{min-width:0;height:31px;padding:0 5px;border:1px solid var(--line);border-radius:7px;
+  background:transparent;color:var(--ink2);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer}
+.voiceFilterChip:hover{border-color:var(--brand);color:var(--brandink)}
+.voiceFilterChip.active{border-color:var(--brand);background:var(--brandtint2);color:var(--brandink);font-weight:650}
+.voiceCatalogMeta{min-height:16px;margin:2px 1px 5px;color:var(--muted);font-size:10.5px}
+.voiceCatalogRows{display:grid;gap:6px}
+.voiceEmpty{margin:18px 0;text-align:center;color:var(--muted);font-size:12px}
 .cloneForm{display:grid;gap:15px;align-content:start;grid-auto-rows:max-content}
 .cloneSheet .sheetBody{flex:0 1 auto}
 .cloneFile{padding:7px 9px;font-size:12px}

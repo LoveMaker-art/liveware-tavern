@@ -6,7 +6,7 @@ import time
 import unittest
 from unittest import mock
 
-from tts_service import TTSService
+from tts_service import TTSService, load_voice_catalog
 
 
 class _AudioResponse:
@@ -26,6 +26,16 @@ class _AudioResponse:
 class TTSServiceTests(unittest.TestCase):
     def make_service(self, root):
         return TTSService(root, base="", key_provider=lambda: "")
+
+    def test_official_catalog_includes_system_and_base_voices(self):
+        voices = load_voice_catalog()
+        ids = {item["id"] for item in voices}
+        self.assertEqual(len(voices), 599)
+        self.assertEqual(len(ids), 599)
+        self.assertIn("longanlingxin", ids)
+        self.assertIn("longanlufeng", ids)
+        self.assertIn("qwen-audio-3.0-tts-plus-longlingxingyi", ids)
+        self.assertIn("qwen-audio-3.0-tts-plus-loongolivialin", ids)
 
     def test_concurrent_preset_updates_preserve_both_voices(self):
         with tempfile.TemporaryDirectory() as root:

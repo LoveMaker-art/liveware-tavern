@@ -58,6 +58,7 @@ runtime/
   story_profile.py
   story_state_service.py
   tts_service.py
+  qwen_audio_voices.json
   .tavern-release-version
   web/
     actor.html

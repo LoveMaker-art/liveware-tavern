@@ -30,6 +30,11 @@ FALLBACK_VOICES = (
         "model": "qwen-audio-3.0-tts-plus",
         "description": "Warm and empathetic young female voice for Chinese and English.",
         "language": "zh",
+        "gender": "female",
+        "age": 25,
+        "trait": "知心温暖音",
+        "scene": "社交陪伴",
+        "featured": True,
     },
     {
         "id": "longanlufeng",
@@ -37,8 +42,33 @@ FALLBACK_VOICES = (
         "model": "qwen-audio-3.0-tts-plus",
         "description": "Bright and cheerful young male voice for Chinese and English.",
         "language": "zh",
+        "gender": "male",
+        "age": 25,
+        "trait": "明亮开朗音",
+        "scene": "社交陪伴",
+        "featured": True,
     },
 )
+VOICE_CATALOG_PATH = os.path.join(os.path.dirname(__file__), "qwen_audio_voices.json")
+
+
+def load_voice_catalog():
+    voices = {item["id"]: dict(item) for item in FALLBACK_VOICES}
+    try:
+        with open(VOICE_CATALOG_PATH, encoding="utf-8") as file:
+            catalog = json.load(file)
+        if catalog.get("model") != "qwen-audio-3.0-tts-plus":
+            raise ValueError("voice catalog model mismatch")
+        for item in catalog.get("voices") or []:
+            if not isinstance(item, dict):
+                continue
+            voice_id = str(item.get("id") or "").strip().lower()
+            if not voice_id.startswith("qwen-audio-3.0-tts-plus-"):
+                continue
+            voices[voice_id] = dict(item, id=voice_id, featured=False)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return tuple(voices.values())
 
 
 class TTSService:
@@ -84,9 +114,10 @@ class TTSService:
             except OSError:
                 pass
         self.cache = ByteLRUCache(cache_items, cache_bytes)
+        self.voice_catalog = load_voice_catalog()
         self._config_lock = threading.RLock()
         self._voice_lock = threading.Lock()
-        self._voice_cache = {"at": 0.0, "voices": list(FALLBACK_VOICES)}
+        self._voice_cache = {"at": 0.0, "voices": list(self.voice_catalog)}
         self._request_locks = tuple(threading.Lock() for _ in range(32))
         self._cleanup_lock = threading.Lock()
         self._last_cleanup = 0.0
@@ -306,14 +337,19 @@ class TTSService:
             try:
                 with urllib.request.urlopen(request, timeout=10) as response:
                     data = json.loads(response.read().decode("utf-8"))
-                voices = [
+                discovered = [
                     item for item in (data.get("data") or [])
                     if isinstance(item, dict) and item.get("model") == self.MODEL
                     and str(item.get("id") or "").strip()
                 ]
-                if voices:
-                    self._voice_cache = {"at": now, "voices": voices}
-                    return list(voices)
+                if discovered:
+                    voices = {item["id"]: dict(item) for item in self.voice_catalog}
+                    for item in discovered:
+                        voice_id = str(item["id"]).strip().lower()
+                        voices[voice_id] = {**voices.get(voice_id, {}), **item, "id": voice_id}
+                    merged = list(voices.values())
+                    self._voice_cache = {"at": now, "voices": merged}
+                    return merged
             except Exception:
                 pass
             self._voice_cache["at"] = now
@@ -526,7 +562,7 @@ class TTSService:
             if normalized != saved.get("clones"):
                 saved["clones"] = normalized
                 changed = True
-            voice_ids = {item["id"] for item in FALLBACK_VOICES}
+            voice_ids = {item["id"] for item in self.voice_catalog}
             if saved.get("voice") not in voice_ids:
                 saved["voice"] = self.default_voice if self.default_voice in voice_ids else "longanlingxin"
                 changed = True
