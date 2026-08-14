@@ -1,6 +1,27 @@
 # Liveware Tavern
 
-Liveware Tavern is a stateful, multi-character story application for Hermes Agent and ClawChat. It combines reusable character cards, worldbooks, per-world personas, long-story memory, model selection, and a mobile-friendly Liveware console.
+> [!IMPORTANT]
+> **Nora-specific component, not a universal Agent plugin.** This repository is the source and release channel for the Tavern component built specifically for **Nora**, the author's own Hermes Agent on ClawChat. The installer and updater are intended only for official Nora instances and mirrors derived from the Nora image. They are not supported as a way to add Tavern to an arbitrary Hermes or ClawChat Agent.
+>
+> **这是诺拉的专属组件，并非通用 Agent 插件。** 本仓库是作者自己的 ClawChat Hermes Agent「诺拉」所使用的酒馆组件及其版本发布渠道。安装器和更新器仅面向官方诺拉实例，以及基于诺拉镜像创建的实例；不能将其理解为给任意 Hermes 或 ClawChat Agent 一键添加酒馆的通用方案。
+
+Liveware Tavern is Nora's stateful, multi-character story application. It combines reusable character cards, worldbooks, per-world personas, long-story memory, model selection, and a mobile-friendly Liveware console.
+
+## Project Scope
+
+Supported use:
+
+- Updating an official Nora instance.
+- Updating a mirrored instance originally created from the Nora image.
+- Reviewing or adapting the source under the terms of the AGPL license.
+
+Not supported:
+
+- Installing Tavern directly into an unrelated Hermes or ClawChat Agent.
+- Treating the included skills, `AGENTS.md`, hooks, runtime, or identity integration as a drop-in general-purpose package.
+- Assuming compatibility with another Agent's personality, memory layout, skills, Liveware registration, or existing application data.
+
+The source is public for transparency, version delivery, and licensed adaptation. Integrating it into another Agent requires an independent compatibility review and corresponding code changes; the release installer does not perform that adaptation.
 
 ## Repository Layout
 
@@ -36,7 +57,7 @@ dist/baseline-v1.14.12-manifest.json
 dist/tavern-baseline-v1.14.12.tar.gz
 ```
 
-Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Mirrored instances can then update the runtime, atomically replace the exact six official creative-skill directories, delete the two obsolete construction-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical-baseline assets let legacy instances complete the same three-way review when their original version predates this repository's stable Releases.
+Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Nora mirrors can then update the runtime, atomically replace the exact six official creative-skill directories, delete the two obsolete construction-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical-baseline assets let legacy Nora instances complete the same three-way review when their original version predates this repository's stable Releases.
 
 ## Bootstrap A Legacy Instance
 
@@ -56,15 +77,16 @@ https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/instal
 https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/bootstrap-manifest.json
 ```
 
-One-command installation and update:
+One-command installation and update for an official Nora instance or Nora-derived mirror:
 
 ```sh
 curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
-Running this command is the user's explicit authorization to install the
-reported conflict-free update. Merge conflicts or failed health checks stop
-the process; application failures restore the previous managed files.
+Do not run this command on an unrelated Agent. On a supported Nora instance,
+running it is the user's explicit authorization to install the reported
+conflict-free update. Merge conflicts or failed health checks stop the process;
+application failures restore the previous managed files.
 
 ## Install The Updater Skill Manually
 
@@ -74,7 +96,7 @@ Place `updater-skill/` at:
 /opt/data/skills/system/tavern-updater/
 ```
 
-The Agent can then check and install a verified stable release after explicit user confirmation. Every update review starts through the verified Bootstrap, even when the updater is already installed, so managed-file additions or removals can never make an older updater reject a newer release format before it has refreshed itself.
+Nora can then check and install a verified stable release after explicit user confirmation. Every update review starts through the verified Bootstrap, even when the updater is already installed, so managed-file additions or removals can never make an older updater reject a newer release format before it has refreshed itself.
 
 ## License
 
