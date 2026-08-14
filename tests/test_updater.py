@@ -61,6 +61,25 @@ class UpdaterMergeTests(unittest.TestCase):
         for name in UPDATER.CREATIVE_SKILL_FILES:
             self.write(root, name, marker + ":" + name + "\n")
 
+    def test_default_release_discovery_avoids_github_api(self):
+        with mock.patch.object(
+            UPDATER,
+            "request_json",
+            return_value={"version": "1.23.10"},
+        ) as request:
+            release = UPDATER.release_from_download()
+
+        request.assert_called_once_with(
+            "https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/manifest.json"
+        )
+        self.assertEqual(release["tag"], "v1.23.10")
+        self.assertNotIn("api.github.com", " ".join(release["assets"].values()))
+        self.assertTrue(
+            release["assets"]["tavern-release.tar.gz"].endswith(
+                "/releases/download/v1.23.10/tavern-release.tar.gz"
+            )
+        )
+
     def test_official_target_not_merged_install_becomes_next_baseline(self):
         base = self.root / "base/runtime"
         current = self.root / "current/runtime"

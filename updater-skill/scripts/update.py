@@ -20,11 +20,12 @@ import urllib.request
 import uuid
 
 REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/liveware-tavern")
-API = os.environ.get("TAVERN_UPDATE_API", f"https://api.github.com/repos/{REPO}/releases/latest")
-TAG_API = os.environ.get(
-    "TAVERN_UPDATE_TAG_API",
-    f"https://api.github.com/repos/{REPO}/releases/tags/v{{version}}",
-)
+API_OVERRIDE = os.environ.get("TAVERN_UPDATE_API")
+TAG_API_OVERRIDE = os.environ.get("TAVERN_UPDATE_TAG_API")
+API = API_OVERRIDE or f"https://api.github.com/repos/{REPO}/releases/latest"
+TAG_API = TAG_API_OVERRIDE or f"https://api.github.com/repos/{REPO}/releases/tags/v{{version}}"
+RELEASES_URL = f"https://github.com/{REPO}/releases"
+LATEST_DOWNLOAD_URL = f"{RELEASES_URL}/latest/download"
 DATA = Path(os.environ.get("TAVERN_DATA_ROOT", "/opt/data"))
 PYTHON = os.environ.get("TAVERN_PYTHON", "/opt/hermes/.venv/bin/python")
 HERMES = os.environ.get("TAVERN_HERMES", "/opt/hermes/.venv/bin/hermes")
@@ -324,12 +325,36 @@ def release_from_api(url):
     return {"tag": release.get("tag_name"), "assets": assets, "url": release.get("html_url")}
 
 
+def release_from_download(version=None):
+    if version is None:
+        manifest = request_json(f"{LATEST_DOWNLOAD_URL}/{ASSET_MANIFEST}")
+        version = str(manifest.get("version") or "")
+    version_key(version)
+    tag = "v" + version
+    base = f"{RELEASES_URL}/download/{tag}"
+    names = (
+        ASSET_MANIFEST,
+        ASSET_ARCHIVE,
+        SKILL_ASSET_MANIFEST,
+        SKILL_ASSET_ARCHIVE,
+        "baseline-v1.14.12-manifest.json",
+        "tavern-baseline-v1.14.12.tar.gz",
+    )
+    return {
+        "tag": tag,
+        "assets": {name: f"{base}/{name}" for name in names},
+        "url": f"{RELEASES_URL}/tag/{tag}",
+    }
+
+
 def latest_release():
-    return release_from_api(API)
+    return release_from_api(API) if API_OVERRIDE else release_from_download()
 
 
 def tagged_release(version):
-    return release_from_api(TAG_API.format(version=version))
+    if TAG_API_OVERRIDE:
+        return release_from_api(TAG_API.format(version=version))
+    return release_from_download(version)
 
 
 def canonical_skill_managed(skill_manifest):
