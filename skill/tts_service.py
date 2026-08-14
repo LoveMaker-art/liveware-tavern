@@ -346,7 +346,8 @@ class TTSService:
                     voices = {item["id"]: dict(item) for item in self.voice_catalog}
                     for item in discovered:
                         voice_id = str(item["id"]).strip().lower()
-                        voices[voice_id] = {**voices.get(voice_id, {}), **item, "id": voice_id}
+                        if voice_id in voices:
+                            voices[voice_id] = {**voices[voice_id], **item, "id": voice_id}
                     merged = list(voices.values())
                     self._voice_cache = {"at": now, "voices": merged}
                     return merged

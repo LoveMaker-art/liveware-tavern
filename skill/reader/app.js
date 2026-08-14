@@ -161,9 +161,6 @@ const VOICE_EMOTIONS = [
   "deep and loud shouting", "like dracula", "very slowly", "very fast",
 ];
 const voiceEmotionKey = (value) => `voiceEmotion${value ? value.replace(/(^| )[a-z]/g, (part) => part.trim().toUpperCase()) : "Natural"}`;
-const VOICE_CATALOG_FILTERS = ["featured", "all", "female", "male", "en"];
-let voiceCatalogFilter = "featured";
-let voiceCatalogQuery = "";
 
 async function loadIdentity() {
   try {
@@ -2310,38 +2307,9 @@ function renderVoiceSheet() {
     mode: "preset",
     voices: [],
   };
-  const activeVoice = (cfg.voices || []).find((voice) => voice.id === cfg.active_voice);
-  if (!voiceCatalogQuery && voiceCatalogFilter === "featured" && activeVoice && !activeVoice.featured) {
-    voiceCatalogFilter = activeVoice.language === "en" ? "en" : (activeVoice.gender || "all");
-  }
-  box.innerHTML = `<div class="voiceSheetModel"><span>${esc(cfg.model_name || "Qwen Audio 3.0 TTS Plus")}</span></div>
-    <div class="voiceCatalogTools">
-      <input class="formControl voiceSearch" id="voiceSearch" value="${esc(voiceCatalogQuery)}" placeholder="${esc(t("voiceSearchPlaceholder"))}" aria-label="${esc(t("voiceSearchPlaceholder"))}">
-      <div class="voiceFilters" role="group" aria-label="${esc(t("voiceFilterLabel"))}">
-        ${VOICE_CATALOG_FILTERS.map((filter) => `<button type="button" class="voiceFilterChip ${filter === voiceCatalogFilter ? "active" : ""}" data-voice-filter="${filter}">${esc(t(`voiceFilter_${filter}`))}</button>`).join("")}
-      </div>
-    </div>
-    <div class="voiceCatalogMeta" id="voiceCatalogMeta"></div>
-    <div class="voiceCatalogRows" id="voiceCatalogRows"></div>`;
-
-  const voices = Array.isArray(cfg.voices) ? cfg.voices : [];
-  const rows = box.querySelector("#voiceCatalogRows");
-  const meta = box.querySelector("#voiceCatalogMeta");
-  const renderRows = () => {
-    const query = voiceCatalogQuery.trim().toLowerCase();
-    const filtered = voices.filter((voice) => {
-      const inFilter = voiceCatalogFilter === "all" ? true
-        : voiceCatalogFilter === "featured" ? voice.featured
-        : voiceCatalogFilter === "en" ? voice.language === "en"
-          : voice.gender === voiceCatalogFilter;
-      if (!inFilter) return false;
-      if (!query) return true;
-      return [voice.id, voice.name, voice.trait, voice.scene, voice.description]
-        .some((value) => String(value || "").toLowerCase().includes(query));
-    });
-    const visible = filtered.slice(0, 100);
-    meta.textContent = t("voiceResults", { shown: visible.length, total: filtered.length });
-    rows.innerHTML = visible.map((voice) => {
+  box.innerHTML = `<div class="voiceSheetModel"><span>${esc(cfg.model_name || "Qwen Audio 3.0 TTS Plus")}</span></div>`
+    + `<p class="voiceModelName voiceListLabel">${esc(t("voicePresetLabel"))}</p>`
+    + (cfg.voices || []).map((voice) => {
       const detail = voiceDescription(voice) || t(`voiceLang_${voice.language || "zh"}`);
       return `<div class="mcItem ${voice.id === cfg.active_voice ? "active" : ""}" data-voice="${esc(voice.id)}">
         <div class="mcInfo"><div class="mcName">${esc(voiceDisplayName(voice))}</div><div class="mcMeta">${esc(detail)}</div></div>
@@ -2350,34 +2318,20 @@ function renderVoiceSheet() {
           <button class="mcIcon" data-voice-settings="${esc(voice.id)}" aria-label="${esc(t("voiceSettings"))}" title="${esc(t("voiceSettings"))}">${SLIDERS_SVG}</button>
         </div>
         <span class="mcCheck">✓</span></div>`;
-    }).join("") || `<p class="voiceEmpty">${esc(t("voiceNoResults"))}</p>`;
-    rows.querySelectorAll("[data-voice]").forEach((row) => row.onclick = () => useVoice(row.dataset.voice));
-    rows.querySelectorAll("[data-voice-preview]").forEach((button) => {
-      button.onclick = (event) => {
-        event.stopPropagation();
-        previewPresetVoice(button, { voice: button.dataset.voicePreview });
-      };
-    });
-    rows.querySelectorAll("[data-voice-settings]").forEach((button) => {
-      button.onclick = (event) => {
-        event.stopPropagation();
-        openPresetVoiceSettings(button.dataset.voiceSettings);
-      };
-    });
-  };
-  box.querySelector("#voiceSearch").oninput = (event) => {
-    voiceCatalogQuery = event.currentTarget.value;
-    renderRows();
-  };
-  box.querySelectorAll("[data-voice-filter]").forEach((button) => {
-    button.onclick = () => {
-      voiceCatalogFilter = button.dataset.voiceFilter;
-      box.querySelectorAll("[data-voice-filter]").forEach((item) =>
-        item.classList.toggle("active", item === button));
-      renderRows();
+    }).join("");
+  box.querySelectorAll("[data-voice]").forEach((row) => row.onclick = () => useVoice(row.dataset.voice));
+  box.querySelectorAll("[data-voice-preview]").forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      previewPresetVoice(button, { voice: button.dataset.voicePreview });
     };
   });
-  renderRows();
+  box.querySelectorAll("[data-voice-settings]").forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      openPresetVoiceSettings(button.dataset.voiceSettings);
+    };
+  });
 }
 async function useCloneVoice(cloneId) {
   if (!cloneId || (state.tts?.mode === "clone" && state.tts?.active_clone_id === cloneId)) return;

@@ -27,15 +27,40 @@ class TTSServiceTests(unittest.TestCase):
     def make_service(self, root):
         return TTSService(root, base="", key_provider=lambda: "")
 
-    def test_official_catalog_includes_system_and_base_voices(self):
+    def test_curated_catalog_matches_previous_preset_count(self):
         voices = load_voice_catalog()
         ids = {item["id"] for item in voices}
-        self.assertEqual(len(voices), 599)
-        self.assertEqual(len(ids), 599)
+        self.assertEqual(len(voices), 9)
+        self.assertEqual(len(ids), 9)
         self.assertIn("longanlingxin", ids)
         self.assertIn("longanlufeng", ids)
         self.assertIn("qwen-audio-3.0-tts-plus-longlingxingyi", ids)
         self.assertIn("qwen-audio-3.0-tts-plus-loongolivialin", ids)
+
+    def test_voice_discovery_does_not_expand_curated_presets(self):
+        with tempfile.TemporaryDirectory() as root:
+            service = TTSService(
+                root,
+                base="https://example.invalid/v1",
+                key_provider=lambda: "test-key",
+            )
+            response = {
+                "data": [
+                    {"id": "longanlingxin", "model": service.MODEL, "name": "Updated"},
+                    {"id": "qwen-audio-3.0-tts-plus-not-curated", "model": service.MODEL},
+                ]
+            }
+            with mock.patch(
+                "tts_service.urllib.request.urlopen",
+                return_value=_AudioResponse(json.dumps(response).encode("utf-8")),
+            ):
+                voices = service.voices(force=True)
+
+            self.assertEqual(len(voices), 9)
+            self.assertNotIn(
+                "qwen-audio-3.0-tts-plus-not-curated",
+                {item["id"] for item in voices},
+            )
 
     def test_concurrent_preset_updates_preserve_both_voices(self):
         with tempfile.TemporaryDirectory() as root:
