@@ -147,6 +147,21 @@ const CLAWCHAT_OFFICIAL_DEVELOPER_ID = "usr_01KPSPHRDQF9HARGBKBDCF5X6H";
 const PAUSE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
 const speechState = { audio: null, button: null, url: "", controller: null };
 
+const VOICE_STYLE_PRESETS = [
+  { id: "natural", label: "voiceStyleNatural", prompt: "" },
+  { id: "warm", label: "voiceStyleWarm", prompt: "voiceStyleWarmPrompt" },
+  { id: "composed", label: "voiceStyleComposed", prompt: "voiceStyleComposedPrompt" },
+  { id: "bright", label: "voiceStyleBright", prompt: "voiceStyleBrightPrompt" },
+  { id: "custom", label: "voiceStyleCustom", prompt: null },
+];
+const VOICE_EMOTIONS = [
+  "", "empathetic", "serious", "curious", "excited", "sad", "angry", "amazed",
+  "trembling", "sarcastic", "bored", "tired", "scornful", "shouting", "asmr",
+  "panicked", "mischievously", "whispers", "reluctantly", "crying",
+  "deep and loud shouting", "like dracula", "very slowly", "very fast",
+];
+const voiceEmotionKey = (value) => `voiceEmotion${value ? value.replace(/(^| )[a-z]/g, (part) => part.trim().toUpperCase()) : "Natural"}`;
+
 async function loadIdentity() {
   try {
     const identity = await bridge.get("/api/identity");
@@ -275,7 +290,7 @@ async function loadAll() {
   state.models = (mr && mr.configs) ? mr
     : { configs: [{ id: "builtin", builtin: true }], active: "builtin" };
   state.tts = (tr && Array.isArray(tr.voices)) ? tr
-    : { model: "clawling/qwen-tts", model_name: "Qwen TTS", active_voice: "vivian", active_clone_id: "", mode: "preset", voices: [], preset_settings: {}, clones: [], clone: {} };
+    : { model: "qwen-audio-3.0-tts-plus", model_name: "Qwen Audio 3.0 TTS Plus", active_voice: "longanlingxin", mode: "preset", voices: [] };
   state.activeId = pr.active || (state.productions[0] && state.productions[0].id) || null;
   state.active = null;
   if (state.activeId) {
@@ -372,7 +387,7 @@ function turnHtml(m, isLast, canEdit) {
   const cont = isLast ? `<button data-act="cont">${esc(t("cont"))}</button>` : "";
   const sugg = isLast ? `<button data-act="suggest">${esc(t("suggest"))}</button>` : "";
   const meta = m.gen_ms ? `<span class="genTime">${esc(t("genTime", { s: fmtDuration(m.gen_ms) }))}</span>` : "";
-  const speak = m._temp ? "" : `<button class="speakBtn" data-act="speak" aria-label="${esc(t("voicePlay"))}" title="${esc(t("voicePlay"))}">${SPEAKER_SVG}</button>`;
+  const speak = m._temp ? "" : `<span class="speechTools"><button class="speakBtn" data-act="speak" aria-label="${esc(t("voicePlay"))}" title="${esc(t("voicePlay"))}">${SPEAKER_SVG}</button></span>`;
   return `<div class="turn char ${m._temp ? "temp" : ""}" data-id="${m.id || ""}">
     <div class="body">${fmt(loc(m, "text") || m.text)}</div>
     <div class="ctl">${meta}${speak}${swipe}${regen}${cont}${sugg}${canEdit ? `<button data-act="edit">${esc(t("edit"))}</button>` : ""}</div></div>`;
@@ -417,7 +432,7 @@ function stopSpeech() {
   speechState.url = "";
 }
 
-async function toggleSpeech(btn) {
+async function toggleSpeech(btn, overrideText = null, emotion) {
   if (speechState.button === btn && speechState.audio) {
     if (speechState.audio.paused) {
       await speechState.audio.play();
@@ -435,9 +450,10 @@ async function toggleSpeech(btn) {
     return;
   }
 
-  const id = btn.closest(".turn")?.dataset.id;
-  const message = state.active?.story?.find((item) => String(item.id || "") === String(id || ""));
-  const text = loc(message, "text") || message?.text || "";
+  const id = btn.closest(".turn")?.dataset.id || "";
+  const message = state.active?.story?.find((item) => String(item.id || "") === String(id));
+  const messageText = loc(message, "text") || message?.text || "";
+  const text = overrideText == null ? messageText : overrideText;
   if (!text.trim()) return;
 
   stopSpeech();
@@ -449,7 +465,7 @@ async function toggleSpeech(btn) {
   btn.setAttribute("aria-label", t("voiceLoading"));
   btn.title = t("voiceLoading");
   try {
-    const blob = await bridge.speech(text, controller.signal);
+    const blob = await bridge.speech(text, controller.signal, emotion);
     if (speechState.controller !== controller) return;
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
@@ -482,6 +498,10 @@ async function toggleSpeech(btn) {
     if (e.name !== "AbortError") toast(t("voiceFailed", { err: e.message }));
     stopSpeech();
   }
+}
+
+function voiceOptions(values, selected, keyFor) {
+  return values.map((value) => `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(t(keyFor(value)))}</option>`).join("");
 }
 
 // 角色卡来源/出处(Task 2):有 creator(卡作者)显作者;Agent 原创(import_card_json)显「Agent 创作」。
@@ -605,9 +625,7 @@ function modelsSectionHtml() {
     || { builtin: true, model: "" };
   const cfg = state.tts || {};
   const selectedVoice = (cfg.voices || []).find((voice) => voice.id === cfg.active_voice);
-  const voiceName = cfg.mode === "clone"
-    ? (cfg.clone?.name || t("voiceCloneDefaultName"))
-    : (selectedVoice?.name || voiceDisplayName(cfg.active_voice));
+  const voiceName = voiceDisplayName(selectedVoice || cfg.active_voice);
   return `<div class="pSection modelSection">
     <div class="pHead">${esc(t("pModel"))}</div>
     <div class="modelGroup">
@@ -618,7 +636,7 @@ function modelsSectionHtml() {
       </div>
       <div class="modelUnit">
         <div class="modelUnitHead">${esc(t("pVoiceModel"))}</div>
-        <p class="mdlCur">${esc(cfg.model_name || "Qwen TTS")}<span class="mdlModel">${esc(voiceName)}</span></p>
+        <p class="mdlCur">${esc(cfg.model_name || "Qwen Audio 3.0 TTS Plus")}<span class="mdlModel">${esc(voiceName)}</span></p>
         <button class="actorMore" id="voiceManage">${SLIDERS_SVG}${esc(t("voiceManage"))}</button>
       </div>
     </div>
@@ -627,7 +645,20 @@ function modelsSectionHtml() {
 
 function voiceDisplayName(voice) {
   const id = typeof voice === "string" ? voice : voice?.id;
-  return id ? id.charAt(0).toUpperCase() + id.slice(1) : "";
+  const names = I18N.isChinese
+    ? { longanlingxin: "龙安灵心", longanlufeng: "龙安鲁风" }
+    : { longanlingxin: "Longan Lingxin", longanlufeng: "Longan Lufeng" };
+  return names[id] || (id ? id.charAt(0).toUpperCase() + id.slice(1) : "");
+}
+
+function voiceDescription(voice) {
+  const id = voice?.id || "";
+  if (I18N.isChinese) {
+    return id === "longanlingxin"
+      ? t("voiceDescLingxin")
+      : id === "longanlufeng" ? t("voiceDescLufeng") : "";
+  }
+  return voice?.description || t("voiceLang_zh");
 }
 
 function loreTriggerText(e) {
@@ -2265,46 +2296,39 @@ function bindSpeedStepper(root, id) {
 function renderVoiceSheet() {
   const box = document.getElementById("voiceBody");
   if (!box) return;
-  const cfg = state.tts || { voices: [], active_voice: "vivian", active_clone_id: "", mode: "preset", clones: [], clone: {} };
-  const clones = Array.isArray(cfg.clones) ? cfg.clones : (cfg.clone?.configured ? [cfg.clone] : []);
-  box.innerHTML = `<div class="voiceSheetModel"><span>${esc(cfg.model_name || "Qwen TTS")}</span>
-      <button class="actorMore" id="voiceCloneCreate">${PENCIL_SVG}${esc(t("voiceCloneCreate"))}</button></div>`
-    + (clones.length ? `<p class="voiceModelName voiceListLabel">${esc(t("voiceCloneListLabel"))}</p>` : "")
-    + clones.map((clone) => `<div class="mcItem ${cfg.mode === "clone" && clone.id === cfg.active_clone_id ? "active" : ""}" data-clone-id="${esc(clone.id)}">
-        <div class="mcInfo"><div class="mcName">${esc(clone.name || t("voiceCloneDefaultName"))}</div><div class="mcMeta">${esc(t("voiceCloneMeta", { speed: Number(clone.speed || 0.9).toFixed(2) }))}</div></div>
-        <span class="mcCheck">✓</span><button class="mcDel" data-clone-delete="${esc(clone.id)}" aria-label="${esc(t("voiceCloneDelete"))}">${TRASH_SVG}</button></div>`).join("")
+  const cfg = state.tts || {
+    model: "qwen-audio-3.0-tts-plus",
+    model_name: "Qwen Audio 3.0 TTS Plus",
+    active_voice: "longanlingxin",
+    mode: "preset",
+    voices: [],
+  };
+  box.innerHTML = `<div class="voiceSheetModel"><span>${esc(cfg.model_name || "Qwen Audio 3.0 TTS Plus")}</span></div>`
     + `<p class="voiceModelName voiceListLabel">${esc(t("voicePresetLabel"))}</p>`
     + (cfg.voices || []).map((voice) => {
-      const description = I18N.isChinese ? voice.description : "";
-      const setting = cfg.preset_settings?.[voice.id] || { speed: 0.9, instructions: "" };
-      const detail = setting.instructions || description || t(`voiceLang_${voice.language || "chinese"}`);
-      const meta = `${Number(setting.speed || 0.9).toFixed(2)}× · ${detail}`;
-      return `<div class="mcItem ${cfg.mode === "preset" && voice.id === cfg.active_voice ? "active" : ""}" data-voice="${esc(voice.id)}">
-        <div class="mcInfo"><div class="mcName">${esc(voice.name || voiceDisplayName(voice))}</div><div class="mcMeta">${esc(meta)}</div></div>
-        <div class="mcTools"><button class="mcIcon" data-voice-preview="${esc(voice.id)}" aria-label="${esc(t("voicePreview"))}" title="${esc(t("voicePreview"))}">${SPEAKER_SVG}</button>
-        <button class="mcIcon" data-voice-settings="${esc(voice.id)}" aria-label="${esc(t("voiceSettings"))}" title="${esc(t("voiceSettings"))}">${SLIDERS_SVG}</button></div>
+      const detail = voiceDescription(voice) || t(`voiceLang_${voice.language || "zh"}`);
+      return `<div class="mcItem ${voice.id === cfg.active_voice ? "active" : ""}" data-voice="${esc(voice.id)}">
+        <div class="mcInfo"><div class="mcName">${esc(voiceDisplayName(voice))}</div><div class="mcMeta">${esc(detail)}</div></div>
+        <div class="mcTools">
+          <button class="mcIcon" data-voice-preview="${esc(voice.id)}" aria-label="${esc(t("voicePreview"))}" title="${esc(t("voicePreview"))}">${SPEAKER_SVG}</button>
+          <button class="mcIcon" data-voice-settings="${esc(voice.id)}" aria-label="${esc(t("voiceSettings"))}" title="${esc(t("voiceSettings"))}">${SLIDERS_SVG}</button>
+        </div>
         <span class="mcCheck">✓</span></div>`;
     }).join("");
-  const create = document.getElementById("voiceCloneCreate");
-  if (create) create.onclick = openVoiceCloneSheet;
-  box.querySelectorAll("[data-clone-id]").forEach((row) => row.onclick = () => useCloneVoice(row.dataset.cloneId));
-  box.querySelectorAll("[data-clone-delete]").forEach((button) => {
-    button.onclick = (event) => { event.stopPropagation(); deleteCloneVoice(button.dataset.cloneDelete); };
-  });
   box.querySelectorAll("[data-voice]").forEach((row) => row.onclick = () => useVoice(row.dataset.voice));
   box.querySelectorAll("[data-voice-preview]").forEach((button) => {
     button.onclick = (event) => {
       event.stopPropagation();
-      const voice = button.dataset.voicePreview;
-      const setting = cfg.preset_settings?.[voice] || { speed: 0.9, instructions: "" };
-      previewPresetVoice(button, { voice, ...setting });
+      previewPresetVoice(button, { voice: button.dataset.voicePreview });
     };
   });
   box.querySelectorAll("[data-voice-settings]").forEach((button) => {
-    button.onclick = (event) => { event.stopPropagation(); openPresetVoiceSettings(button.dataset.voiceSettings); };
+    button.onclick = (event) => {
+      event.stopPropagation();
+      openPresetVoiceSettings(button.dataset.voiceSettings);
+    };
   });
 }
-
 async function useCloneVoice(cloneId) {
   if (!cloneId || (state.tts?.mode === "clone" && state.tts?.active_clone_id === cloneId)) return;
   try {
@@ -2369,33 +2393,93 @@ async function previewPresetVoice(button, payload) {
   }
 }
 
+
+function voiceInstructionUnits(value) {
+  return [...String(value || "")].reduce((total, character) => {
+    const code = character.codePointAt(0);
+    const isHan = (code >= 0x3400 && code <= 0x4dbf)
+      || (code >= 0x4e00 && code <= 0x9fff)
+      || (code >= 0xf900 && code <= 0xfaff);
+    return total + (isHan ? 2 : 1);
+  }, 0);
+}
+
+function voiceStylePrompt(preset) {
+  return preset.prompt ? t(preset.prompt) : "";
+}
+
+function voiceStylePresetId(instructions) {
+  const match = VOICE_STYLE_PRESETS.find((preset) => preset.id !== "custom"
+    && voiceStylePrompt(preset) === instructions);
+  return match?.id || "custom";
+}
 function openPresetVoiceSettings(voiceId) {
   stopSpeech();
   const cfg = state.tts || {};
   const voice = (cfg.voices || []).find((item) => item.id === voiceId);
   if (!voice) return;
-  const setting = cfg.preset_settings?.[voiceId] || { speed: 0.9, instructions: "" };
+  const setting = cfg.preset_settings?.[voiceId] || { speed: 1, instructions: "", emotion: "" };
+  const activeStyle = voiceStylePresetId(setting.instructions || "");
+  const styleButtons = VOICE_STYLE_PRESETS.map((preset) => `<button type="button" class="voiceStyleChip ${preset.id === activeStyle ? "active" : ""}" data-style="${preset.id}">${esc(t(preset.label))}</button>`).join("");
+  const emotionOptions = voiceOptions(VOICE_EMOTIONS, setting.emotion || "", voiceEmotionKey);
+  const instructionUnits = voiceInstructionUnits(setting.instructions);
   const card = el("div", "modalCard sheetCard voiceSettingsSheet");
-  card.innerHTML = `<div class="sheetHd"><span class="t">${esc(voice.name || voiceDisplayName(voice))}</span>
+  card.innerHTML = `<div class="sheetHd"><span class="t">${esc(voiceDisplayName(voice))}</span>
       <button class="sheetClose" aria-label="${esc(t("ariaClose"))}">✕</button></div>
     <div class="sheetBody voiceSettingsForm">
-      <label class="fieldLabel"><span>${esc(t("voiceSpeed"))}</span>${speedStepperHtml("presetSpeed", setting.speed)}</label>
-      <label class="fieldLabel">${esc(t("voiceInstructions"))}<textarea class="formControl voiceInstructions" id="voiceInstructions" maxlength="1000" placeholder="${esc(t("voiceInstructionsPlaceholder"))}">${esc(setting.instructions || "")}</textarea></label>
+      <div class="voiceQuickGrid">
+        <label class="fieldLabel"><span>${esc(t("voiceSpeed"))}</span>${speedStepperHtml("presetSpeed", setting.speed)}</label>
+        <label class="fieldLabel"><span>${esc(t("voiceDefaultEmotion"))}</span><select class="formControl" id="voiceEmotion">${emotionOptions}</select></label>
+      </div>
+      <div class="fieldLabel voiceStyleField"><span>${esc(t("voiceInstructions"))}</span>
+        <div class="voiceStylePresets">${styleButtons}</div>
+        <textarea class="formControl voiceInstructions" id="voiceInstructions" maxlength="100" placeholder="${esc(t("voiceInstructionsPlaceholder"))}">${esc(setting.instructions || "")}</textarea>
+        <small class="voiceInstructionCount" id="voiceInstructionCount">${esc(t("voiceInstructionsCount", { n: instructionUnits }))}</small>
+      </div>
     </div>
     <div class="sheetActions voiceSettingsActions"><button class="btn ghost previewIconBtn" id="voicePreview" aria-label="${esc(t("voicePreview"))}" title="${esc(t("voicePreview"))}">${SPEAKER_SVG}</button><button class="btn" id="voiceSettingsSave">${esc(t("save"))}</button></div>`;
   openModal(card);
   const speed = bindSpeedStepper(card, "presetSpeed");
   const instructions = card.querySelector("#voiceInstructions");
-  card.querySelector(".sheetClose").onclick = openVoiceSheet;
-  card.querySelector("#voicePreview").onclick = (event) => previewPresetVoice(event.currentTarget, {
-    voice: voiceId, speed: speed.value(), instructions: instructions.value.trim(),
+  const emotion = card.querySelector("#voiceEmotion");
+  const count = card.querySelector("#voiceInstructionCount");
+  const styleChips = [...card.querySelectorAll(".voiceStyleChip")];
+  const setActiveStyle = (id) => styleChips.forEach((chip) =>
+    chip.classList.toggle("active", chip.dataset.style === id));
+  const refreshInstructionState = () => {
+    const units = voiceInstructionUnits(instructions.value.trim());
+    count.textContent = t("voiceInstructionsCount", { n: units });
+    count.classList.toggle("invalid", units > 100);
+    return units <= 100;
+  };
+  styleChips.forEach((chip) => chip.onclick = () => {
+    const preset = VOICE_STYLE_PRESETS.find((item) => item.id === chip.dataset.style);
+    if (!preset) return;
+    if (preset.id === "custom") return instructions.focus();
+    instructions.value = voiceStylePrompt(preset);
+    setActiveStyle(preset.id);
+    refreshInstructionState();
   });
+  instructions.oninput = () => {
+    setActiveStyle(voiceStylePresetId(instructions.value.trim()));
+    refreshInstructionState();
+  };
+  refreshInstructionState();
+  card.querySelector(".sheetClose").onclick = openVoiceSheet;
+  card.querySelector("#voicePreview").onclick = (event) => {
+    if (!refreshInstructionState()) return toast(t("voiceInstructionsTooLong"));
+    return previewPresetVoice(event.currentTarget, {
+      voice: voiceId, speed: speed.value(), instructions: instructions.value.trim(),
+      emotion: emotion.value,
+    });
+  };
   card.querySelector("#voiceSettingsSave").onclick = async (event) => {
+    if (!refreshInstructionState()) return toast(t("voiceInstructionsTooLong"));
     const save = event.currentTarget;
     save.disabled = true;
     try {
       const result = await bridge.event({ type: "tts_preset_settings", voice: voiceId,
-        speed: speed.value(), instructions: instructions.value.trim() });
+        speed: speed.value(), instructions: instructions.value.trim(), emotion: emotion.value });
       state.tts = result.tts;
       openVoiceSheet(); renderPanel();
       toast(t("voiceSettingsSaved"));

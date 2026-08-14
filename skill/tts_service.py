@@ -24,30 +24,42 @@ from memory_cache import ByteLRUCache
 
 
 FALLBACK_VOICES = (
-    {"id": "vivian", "name": "Vivian", "model": "clawling/qwen-tts", "description": "明亮、略带锐气的年轻女声。", "language": "chinese"},
-    {"id": "serena", "name": "Serena", "model": "clawling/qwen-tts", "description": "温暖柔和的年轻女声。", "language": "chinese"},
-    {"id": "uncle_fu", "name": "Uncle_Fu", "model": "clawling/qwen-tts", "description": "音色低沉醇厚的成熟男声。", "language": "chinese"},
-    {"id": "dylan", "name": "Dylan", "model": "clawling/qwen-tts", "description": "清晰自然的北京青年男声。", "language": "chinese"},
-    {"id": "eric", "name": "Eric", "model": "clawling/qwen-tts", "description": "活泼、略带沙哑明亮感的成都男声。", "language": "chinese"},
-    {"id": "ryan", "name": "Ryan", "model": "clawling/qwen-tts", "description": "富有节奏感的动态男声。", "language": "english"},
-    {"id": "aiden", "name": "Aiden", "model": "clawling/qwen-tts", "description": "清晰中频的阳光美式男声。", "language": "english"},
-    {"id": "ono_anna", "name": "Ono_Anna", "model": "clawling/qwen-tts", "description": "轻快灵活的俏皮日语女声。", "language": "japanese"},
-    {"id": "sohee", "name": "Sohee", "model": "clawling/qwen-tts", "description": "富含情感的温暖韩语女声。", "language": "korean"},
+    {
+        "id": "longanlingxin",
+        "name": "Longan Lingxin",
+        "model": "qwen-audio-3.0-tts-plus",
+        "description": "Warm and empathetic young female voice for Chinese and English.",
+        "language": "zh",
+    },
+    {
+        "id": "longanlufeng",
+        "name": "Longan Lufeng",
+        "model": "qwen-audio-3.0-tts-plus",
+        "description": "Bright and cheerful young male voice for Chinese and English.",
+        "language": "zh",
+    },
 )
 
 
 class TTSService:
-    MODEL = "clawling/qwen-tts"
-    MODEL_NAME = "Qwen TTS"
+    MODEL = "qwen-audio-3.0-tts-plus"
+    MODEL_NAME = "Qwen Audio 3.0 TTS Plus"
     PREVIEW_TEXT = "欢迎来到故事的世界里"
     REFERENCE_MAX_BYTES = 10 * 1024 * 1024
     MAX_CLONES = 20
-    DEFAULT_SPEED = 0.9
+    DEFAULT_SPEED = 1.0
+    EMOTION_TAGS = frozenset({
+        "", "sad", "amazed", "deep and loud shouting", "trembling", "angry",
+        "excited", "sarcastic", "curious", "like dracula", "bored", "tired",
+        "scornful", "shouting", "asmr", "panicked", "mischievously",
+        "empathetic", "whispers", "reluctantly", "crying", "serious",
+        "very slowly", "very fast",
+    })
 
     def __init__(self, state_dir, *, base, key_provider):
         self.base = str(base or "").strip().rstrip("/")
         self._key_provider = key_provider
-        self.default_voice = os.environ.get("TAVERN_TTS_VOICE", "vivian").strip().lower()
+        self.default_voice = os.environ.get("TAVERN_TTS_VOICE", "longanlingxin").strip().lower()
         self.timeout = max(30, int(os.environ.get("TAVERN_TTS_TIMEOUT", "240")))
         self.max_chars = min(4096, max(1, int(os.environ.get("TAVERN_TTS_MAX_CHARS", "4096"))))
         self.max_audio_bytes = max(
@@ -205,11 +217,32 @@ class TTSService:
         return round(speed, 2)
 
     @staticmethod
-    def normalize_instructions(value):
+    def instruction_units(value):
+        units = 0
+        for character in str(value or ""):
+            codepoint = ord(character)
+            is_han = (
+                0x3400 <= codepoint <= 0x4DBF
+                or 0x4E00 <= codepoint <= 0x9FFF
+                or 0xF900 <= codepoint <= 0xFAFF
+            )
+            units += 2 if is_han else 1
+        return units
+
+    @classmethod
+    def normalize_instructions(cls, value):
         instructions = str(value or "").strip()
-        if len(instructions) > 1000:
-            raise ValueError("speech tone instructions are too long")
+        if cls.instruction_units(instructions) > 100:
+            raise ValueError("speech style instructions exceed the 100-unit limit")
         return instructions
+
+    @classmethod
+    def normalize_emotion(cls, value):
+        emotion = str(value or "").strip().lower()
+        if emotion not in cls.EMOTION_TAGS:
+            raise ValueError("unsupported speech emotion")
+        return emotion
+
 
     def _clones(self, saved):
         raw = saved.get("clones")
@@ -251,7 +284,8 @@ class TTSService:
         setting = setting if isinstance(setting, dict) else {}
         return {
             "speed": self.normalize_speed(setting.get("speed")),
-            "instructions": self.normalize_instructions(setting.get("instructions")),
+            "instructions": str(setting.get("instructions") or "").strip(),
+            "emotion": self.normalize_emotion(setting.get("emotion")),
         }
 
     def voices(self, force=False):
@@ -293,9 +327,11 @@ class TTSService:
         voice = str(saved.get("voice") or default_voice).strip().lower()
         if voice not in voice_ids:
             voice = default_voice
-        clones = [clone for clone in self._clones(saved) if self._clone_ready(clone)]
-        active_clone = self._active_clone(saved)
-        mode = "clone" if saved.get("mode") == "clone" and active_clone else "preset"
+        # Preserve old clone files for rollback, but the Plus adapter currently
+        # exposes only its model-specific system voices.
+        clones = []
+        active_clone = None
+        mode = "preset"
 
         def public_clone(clone):
             return {
@@ -334,7 +370,7 @@ class TTSService:
             self._write_config_unlocked(saved)
         return voice
 
-    def save_preset_settings(self, voice, speed=None, instructions=None):
+    def save_preset_settings(self, voice, speed=None, instructions=None, emotion=None):
         voice = str(voice or "").strip().lower()
         if voice not in {item["id"] for item in self.voices()}:
             raise ValueError("unsupported voice")
@@ -345,6 +381,7 @@ class TTSService:
             settings[voice] = {
                 "speed": self.normalize_speed(speed),
                 "instructions": self.normalize_instructions(instructions),
+                "emotion": self.normalize_emotion(emotion),
             }
             saved["preset_settings"] = settings
             self._write_config_unlocked(saved)
@@ -377,6 +414,9 @@ class TTSService:
         return mime, extension, audio
 
     def save_clone(self, audio_data, ref_text, name, speed=None):
+        raise ValueError("voice cloning is not available for the current speech model")
+
+    def _save_legacy_clone(self, audio_data, ref_text, name, speed=None):
         ref_text = str(ref_text or "").strip()
         name = str(name or "").strip()[:40] or "My Voice"
         if not ref_text:
@@ -416,6 +456,9 @@ class TTSService:
         return self.settings()
 
     def use_clone(self, clone_id):
+        raise ValueError("voice cloning is not available for the current speech model")
+
+    def _use_legacy_clone(self, clone_id):
         clone_id = str(clone_id or "")
         with self._config_lock:
             saved = self._read_config_unlocked()
@@ -485,9 +528,9 @@ class TTSService:
                 changed = True
             voice_ids = {item["id"] for item in FALLBACK_VOICES}
             if saved.get("voice") not in voice_ids:
-                saved["voice"] = self.default_voice if self.default_voice in voice_ids else "vivian"
+                saved["voice"] = self.default_voice if self.default_voice in voice_ids else "longanlingxin"
                 changed = True
-            if saved.get("mode") not in ("preset", "clone"):
+            if saved.get("mode") != "preset":
                 saved["mode"] = "preset"
                 changed = True
             if changed:
@@ -522,7 +565,8 @@ class TTSService:
             return None, ""
         return clone, path
 
-    def generate(self, text, voice=None, speed=None, instructions=None, force_preset=False):
+    def generate(self, text, voice=None, speed=None, instructions=None, emotion=None,
+                 force_preset=False):
         self.cleanup()
         text = self._speech_text(text)
         if not text:
@@ -534,17 +578,23 @@ class TTSService:
         if voice not in {item["id"] for item in settings["voices"]}:
             raise ValueError("unsupported voice")
         saved = self._read_config()
-        clone = self._active_clone(saved) if settings["mode"] == "clone" and not force_preset else None
+        clone = None
         clone_token = str((clone or {}).get("token") or "")
         if clone:
             speed = self.normalize_speed(clone.get("speed"))
             instructions = ""
+            emotion = ""
         else:
             preset = self._preset_setting(saved, voice)
             speed = self.normalize_speed(speed if speed is not None else preset["speed"])
             instructions = self.normalize_instructions(
                 instructions if instructions is not None else preset["instructions"]
             )
+            emotion = self.normalize_emotion(
+                emotion if emotion is not None else preset["emotion"]
+            )
+        if emotion:
+            text = f"[{emotion}]{text}"
         request_voice = "custom" if clone else voice
         cache_key = hashlib.sha256(
             f"{self.MODEL}\0{request_voice}\0{clone_token}\0{speed}\0{instructions}\0{text}".encode("utf-8")

@@ -4,8 +4,23 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from tts_service import TTSService
+
+
+class _AudioResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self, size=-1):
+        return self.body if size < 0 else self.body[:size]
 
 
 class TTSServiceTests(unittest.TestCase):
@@ -26,8 +41,8 @@ class TTSServiceTests(unittest.TestCase):
                     errors.append(error)
 
             threads = [
-                threading.Thread(target=update, args=("vivian", 1.1)),
-                threading.Thread(target=update, args=("serena", 1.2)),
+                threading.Thread(target=update, args=("longanlingxin", 1.1)),
+                threading.Thread(target=update, args=("longanlufeng", 1.2)),
             ]
             for thread in threads:
                 thread.start()
@@ -38,7 +53,10 @@ class TTSServiceTests(unittest.TestCase):
             self.assertEqual(errors, [])
             with open(service.config_path, encoding="utf-8") as file:
                 saved = json.load(file)
-            self.assertEqual(set(saved["preset_settings"]), {"vivian", "serena"})
+            self.assertEqual(
+                set(saved["preset_settings"]),
+                {"longanlingxin", "longanlufeng"},
+            )
             self.assertEqual(os.stat(service.config_path).st_mode & 0o777, 0o600)
 
     def test_disk_cache_survives_service_restart(self):
@@ -61,6 +79,41 @@ class TTSServiceTests(unittest.TestCase):
             self.assertEqual(service.cleanup(force=True, now=now), 1)
             self.assertIsNone(service._cached_audio(cache_key))
             self.assertEqual(service.cache_stats()["items"], 0)
+
+    def test_plus_request_forwards_voice_controls(self):
+        with tempfile.TemporaryDirectory() as root:
+            service = TTSService(
+                root,
+                base="https://example.invalid/v1",
+                key_provider=lambda: "test-key",
+            )
+            service._voice_cache.update({
+                "at": time.monotonic(),
+                "voices": list(service._voice_cache["voices"]),
+            })
+            requests = []
+
+            def fake_urlopen(request, timeout=None):
+                requests.append(request)
+                return _AudioResponse(b"audio")
+
+            with mock.patch("tts_service.urllib.request.urlopen", fake_urlopen):
+                audio = service.generate(
+                    "你好",
+                    voice="longanlingxin",
+                    speed=0.85,
+                    instructions="温柔知性，吐字清晰",
+                    emotion="serious",
+                )
+
+            self.assertEqual(audio, b"audio")
+            self.assertEqual(len(requests), 1)
+            payload = json.loads(requests[0].data.decode("utf-8"))
+            self.assertEqual(payload["model"], "qwen-audio-3.0-tts-plus")
+            self.assertEqual(payload["voice"], "longanlingxin")
+            self.assertEqual(payload["speed"], 0.85)
+            self.assertEqual(payload["instructions"], "温柔知性，吐字清晰")
+            self.assertEqual(payload["input"], "[serious]你好")
 
 
 if __name__ == "__main__":

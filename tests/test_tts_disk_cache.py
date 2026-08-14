@@ -101,7 +101,7 @@ class TtsDiskCacheTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertGreater(cache_files[0].stat().st_mtime, old_time)
 
-            self.service.save_voice("serena")
+            self.service.save_voice("longanlufeng")
             changed = self.service.generate("同一句话")
             self.assertNotEqual(changed, first)
             self.assertEqual(len(calls), 2)

@@ -57,8 +57,10 @@
     }
     return r.blob();
   }
-  async function speech(text, signal) {
-    return audioRequest("/api/tts", { text }, signal);
+  async function speech(text, signal, emotion) {
+    const payload = { text };
+    if (emotion !== undefined) payload.emotion = emotion;
+    return audioRequest("/api/tts", payload, signal);
   }
   async function speechPreview(payload, signal) {
     return audioRequest("/api/tts/preview", payload, signal);

@@ -3483,7 +3483,7 @@ def ev_tts_voice_use(ev):
 
 def ev_tts_preset_settings(ev):
     return {"tts": TTS_SERVICE.save_preset_settings(
-        ev.get("voice"), ev.get("speed"), ev.get("instructions"))}
+        ev.get("voice"), ev.get("speed"), ev.get("instructions"), ev.get("emotion"))}
 
 
 def ev_tts_clone_use(ev):
@@ -3826,7 +3826,9 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/tts":
             try:
                 ev = json.loads(request_body or b"{}")
-                return self._audio(TTS_SERVICE.generate(ev.get("text")))
+                emotion = ev.get("emotion") if "emotion" in ev else None
+                return self._audio(
+                    TTS_SERVICE.generate(ev.get("text"), emotion=emotion))
             except Exception as e:
                 return self._json(502, {"ok": False, "error": str(e)})
         if path == "/api/tts/preview":
@@ -3834,7 +3836,8 @@ class H(BaseHTTPRequestHandler):
                 ev = json.loads(request_body or b"{}")
                 audio = TTS_SERVICE.generate(
                     TTS_SERVICE.preview_text, voice=ev.get("voice"), speed=ev.get("speed"),
-                    instructions=ev.get("instructions"), force_preset=True)
+                    instructions=ev.get("instructions"), emotion=ev.get("emotion"),
+                    force_preset=True)
                 return self._audio(audio)
             except ValueError as e:
                 return self._json(400, {"ok": False, "error": str(e)})
