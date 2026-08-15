@@ -11,7 +11,9 @@
 命令：
   search <query> [--n N]                   搜 Chub → 候选列表（名 · fullPath · ⭐ · 标签）；Chub 连不上→列 starter
   inspect-card <文件|直链|Chub路径>          识别并审查 V1/V2/V3 JSON/PNG/CHARX，不写入
-  import-card <文件|直链|Chub路径>           安全归一化外部 V1/V2/V3 卡 → 角色库
+  prepare-card <文件|直链|Chub路径>          整理并预览外部卡，不写入
+  apply-card-plan <计划.json> --confirm      确认后原子写入主卡、配角卡和世界书
+  import-card <文件|直链|Chub路径>           兼容入口；默认预览，--confirm 后写入
   add <fullPath|Chub链接> [--new-world]      兼容旧命令：下载 Chub 真卡 → 导入角色库
   starter [<序号|名字>] [--new-world]        列出/导入随仓内置 starter 真卡
   add-original <jsonfile|-> [--new-world]   原创卡 JSON → 导入角色库；显式要求时才开启世界
@@ -202,6 +204,46 @@ def _inspect_external_card(kind, payload):
     return _event(event)["inspection"]
 
 
+def _external_card_event(kind, payload, source, source_url):
+    event = {"source": source, "source_url": source_url}
+    if kind == "png":
+        event["png_base64"] = base64.b64encode(payload).decode("ascii")
+    elif kind == "charx":
+        event["charx_base64"] = base64.b64encode(payload).decode("ascii")
+    else:
+        event["card"] = payload
+    return event
+
+
+def _prepare_external_card(kind, payload, source, source_url):
+    event = _external_card_event(kind, payload, source, source_url)
+    event["type"] = "prepare_card"
+    return _event(event)["preparation"]
+
+
+def _print_card_preparation(plan):
+    summary = plan.get("summary") or {}
+    print("\n=== 角色卡整理预览 ===")
+    print("主角色：" + str(summary.get("main_character") or "未识别"))
+    print("人物资料：" + ("已形成可用档案" if summary.get("profile_ready") else "不完整"))
+    supporting = summary.get("supporting_characters") or []
+    print("独立配角：" + ("、".join(supporting) if supporting else "无"))
+    print(f"世界设定：{int(summary.get('worldbook_entries') or 0)} 条")
+    print(f"归入主角色的内嵌条目：{int(summary.get('main_character_entries') or 0)} 条")
+    print(f"待判断条目：{int(summary.get('unresolved_entries') or 0)} 条")
+    for warning in summary.get("warnings") or []:
+        print("注意：" + str(warning))
+
+
+def _write_preparation(path, plan):
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(plan, file, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def _print_card_inspection(report):
     print(
         f"格式：{str(report.get('format') or '?').upper()} · "
@@ -388,11 +430,14 @@ def cmd_add(a):
              f"chara_card_v2.png）。\n先 `search` 确认 fullPath，或 `starter` 用内置卡。")
     if png[:8] != b"\x89PNG\r\n\x1a\n":
         _die("下载的不是 PNG（fullPath 可能写错）。用 `search` 拿准确 fullPath，或 `starter` 用内置卡。")
-    card = _event({"type": "import_card",
-                   "png_base64": base64.b64encode(png).decode("ascii")})["card"]
-    print(f"✅ 已导入角色库：{card.get('name')}（{card['id']}）")
-    if a.new_world:
-        _create_production(card, a.name)
+    report = _inspect_external_card("png", png)
+    plan = _prepare_external_card("png", png, "chub", url)
+    _print_card_inspection(report)
+    _print_card_preparation(plan)
+    if not a.confirm:
+        print("尚未写入角色库。核对预览后重新运行并添加 --confirm。")
+        return
+    _apply_preparation(plan, a.new_world, a.name)
 
 
 def cmd_inspect_card(a):
@@ -404,27 +449,56 @@ def cmd_inspect_card(a):
         _print_card_inspection(report)
 
 
+def cmd_prepare_card(a):
+    kind, payload, source, source_url = _load_external_card(a.source)
+    report = _inspect_external_card(kind, payload)
+    plan = _prepare_external_card(kind, payload, source, source_url)
+    if a.output:
+        _write_preparation(a.output, plan)
+    if a.json:
+        print(json.dumps({"inspection": report, "preparation": plan}, ensure_ascii=False, indent=2))
+        return
+    _print_card_inspection(report)
+    _print_card_preparation(plan)
+    if a.output:
+        print("整理计划：" + a.output)
+    print("尚未写入角色库。确认内容后运行 apply-card-plan。")
+
+
+def _apply_preparation(plan, new_world=False, world_name=None):
+    result = _event({
+        "type": "apply_card_preparation",
+        "preparation": plan,
+        "confirm": True,
+    })
+    card = result["card"]
+    supporting = result.get("supporting_cards") or []
+    print(f"✅ 已整理并导入主角色：{card.get('name')}（{card['id']}）")
+    if supporting:
+        print("✅ 已收入角色库的配角：" + "、".join(item.get("name") or "?" for item in supporting))
+    if new_world:
+        _create_production(card, world_name)
+    return result
+
+
+def cmd_apply_card_plan(a):
+    if not a.confirm:
+        _die("写入前必须显式添加 --confirm")
+    plan = _read_json_arg(a.plan)
+    _print_card_preparation(plan)
+    _apply_preparation(plan, a.new_world, a.name)
+
+
 def cmd_import_card(a):
     kind, payload, source, source_url = _load_external_card(a.source)
     report = _inspect_external_card(kind, payload)
+    plan = _prepare_external_card(kind, payload, source, source_url)
     _print_card_inspection(report)
-    event = {"source": source, "source_url": source_url}
-    if kind == "png":
-        event.update({
-            "type": "import_card",
-            "png_base64": base64.b64encode(payload).decode("ascii"),
-        })
-    elif kind == "charx":
-        event.update({
-            "type": "import_card_archive",
-            "charx_base64": base64.b64encode(payload).decode("ascii"),
-        })
-    else:
-        event.update({"type": "import_card_json", "card": payload})
-    card = _event(event)["card"]
-    print(f"✅ 已适配并导入角色库：{card.get('name')}（{card['id']}）")
-    if a.new_world:
-        _create_production(card, a.name)
+    _print_card_preparation(plan)
+    if not a.confirm:
+        print("尚未写入角色库。核对预览后重新运行并添加 --confirm。")
+        return
+    _apply_preparation(plan, a.new_world, a.name)
 
 
 def cmd_starter(a):
@@ -1686,14 +1760,29 @@ def main():
     s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_inspect_card)
 
-    s = sub.add_parser("import-card", help="安全归一化外部 V1/V2/V3 JSON/PNG/CHARX 到角色库")
+    s = sub.add_parser("prepare-card", help="整理并预览外部 V1/V2/V3 卡，不写入")
     s.add_argument("source", help="本地文件、HTTPS 直链、Chub 页面/fullPath，或 '-' 读 JSON")
+    s.add_argument("--output", help="把可确认的完整整理计划写入 JSON 文件")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    s.set_defaults(fn=cmd_prepare_card)
+
+    s = sub.add_parser("apply-card-plan", help="确认并原子应用 prepare-card 产生的整理计划")
+    s.add_argument("plan", help="整理计划 JSON 文件路径，或 '-' 读 stdin")
+    s.add_argument("--confirm", action="store_true", help="确认写入角色库")
+    s.add_argument("--new-world", action="store_true", help="导入后以主角色单独开启世界")
+    s.add_argument("--name", help="配合 --new-world 指定世界名")
+    s.set_defaults(fn=cmd_apply_card_plan)
+
+    s = sub.add_parser("import-card", help="整理外部 V1/V2/V3 卡；默认预览，确认后写入")
+    s.add_argument("source", help="本地文件、HTTPS 直链、Chub 页面/fullPath，或 '-' 读 JSON")
+    s.add_argument("--confirm", action="store_true", help="确认预览结果并写入")
     s.add_argument("--new-world", action="store_true", help="导入后以此卡单独开启世界")
     s.add_argument("--name", help="配合 --new-world 指定世界名")
     s.set_defaults(fn=cmd_import_card)
 
     s = sub.add_parser("add", help="下载 Chub 真卡并导入角色库")
     s.add_argument("full_path", help="Chub fullPath（如 Anon/some-character）或直贴的 chub.ai 链接")
+    s.add_argument("--confirm", action="store_true", help="确认整理预览并写入")
     s.add_argument("--new-world", action="store_true", help="导入后以此卡单独开启世界")
     s.add_argument("--name", help="配合 --new-world 指定世界名")
     s.set_defaults(fn=cmd_add)

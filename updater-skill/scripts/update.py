@@ -215,7 +215,8 @@ MODULAR_RUNTIME_FILES = EXPANDED_RUNTIME_FILES | {
     "turn_plan_service.py",
 }
 SINGLE_PASS_RUNTIME_FILES = MODULAR_RUNTIME_FILES - {"turn_plan_service.py"}
-RUNTIME_FILES = SINGLE_PASS_RUNTIME_FILES | {"qwen_audio_voices.json"}
+VOICE_CATALOG_RUNTIME_FILES = SINGLE_PASS_RUNTIME_FILES | {"qwen_audio_voices.json"}
+RUNTIME_FILES = VOICE_CATALOG_RUNTIME_FILES | {"card_preparation.py"}
 OBSOLETE_MANAGED_FILES = {
     "runtime/turn_plan_service.py",
 }
@@ -224,8 +225,9 @@ EXPANDED_RUNTIME_VERSION = (1, 21, 0)
 MODULAR_RUNTIME_VERSION = (1, 22, 0)
 SINGLE_PASS_RUNTIME_VERSION = (1, 23, 6)
 VOICE_CATALOG_RUNTIME_VERSION = (1, 23, 9)
+CARD_PREPARATION_RUNTIME_VERSION = (1, 23, 13)
 ALLOWED_MANAGED = {
-    "runtime": MODULAR_RUNTIME_FILES | {"qwen_audio_voices.json"},
+    "runtime": RUNTIME_FILES | {"turn_plan_service.py"},
     "updater": {
         "SKILL.md",
         "agents/openai.yaml",
@@ -247,8 +249,10 @@ def version_key(value):
 
 def runtime_files_for_version(version):
     key = version_key(version)
-    if key >= VOICE_CATALOG_RUNTIME_VERSION:
+    if key >= CARD_PREPARATION_RUNTIME_VERSION:
         return RUNTIME_FILES
+    if key >= VOICE_CATALOG_RUNTIME_VERSION:
+        return VOICE_CATALOG_RUNTIME_FILES
     if key >= SINGLE_PASS_RUNTIME_VERSION:
         return SINGLE_PASS_RUNTIME_FILES
     if key >= MODULAR_RUNTIME_VERSION:

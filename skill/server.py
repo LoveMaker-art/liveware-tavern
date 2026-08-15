@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import actor  # noqa: E402
 import card_import  # noqa: E402
+import card_preparation  # noqa: E402
 import generation_service  # noqa: E402
 import story_profile  # noqa: E402
 import story_state_service  # noqa: E402
@@ -1022,6 +1023,114 @@ def ev_inspect_card(ev):
     else:
         raise ValueError("inspect_card requires card JSON, png_base64, or charx_base64")
     return {"inspection": _card_import_inspection(card)}
+
+
+def _external_card_from_event(ev):
+    if isinstance(ev.get("card"), dict):
+        return card_import.normalize_card(ev["card"])
+    if ev.get("png_base64"):
+        return card_import.import_card_b64(str(ev["png_base64"]))
+    if ev.get("charx_base64"):
+        return card_import.import_card_archive_b64(str(ev["charx_base64"]))
+    raise ValueError("card JSON, png_base64, or charx_base64 is required")
+
+
+def ev_prepare_card(ev):
+    """Build a reviewable semantic import plan without writing library data."""
+    card = _external_card_from_event(ev)
+    source = str(ev.get("source") or "external").strip() or "external"
+    source_url = str(ev.get("source_url") or "").strip()
+    card["source"] = source
+    if source_url:
+        urls = card.get("source_urls") if isinstance(card.get("source_urls"), list) else []
+        if source_url not in urls:
+            urls.append(source_url)
+        card["source_urls"] = urls
+    plan = card_preparation.prepare_card(card, actor.chat, model=_active_model())
+    return {"preparation": plan}
+
+
+def _unique_prepared_card_id(card, reserved=None):
+    card = json.loads(json.dumps(card, ensure_ascii=False))
+    reserved = reserved if isinstance(reserved, set) else set()
+    card_id = str(card.get("id") or "").strip()
+    if not card_id or card_id in reserved or load_card(card_id):
+        card_id = "card_" + secrets.token_hex(6)
+        while card_id in reserved or load_card(card_id):
+            card_id = "card_" + secrets.token_hex(6)
+    card["id"] = card_id
+    reserved.add(card_id)
+    return card
+
+
+def ev_apply_card_preparation(ev):
+    """Atomically store one confirmed preparation plan and its supporting cards."""
+    if ev.get("confirm") is not True:
+        raise ValueError("apply_card_preparation requires confirm=true")
+    plan = card_preparation.validate_plan(ev.get("preparation"))
+    existing = []
+    for card in STATE_STORE.list("cards"):
+        tavern = ((card.get("extensions") or {}).get("tavern") or {})
+        if tavern.get("preparation_id") == plan["plan_id"]:
+            existing.append(card)
+    existing_main = next(
+        (card for card in existing
+         if (((card.get("extensions") or {}).get("tavern") or {}).get("preparation_role") == "main")),
+        None,
+    )
+    if existing_main:
+        return {
+            "card": existing_main,
+            "supporting_cards": [card for card in existing if card is not existing_main],
+            "summary": plan.get("summary") or {},
+            "plan_id": plan["plan_id"],
+            "reused": True,
+        }
+
+    reserved = set()
+    main = _unique_prepared_card_id(plan["card"], reserved)
+    supporting = [
+        _unique_prepared_card_id(card, reserved)
+        for card in (plan.get("supporting_cards") or [])
+        if isinstance(card, dict)
+    ]
+    all_cards = [main, *supporting]
+    for index, card in enumerate(all_cards):
+        extension = card.get("extensions") if isinstance(card.get("extensions"), dict) else {}
+        tavern = extension.get("tavern") if isinstance(extension.get("tavern"), dict) else {}
+        tavern.update({
+            "preparation_id": plan["plan_id"],
+            "preparation_source_hash": plan.get("source_hash") or "",
+            "preparation_role": "main" if index == 0 else "supporting",
+        })
+        extension["tavern"] = tavern
+        card["extensions"] = extension
+
+    created_cards = []
+    created_worldbooks = []
+    try:
+        created_cards.append(main["id"])
+        if main.get("character_book"):
+            created_worldbooks.append("wb_" + main["id"])
+        stored_main = _store_card(main, main.get("source") or "external")["card"]
+        stored_supporting = []
+        for card in supporting:
+            created_cards.append(card["id"])
+            stored = _store_card(card, card.get("source") or main.get("source") or "external")["card"]
+            stored_supporting.append(stored)
+        return {
+            "card": stored_main,
+            "supporting_cards": stored_supporting,
+            "summary": plan.get("summary") or {},
+            "plan_id": plan["plan_id"],
+            "reused": False,
+        }
+    except Exception:
+        for worldbook_id in reversed(created_worldbooks):
+            STATE_STORE.delete("worldbooks", worldbook_id)
+        for card_id in reversed(created_cards):
+            STATE_STORE.delete("cards", card_id)
+        raise
 
 
 def ev_import_card(ev):
@@ -3514,6 +3623,8 @@ def ev_update_world_ui(ev):
 EVENTS = {
     "cancel_generation": ev_cancel_generation,
     "inspect_card": ev_inspect_card,
+    "prepare_card": ev_prepare_card,
+    "apply_card_preparation": ev_apply_card_preparation,
     "import_card": ev_import_card, "import_card_json": ev_import_card_json,
     "import_card_archive": ev_import_card_archive, "create_card": ev_create_card,
     "import_worldbook": ev_import_worldbook, "attach_worldbook": ev_attach_worldbook,

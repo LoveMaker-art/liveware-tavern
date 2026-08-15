@@ -42,6 +42,7 @@ runtime/
   actor_self.md
   background_jobs.py
   card_import.py
+  card_preparation.py
   continuity_model.py
   generation_service.py
   memory_cache.py

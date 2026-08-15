@@ -1,7 +1,7 @@
 ---
 name: tavern-world
 description: Build complete Tavern worlds from an idea or existing material, including research, character cards, worldbooks, the user's persona, opening scene, atomic import, and verification.
-version: 1.23.12
+version: 1.23.13
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -40,22 +40,29 @@ continuity repair, story-profile memory, or visual theme work.
 4. Run `inspect-card` on every external artifact before importing it. Accept
    recognized V1/V2/V3 JSON, PNG/APNG, or V3 CHARX only; an HTML page, ordinary
    image, or malformed archive is not a character card.
-5. Import through `import-card`. Then run `card-audit` and route character
-   facts, shared lore, the user's identity, relationships, and current scene to
-   their correct owners. Structural conversion does not replace semantic review.
+5. Run `prepare-card <artifact> --output <plan.json>`. This performs the semantic
+   pass once, produces a non-empty canonical main profile, separates supporting
+   characters from shared lore, and writes nothing yet. Present its compact
+   summary to the user; do not expose the full JSON plan.
 6. Separate each fact into exactly one owner:
    character profile, worldbook, user persona, opening scene, or live story.
-7. Present one compact conversation card containing the world premise, user role,
+7. After confirmation, apply the exact preview with
+   `apply-card-plan <plan.json> --confirm`. Never bypass preparation with the
+   legacy raw import events for an external card.
+8. Run `card-audit` on the stored main card. Supporting characters extracted
+   from embedded lore enter the reusable library but do not automatically join
+   the active cast.
+9. Present one compact conversation card containing the world premise, user role,
    cast, core lore, and opening hook. Follow
    `tavern/references/conversation-cards.md`; do not dump JSON or imitate
    unavailable buttons. Ask for confirmation once if the user has not already
    approved.
-8. Assemble one world manifest. Preview it with `build-world` without `--apply`.
-9. After confirmation, run the same manifest once with
+10. Assemble one world manifest. Preview it with `build-world` without `--apply`.
+11. After confirmation, run the same manifest once with
    `--apply --confirm --request-id <stable-id> --json`.
-10. Treat `verification.ok: true` as success. On failure, report the error; do not
+12. Treat `verification.ok: true` as success. On failure, report the error; do not
    create replacement worlds or manually delete state files.
-11. Return a compact result and the bare URL from `app-link --app console`. Do not
+13. Return a compact result and the bare URL from `app-link --app console`. Do not
    expose tool narration between construction steps.
 
 ## Commands
@@ -73,8 +80,10 @@ Read and research:
 
 Import reusable material without creating a world:
 
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py import-card <file-url-or-chub-path>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add <chub-path-or-url>
+    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py prepare-card <file-url-or-chub-path> --output /tmp/card-plan.json
+    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py apply-card-plan /tmp/card-plan.json --confirm
+    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py import-card <file-url-or-chub-path> --confirm
+    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add <chub-path-or-url> --confirm
     python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add-original <card-json>
     python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add-worldbook <worldbook-json>
 
@@ -112,6 +121,8 @@ Before presenting a proposed or completed world in chat, load `tavern/references
 - Never create one temporary world per imported card.
 - Never call an external card "compatible" until `inspect-card` succeeds.
 - Never use `add-original` for a card found online; preserve its external provenance with `import-card`.
+- Never store an external card whose preparation summary says the main profile is incomplete.
+- Never copy a named supporting character entry into shared world lore; keep the extracted card in the library until the user chooses to add it to the cast.
 - Never edit production, card, or worldbook JSON files directly.
 - Never use cleanup as the normal completion path.
 - Never place the same fact in both a character card and a worldbook.

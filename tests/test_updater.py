@@ -184,10 +184,16 @@ class UpdaterMergeTests(unittest.TestCase):
         )
         self.assertEqual(
             UPDATER.runtime_files_for_version("1.23.9"),
+            UPDATER.VOICE_CATALOG_RUNTIME_FILES,
+        )
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.23.13"),
             UPDATER.RUNTIME_FILES,
         )
         self.assertIn("generation_service.py", UPDATER.RUNTIME_FILES)
         self.assertIn("qwen_audio_voices.json", UPDATER.RUNTIME_FILES)
+        self.assertIn("card_preparation.py", UPDATER.RUNTIME_FILES)
+        self.assertNotIn("card_preparation.py", UPDATER.VOICE_CATALOG_RUNTIME_FILES)
         self.assertNotIn("qwen_audio_voices.json", UPDATER.SINGLE_PASS_RUNTIME_FILES)
         self.assertNotIn("generation_service.py", UPDATER.EXPANDED_RUNTIME_FILES)
         self.assertIn("turn_plan_service.py", UPDATER.MODULAR_RUNTIME_FILES)

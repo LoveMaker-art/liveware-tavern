@@ -34,6 +34,14 @@ class CompleteWorldBuildTests(unittest.TestCase):
         }
         events = []
 
+        prepared = {
+            "schema": "tavern-card-preparation/v1",
+            "plan_id": "prep_test",
+            "summary": {"main_character": "Mara", "profile_ready": True},
+            "card": {"id": "card_mara", "name": "Mara"},
+            "supporting_cards": [],
+        }
+
         def fake_event(event):
             events.append(event)
             if event["type"] == "inspect_card":
@@ -46,7 +54,9 @@ class CompleteWorldBuildTests(unittest.TestCase):
                         "warnings": [],
                     },
                 }
-            return {"card": {"id": "card_mara", "name": "Mara"}}
+            if event["type"] == "prepare_card":
+                return {"preparation": prepared}
+            return {"card": {"id": "card_mara", "name": "Mara"}, "supporting_cards": []}
 
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as file:
             json.dump(source, file)
@@ -54,15 +64,18 @@ class CompleteWorldBuildTests(unittest.TestCase):
             with mock.patch.object(cli, "_event", side_effect=fake_event):
                 cli.cmd_import_card(SimpleNamespace(
                     source=file.name,
+                    confirm=True,
                     new_world=False,
                     name=None,
                 ))
 
         self.assertEqual([event["type"] for event in events], [
             "inspect_card",
-            "import_card_json",
+            "prepare_card",
+            "apply_card_preparation",
         ])
         self.assertEqual(events[1]["source"], "file")
+        self.assertTrue(events[2]["confirm"])
 
     def test_v3_group_greeting_becomes_multi_character_opening_alternative(self):
         script = textwrap.dedent(

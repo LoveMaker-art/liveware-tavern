@@ -90,11 +90,12 @@ An imported `{{user}}` identity must be classified before use: move the user's p
 
 ## Required Workflow
 
-1. Import through `add`, `add-original`, or the console importer; never write directly into a production JSON file.
-2. Inspect the preserved source fields and canonical `profile`, `entry`, and `performance` separately.
-3. Move world lore, user identity, current-scene facts, and relationship state to their proper owners.
-4. Populate fine-grained canonical fields only from explicit source evidence. Record uncertainty by leaving fields empty, not by guessing.
-5. Run `card-audit`. Repair high-severity identity, voice, opening, `{{user}}`, or worldbook-mixing findings before using the card as a core role.
-6. Attach the reusable card to the intended world. Verify the independent `runtime_cast` copy, relationship graph, Persona boundary, and opening with `diagnose <world>`.
+1. For external material, run `inspect-card`, then `prepare-card --output <plan.json>`; neither command writes library data.
+2. Inspect the preparation summary and the preserved source fields separately. A usable main profile is mandatory.
+3. Confirm that main-character facts, supporting people, shared lore, user identity, current-scene facts, and relationship state have the correct owners.
+4. Populate fine-grained canonical fields only from explicit source evidence. Record uncertainty in the preparation plan instead of guessing.
+5. After user confirmation, apply the exact plan with `apply-card-plan --confirm`. Do not invoke raw external import events from the skill workflow.
+6. Run `card-audit`. Repair high-severity identity, voice, opening, `{{user}}`, or worldbook-mixing findings before using the card as a core role.
+7. Attach the reusable card to the intended world. Verify the independent `runtime_cast` copy, relationship graph, Persona boundary, and opening with `diagnose <world>`.
 
 The reusable library card is a template. Once attached, the world's `runtime_cast.characters[]` profile is authoritative for that story; later state updates must not rewrite the reusable library source.

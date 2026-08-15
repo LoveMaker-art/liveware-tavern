@@ -13,8 +13,10 @@ Commands:
 - `new-world --name "world name"`: create a blank world.
 - `search "<query>" [--n 8]`: search Chub and show candidate cards. If Chub is unreachable, the CLI falls back to bundled starter cards.
 - `inspect-card <file|HTTPS URL|Chub path>`: detect and audit a V1/V2/V3 JSON, PNG/APNG, or V3 CHARX without writing state.
-- `import-card <file|HTTPS URL|Chub path>`: import a recognized external card into the reusable library.
-- `add <fullPath|Chub URL>`: backward-compatible Chub-only import.
+- `prepare-card <file|HTTPS URL|Chub path> --output <plan.json>`: parse and semantically organize an external card without writing state.
+- `apply-card-plan <plan.json> --confirm`: atomically store the exact reviewed main card, supporting cards, and cleaned worldbook.
+- `import-card <file|HTTPS URL|Chub path> [--confirm]`: compatibility shortcut; without confirmation it only previews.
+- `add <fullPath|Chub URL> [--confirm]`: backward-compatible Chub-only shortcut with the same preview/confirmation boundary.
 - `starter [<number|name>]`: list or import bundled starter cards from `/opt/data/apps/tavern-runtime/assets/fixtures/starter`.
 - `add-original <jsonfile|->`: import an explicitly original SillyTavern V2 JSON card into the reusable library. Never use this command for a card found online.
 - Add `--new-world [--name "..."]` to those commands only when the user explicitly wants a one-card world.
@@ -39,12 +41,13 @@ For cards found on the web, use this path:
 
 1. Search public sources and identify the actual downloadable artifact. A detail page or preview image is not the card.
 2. Run `inspect-card <artifact>` before writing anything. It must report V1, V2, or V3 and a non-empty character name.
-3. Import the same artifact with `import-card`. This preserves source version, standard V3 metadata, vendor extensions, and unknown fields while deriving `profile`, `entry`, and `performance`.
-4. Apply `field-mapping.md`. Inspect semantic alignment and move world lore, Persona, current state, and relationship facts to their proper owners. Do not hand-copy source prose into production JSON.
-5. Run `card-audit <card>` before making the card a core role. Structural normalization is automatic, but semantic quality and fine-grained fields still require evidence-based review.
-6. Localize only when requested, and retain creator/source attribution. Do not silently rewrite a public card as an original card.
-7. Attach the library card to the chosen world. The runtime creates an independent `runtime_cast` role with an immutable `origin_profile` and one effective `profile`.
-8. Verify with `diagnose <world>`. Story-local changes remain in that world's effective profile and never mutate the library template.
+3. Run `prepare-card` on the same artifact and save its plan. The one-time model pass must use only source evidence, keep the source language, and return a complete canonical shape.
+4. Review the compact summary. The main role must have a non-empty profile; named supporting people become candidate cards; shared locations, organizations, history, and rules become worldbook entries; uncertain or temporary scene data remains unresolved.
+5. After user confirmation, run `apply-card-plan --confirm` on that exact plan. The plan hash prevents an edited or stale preview from being silently applied.
+6. Run `card-audit <card>` before making the main card a core role. A failed preparation must produce an error and no files, never a blank role or guessed replacement.
+7. Localize only when requested, and retain creator/source attribution. Do not silently rewrite a public card as an original card.
+8. Attach only the approved library cards to the chosen world. Extracted supporting characters remain reusable library cards until explicitly selected.
+9. Verify with `diagnose <world>`. Story-local changes remain in that world's effective profile and never mutate the library template.
 
 ### Format Compatibility
 

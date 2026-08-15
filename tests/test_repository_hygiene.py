@@ -83,6 +83,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         expected = {
             "runtime/background_jobs.py",
+            "runtime/card_preparation.py",
             "runtime/continuity_model.py",
             "runtime/generation_service.py",
             "runtime/memory_cache.py",
