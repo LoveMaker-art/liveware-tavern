@@ -17,7 +17,7 @@ const I18N = (() => {
       // 文档 / 顶栏
       docTitleConsole: "酒馆",
       docTitleActor: "故事档案",
-      appWindowTitleConsole: "Tarven",
+      appWindowTitleConsole: "Tavern",
       appWindowTitleActor: "Story Profile",
       appTitle: "酒馆",
       actorPageTitle: "故事主理人",
@@ -427,11 +427,11 @@ const I18N = (() => {
       wan: "万",
     },
     en: {
-      docTitleConsole: "Tarven",
+      docTitleConsole: "Tavern",
       docTitleActor: "Story Profile",
-      appWindowTitleConsole: "Tarven",
+      appWindowTitleConsole: "Tavern",
       appWindowTitleActor: "Story Profile",
-      appTitle: "Tarven",
+      appTitle: "Tavern",
       actorPageTitle: "Story Lead",
       prodSubPrefix: "Curator · {name}",
       ariaRail: "Worlds",
@@ -837,7 +837,7 @@ const I18N = (() => {
   STRINGS["zh-Hant"] =   {
       "docTitleConsole": "酒館",
       "docTitleActor": "故事檔案",
-      "appWindowTitleConsole": "Tarven",
+      "appWindowTitleConsole": "Tavern",
       "appWindowTitleActor": "Story Profile",
       "appTitle": "酒館",
       "actorPageTitle": "故事主理人",
@@ -1274,7 +1274,7 @@ const I18N = (() => {
     tavern_name: "酒馆",
     actor_name: "故事档案",
     persona_name_en: "Curator",
-    tavern_name_en: "Tarven",
+    tavern_name_en: "Tavern",
     actor_name_en: "Story Profile",
   };
 
@@ -1309,7 +1309,7 @@ const I18N = (() => {
     const hantTavern = `${zhName}的酒館`;
     const hantActor = `${zhName}的故事檔案`;
     const enName = String(id.persona_name_en || "Curator");
-    const enTavern = String(id.tavern_name_en || "Tarven");
+    const enTavern = String(id.tavern_name_en || "Tavern");
     const enActor = String(id.actor_name_en || "Story Profile");
 
     Object.assign(STRINGS.zh, {

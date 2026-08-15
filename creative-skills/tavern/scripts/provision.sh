@@ -9,7 +9,7 @@
 # 复用优先是硬要求——重跑本脚本不会重复建 app。
 #
 # Liveware 底层 app 使用稳定名称 Tavern / Story Profile；ClawChat 展示名固定为
-# Tarven / Story Profile，不随主理人昵称变化，也不会重建 app 或消耗配额。
+# Tavern / Story Profile，不随主理人昵称变化，也不会重建 app 或消耗配额。
 #
 # 前置：容器已激活（hermes clawchat activate）+ 装了 clawchat 插件（带 liveware 二进制）。
 # 跑：sh /opt/data/skills/creative/tavern/scripts/provision.sh
@@ -49,7 +49,7 @@ JSON
 fi
 CONSOLE_APP_NAME="${TAVERN_CONSOLE_APP_NAME:-Tavern}"
 ACTOR_APP_NAME="${TAVERN_ACTOR_APP_NAME:-Story Profile}"
-CONSOLE_NAME="Tarven"
+CONSOLE_NAME="Tavern"
 ACTOR_NAME="Story Profile"
 
 # 1. liveware 登录（token 从 plugin profile config 解析；env CLAWCHAT_TOKEN 是空壳别直接传）
