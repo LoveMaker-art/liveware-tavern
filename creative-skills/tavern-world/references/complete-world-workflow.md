@@ -15,10 +15,7 @@ manifest first; apply the same file only after confirmation.
   },
   "characters": [
     {"library": "Existing card name"},
-    {"card_id": "card_existing_id"},
-    {"json_file": "/absolute/path/to/card.json"},
-    {"png_file": "/absolute/path/to/card.png"},
-    {"full_path": "creator/chub-card"},
+    {"card_id": "card_prepared_external_id"},
     {"card": {"spec": "chara_card_v2", "spec_version": "2.0", "data": {}}}
   ],
   "worldbook_entries": [
@@ -54,8 +51,11 @@ manifest first; apply the same file only after confirmation.
 }
 ```
 
-Each character entry must use exactly one source: `library`, `card_id`,
-`json_file`, `png_file`, `full_path`, or inline `card`.
+External cards must first pass `inspect-card`, `prepare-card`, and
+`apply-card-plan`; reference the resulting card with `library` or `card_id`.
+Inline `card` is reserved for material explicitly authored for this request.
+Do not place external JSON, PNG, CHARX, or Chub paths directly in a world
+manifest.
 
 ## Execution
 

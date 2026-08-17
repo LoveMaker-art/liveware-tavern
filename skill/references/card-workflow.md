@@ -49,8 +49,9 @@ For cards found on the web, use this path:
 ### Format Compatibility
 
 - V1: accepts flat JSON and legacy `chara` PNG fields, including common aliases such as `char_name`, `char_persona`, `world_scenario`, and `char_greeting`.
-- V2: accepts wrapped JSON and `chara` PNG, including alternate greetings, character-local system prompts, extensions, and embedded `character_book`.
-- V3: accepts wrapped JSON, `ccv3` PNG/APNG, and CHARX archives containing root `card.json`; preserves the resource manifest, `assets`, multilingual creator notes, source references, group-only greetings, and timestamps.
+- V2: accepts wrapped JSON and `chara` PNG, including alternate greetings, character-local system prompts, non-executable extensions, and embedded `character_book`.
+- V3: accepts wrapped JSON, `ccv3` PNG/APNG, and CHARX archives containing root `card.json`; preserves the safe resource manifest, non-executable `assets`, multilingual creator notes, source references, group-only greetings, and timestamps.
+- Tavern does not execute imported card scripts. Regex scripts, JavaScript, MVU/TavernHelper script blocks, and executable assets are removed during normalization instead of being stored as unknown metadata.
 - Unknown root/data fields are retained as source metadata and are not injected into the story prompt.
 - V3 embedded assets are preserved as a safe resource manifest. They do not automatically become a world background or theme; visual theming belongs to `tavern-world-visuals`.
 - V3 group-only greetings are available as opening alternatives for multi-character worlds when no explicit world opening overrides them.

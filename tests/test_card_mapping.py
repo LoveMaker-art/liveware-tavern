@@ -148,6 +148,47 @@ class CharacterCardMappingTests(unittest.TestCase):
         self.assertEqual(normalized["creator_notes_multilingual"]["zh-CN"], "作者说明")
         self.assertTrue(normalized["source_unknown"]["data"]["future_v4_hint"]["keep"])
 
+    def test_unsupported_scripts_are_removed_from_all_preserved_data(self):
+        normalized = CARD_IMPORT.normalize_card({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "root_script": {"script": "do_root_thing()"},
+            "data": {
+                "name": "林岚",
+                "description": "记者。正文中提到 JavaScript 不应被改写。",
+                "extensions": {
+                    "vendor_extension": {"keep": True},
+                    "regex_scripts": [{"find_regex": "x", "replace_string": "y"}],
+                    "mvu": {"variables": {"trust": 1}},
+                    "nested": {"tavern_helper_scripts": ["/echo test"]},
+                },
+                "vendor_data": {
+                    "keep": "data",
+                    "javascript": "alert(1)",
+                    "nested": {"script": "run()"},
+                },
+                "assets": [
+                    {"type": "icon", "uri": "embeded://portrait.png"},
+                    {"type": "script", "uri": "embeded://logic.txt"},
+                    {"type": "data", "uri": "embeded://logic.js"},
+                ],
+            },
+        })
+
+        self.assertIn("JavaScript", normalized["description"])
+        self.assertTrue(normalized["extensions"]["vendor_extension"]["keep"])
+        self.assertEqual(normalized["extensions"]["nested"], {})
+        self.assertNotIn("regex_scripts", normalized["extensions"])
+        self.assertNotIn("mvu", normalized["extensions"])
+        self.assertEqual(normalized["source_unknown"]["root"]["root_script"], {})
+        self.assertEqual(
+            normalized["source_unknown"]["data"]["vendor_data"],
+            {"keep": "data", "nested": {}},
+        )
+        self.assertEqual(normalized["assets"], [
+            {"type": "icon", "uri": "embeded://portrait.png"},
+        ])
+
     def test_missing_name_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "缺少 name"):
             CARD_IMPORT.normalize_card({

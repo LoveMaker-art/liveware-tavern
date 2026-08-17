@@ -9,6 +9,7 @@ produce a validated, reviewable import plan.
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import json
 import re
@@ -17,13 +18,23 @@ import card_import
 
 
 SCHEMA_VERSION = "tavern-card-preparation/v1"
-MAX_SOURCE_CHARS = 90000
-MAX_WORLD_ENTRIES = 96
-MAX_SUPPORTING_CHARACTERS = 16
+CHUNK_TARGET_CHARS = 2500
+MAX_SOURCES_PER_CHUNK = 8
+MAX_SOURCE_ITEM_CHARS = 30000
+MAX_WORLD_ENTRIES = 512
+MAX_SUPPORTING_CHARACTERS = 64
+SEMANTIC_SOURCE_FIELDS = ("description", "personality")
 
 
 def _text(value, limit=4000):
     return str(value or "").strip()[:limit]
+
+
+def _source_text(value, label):
+    text = str(value or "").strip()
+    if len(text) > MAX_SOURCE_ITEM_CHARS:
+        raise ValueError(f"{label} 超过 {MAX_SOURCE_ITEM_CHARS} 字符，请先拆成完整语义条目")
+    return text
 
 
 def _list(value, limit=12, item_limit=240):
@@ -66,10 +77,11 @@ def _book_entries(card):
     book = card.get("character_book") if isinstance(card.get("character_book"), dict) else {}
     entries = book.get("entries") if isinstance(book.get("entries"), list) else []
     result = []
-    for index, item in enumerate(entries[:MAX_WORLD_ENTRIES]):
+    for index, item in enumerate(entries):
         if not isinstance(item, dict):
             continue
-        content = _text(item.get("content") or item.get("text"), 6000)
+        content = _source_text(
+            item.get("content") or item.get("text"), f"内嵌世界书第 {index + 1} 条")
         if not content:
             continue
         result.append({
@@ -82,36 +94,100 @@ def _book_entries(card):
             "priority": item.get("priority", item.get("order", 5)),
             "source": copy.deepcopy(item),
         })
+        if len(result) > MAX_WORLD_ENTRIES:
+            raise ValueError(
+                f"内嵌世界书超过 {MAX_WORLD_ENTRIES} 条，当前版本不会截断导入；请先拆分世界书")
     return result
+
+
+def _source_records(card, entries):
+    records = {}
+    for field in SEMANTIC_SOURCE_FIELDS:
+        content = _source_text(card.get(field), field)
+        if content:
+            source_ref = "field-" + field.replace("_", "-")
+            records[source_ref] = {
+                "source_id": source_ref,
+                "name": field,
+                "keys": [],
+                "content": content,
+                "constant": False,
+                "enabled": True,
+                "priority": 5,
+                "source": {"field": field},
+            }
+    extensions = card.get("extensions") if isinstance(card.get("extensions"), dict) else {}
+    tavern = extensions.get("tavern") if isinstance(extensions.get("tavern"), dict) else {}
+    extension_profile = tavern.get("profile") if isinstance(tavern.get("profile"), dict) else {}
+    unknown = card.get("source_unknown") if isinstance(card.get("source_unknown"), dict) else {}
+    unknown_data = unknown.get("data") if isinstance(unknown.get("data"), dict) else {}
+    explicit_profile = unknown_data.get("profile") if isinstance(unknown_data.get("profile"), dict) else {}
+    profile = explicit_profile or extension_profile
+    if _profile_has_details(profile):
+        source_ref = "field-profile"
+        records[source_ref] = {
+            "source_id": source_ref,
+            "name": "profile",
+            "keys": [],
+            "content": json.dumps(profile, ensure_ascii=False),
+            "constant": False,
+            "enabled": True,
+            "priority": 5,
+            "source": {"field": "profile"},
+        }
+    records.update({entry["source_id"]: entry for entry in entries})
+    return records
 
 
 def _source_payload(card):
     entries = _book_entries(card)
+    source_by_ref = _source_records(card, entries)
     payload = {
         "main_character_name": _text(card.get("name"), 160),
         "source_format": card.get("source_format") or "unknown",
-        "card_fields": {
-            "description": _text(card.get("description"), 12000),
-            "personality": _text(card.get("personality"), 6000),
-            "scenario": _text(card.get("scenario"), 6000),
-            "first_mes": _text(card.get("first_mes"), 6000),
-            "mes_example": _text(card.get("mes_example"), 6000),
-            "system_prompt": _text(card.get("system_prompt"), 6000),
-            "post_history_instructions": _text(card.get("post_history_instructions"), 4000),
-            "profile": card.get("profile") or {},
-            "entry": card.get("entry") or {},
-            "performance": card.get("performance") or {},
-        },
-        "embedded_entries": [
-            {key: entry[key] for key in (
-                "source_id", "name", "keys", "content", "constant", "enabled", "priority")}
-            for entry in entries
+        "sources": [
+            {
+                "source_ref": source_ref,
+                "kind": "embedded_entry" if source_ref.startswith("entry-") else "card_field",
+                "name": source["name"],
+                "keys": source["keys"],
+                "content": source["content"],
+                "constant": source["constant"],
+                "enabled": source["enabled"],
+                "priority": source["priority"],
+            }
+            for source_ref, source in source_by_ref.items()
         ],
     }
-    serialized = json.dumps(payload, ensure_ascii=False)
-    if len(serialized) > MAX_SOURCE_CHARS:
-        raise ValueError("角色卡可整理文本过长，请先精简内嵌世界书后再导入")
-    return payload, entries
+    return payload, entries, source_by_ref
+
+
+def _payload_chunks(payload):
+    """Split by complete source records; never cut a lore entry or field."""
+    chunks = []
+    current = []
+    current_size = 0
+    for source in payload.get("sources") or []:
+        size = len(json.dumps(source, ensure_ascii=False))
+        if current and (
+            current_size + size > CHUNK_TARGET_CHARS
+            or len(current) >= MAX_SOURCES_PER_CHUNK
+        ):
+            chunks.append(current)
+            current = []
+            current_size = 0
+        current.append(source)
+        current_size += size
+    if current:
+        chunks.append(current)
+    if not chunks:
+        chunks.append([])
+    return [{
+        "main_character_name": payload.get("main_character_name") or "",
+        "source_format": payload.get("source_format") or "unknown",
+        "batch": {"index": index + 1, "total": len(chunks)},
+        "sources": sources,
+    } for index, sources in enumerate(chunks)]
 
 
 def _profile_has_details(profile):
@@ -198,11 +274,12 @@ def _source_ids(value, known):
 def _world_entry(value, source_by_id):
     if not isinstance(value, dict):
         return None
-    source_ids = _source_ids(value.get("source_entry_ids"), source_by_id)
+    source_ids = _source_ids(
+        value.get("source_refs") or value.get("source_entry_ids"), source_by_id)
     if not source_ids:
         return None
     originals = [source_by_id[source_id] for source_id in source_ids]
-    content = _text(value.get("content"), 6000)
+    content = _source_text(value.get("content"), "整理后的世界书条目")
     if not content:
         content = "\n".join(entry["content"] for entry in originals)
     keys = _list(value.get("keys"), 12, 100)
@@ -231,7 +308,7 @@ def _world_entry(value, source_by_id):
         "priority": max(1, min(10, priority)),
         "position": value.get("position") if value.get("position") in ("before_char", "after_char") else "before_char",
         "category": _text(value.get("category") or "setting", 80),
-        "source_entry_ids": source_ids,
+        "source_refs": source_ids,
     }
 
 
@@ -239,7 +316,8 @@ def _supporting_card(value, original_card, source_by_id):
     if not isinstance(value, dict):
         return None
     name = _text(value.get("name"), 160)
-    source_ids = _source_ids(value.get("source_entry_ids"), source_by_id)
+    source_ids = _source_ids(
+        value.get("source_refs") or value.get("source_entry_ids"), source_by_id)
     if not name or not source_ids:
         return None
     profile = _canonical_profile(value.get("profile"), name)
@@ -267,7 +345,7 @@ def _supporting_card(value, original_card, source_by_id):
         "profile": profile,
         "entry": card_import.canonical_entry({}),
         "performance": card_import.canonical_performance({}),
-        "extensions": {"tavern": {"prepared_from": original_card.get("id"), "source_entry_ids": source_ids}},
+        "extensions": {"tavern": {"prepared_from": original_card.get("id"), "source_refs": source_ids}},
         "source_unknown": {},
     }
     card["id"] = "card_" + hashlib.sha1(
@@ -276,18 +354,21 @@ def _supporting_card(value, original_card, source_by_id):
     return card
 
 
-def _normalize_result(card, raw, entries):
+def _normalize_result(card, raw, entries, source_by_ref=None):
     if not isinstance(raw, dict):
         raise ValueError("角色卡整理模型没有返回 JSON 对象")
-    source_by_id = {entry["source_id"]: entry for entry in entries}
+    source_by_id = source_by_ref or _source_records(card, entries)
     main = raw.get("main_character") if isinstance(raw.get("main_character"), dict) else {}
     profile = _canonical_profile(main.get("profile"), card.get("name"))
     profile["identity"]["name"] = _text(card.get("name"), 160)
     if not _profile_has_details(profile):
         raise ValueError("整理后仍没有可用的主角色资料，已拒绝写入空白角色卡")
 
-    entry = _entry(main.get("entry"), card)
-    performance = _performance(main.get("performance"), card)
+    # Opening text and generation instructions are source artifacts, not
+    # semantic classification output. Preserve them exactly and keep the model
+    # focused on profiles and lore routing.
+    entry = _entry(card.get("entry"), card)
+    performance = _performance(card.get("performance"), card)
     prepared = copy.deepcopy(card)
     original_book = copy.deepcopy(prepared.get("character_book"))
     original_fields = {
@@ -309,23 +390,31 @@ def _normalize_result(card, raw, entries):
     for value in raw.get("worldbook_entries") or []:
         normalized = _world_entry(value, source_by_id)
         if normalized:
-            covered.update(normalized["source_entry_ids"])
+            covered.update(normalized["source_refs"])
             world_entries.append(normalized)
 
     supporting = []
-    for value in (raw.get("supporting_characters") or [])[:MAX_SUPPORTING_CHARACTERS]:
+    raw_supporting = raw.get("supporting_characters") or []
+    if len(raw_supporting) > MAX_SUPPORTING_CHARACTERS:
+        raise ValueError(
+            f"整理结果包含超过 {MAX_SUPPORTING_CHARACTERS} 个配角，当前版本不会截断")
+    for value in raw_supporting:
         normalized = _supporting_card(value, card, source_by_id)
         if normalized:
-            covered.update(((normalized.get("extensions") or {}).get("tavern") or {}).get("source_entry_ids") or [])
+            covered.update(((normalized.get("extensions") or {}).get("tavern") or {}).get("source_refs") or [])
             supporting.append(normalized)
 
-    main_sources = _source_ids(main.get("source_entry_ids"), source_by_id)
+    main_sources = _source_ids(
+        main.get("source_refs") or main.get("source_entry_ids"), source_by_id)
     covered.update(main_sources)
-    unresolved = _source_ids(raw.get("unresolved_entry_ids"), source_by_id)
+    unresolved = _source_ids(
+        raw.get("unresolved_source_refs") or raw.get("unresolved_entry_ids"),
+        source_by_id,
+    )
     covered.update(unresolved)
     missing = sorted(set(source_by_id) - covered)
     if missing:
-        raise ValueError("整理结果遗漏内嵌条目：" + "、".join(missing[:12]))
+        raise ValueError("整理结果遗漏原始内容：" + "、".join(missing[:12]))
 
     if world_entries:
         prepared["character_book"] = {
@@ -339,8 +428,8 @@ def _normalize_result(card, raw, entries):
     unknown["semantic_import"] = {
         "original_fields": original_fields,
         "original_character_book": original_book,
-        "main_source_entry_ids": main_sources,
-        "unresolved_entry_ids": unresolved,
+        "main_source_refs": main_sources,
+        "unresolved_source_refs": unresolved,
     }
     prepared["source_unknown"] = unknown
     extension = prepared.get("extensions") if isinstance(prepared.get("extensions"), dict) else {}
@@ -358,17 +447,27 @@ def _normalize_result(card, raw, entries):
             "profile_ready": True,
             "supporting_characters": [item["name"] for item in supporting],
             "worldbook_entries": len(world_entries),
-            "main_character_entries": len(main_sources),
-            "unresolved_entries": len(unresolved),
+            "main_character_entries": len([
+                source_ref for source_ref in main_sources if source_ref.startswith("entry-")
+            ]),
+            "unresolved_entries": len([
+                source_ref for source_ref in unresolved if source_ref.startswith("entry-")
+            ]),
             "warnings": _list(raw.get("warnings"), 12, 300),
         },
     }
 
 
 def _prompt(payload):
+    available_refs = [
+        source.get("source_ref")
+        for source in payload.get("sources") or []
+        if source.get("source_ref")
+    ]
+    example_refs = available_refs[:1]
     schema = {
         "main_character": {
-            "source_entry_ids": ["entry-0"],
+            "source_refs": example_refs,
             "profile": {
                 "identity": {"name": "", "aliases": [], "description": "", "gender": "", "age": "", "species": "", "occupation": "", "affiliations": [], "story_role": ""},
                 "appearance": {"summary": "", "features": [], "attire": []},
@@ -377,56 +476,272 @@ def _prompt(payload):
                 "capabilities": {"skills": [], "powers": [], "limitations": []},
                 "background": {"summary": "", "key_history": []},
             },
-            "entry": {"initial_scenario": "", "first_message": "", "example_dialogue": ""},
-            "performance": {"system_prompt": "", "post_history_instructions": ""},
         },
-        "supporting_characters": [{"name": "", "source_entry_ids": ["entry-1"], "profile": {}}],
-        "worldbook_entries": [{"source_entry_ids": ["entry-2"], "name": "", "content": "", "keys": [], "constant": False, "priority": 5, "category": "setting"}],
-        "unresolved_entry_ids": [],
+        "supporting_characters": [{"name": "", "source_refs": example_refs, "profile": {}}],
+        "worldbook_entries": [{"source_refs": example_refs, "name": "", "content": "", "keys": [], "constant": False, "priority": 5, "category": "setting"}],
+        "unresolved_source_refs": [],
         "warnings": [],
     }
     system = (
-        "You normalize imported roleplay character cards. Return strict JSON only. "
+        "You normalize imported roleplay character cards. Return one compact strict JSON object only, with no analysis or markdown. "
         "The named main character must remain the main character. Organize only facts explicitly present in the source; never infer or invent. "
+        "Use source_ref values exactly as provided. A card field may contain several categories and may be cited by several destinations. "
         "Put stable identity, appearance, personality, voice, abilities, and personal history in character profiles. "
         "Put locations, organizations, shared history, rules, and public setting facts in worldbook_entries. "
-        "When one embedded entry mixes categories, split its content and cite the same source_entry_id in each destination. "
+        "Do not restate a character's affiliation, relationship, origin, or biography in worldbook_entries. "
+        "Worldbook content must stand on its own as shared setting rather than use a character as its subject. "
+        "When a source mixes categories, split its facts and cite the same source_ref in each destination. "
         "A different explicitly named person becomes a supporting character, not world lore. "
-        "Temporary scene state and uncertain content go to unresolved_entry_ids. "
-        "Every embedded source_entry_id must appear at least once in main_character.source_entry_ids, a supporting character, a worldbook entry, or unresolved_entry_ids. "
-        "Keep output content in the source card's language. Use every key shown in the schema; empty values are allowed."
+        "Temporary scene state and uncertain content go to unresolved_source_refs. "
+        "Every entry-* source_ref must appear at least once in main_character.source_refs, a supporting character, a worldbook entry, or unresolved_source_refs. "
+        "Do not copy or rewrite first messages, example dialogue, system prompts, or post-history instructions; the program preserves them. "
+        "This may be one batch from a larger card. Classify every source_ref in this batch; do not assume omitted batches are absent. "
+        "Keep output content in the source card's language. Use every top-level key shown in the schema; empty profile fields are allowed. "
+        "Keep each fact once, avoid synonyms and repetition, and keep arrays concise."
     )
     user = "Required JSON shape:\n" + json.dumps(schema, ensure_ascii=False) + "\n\nSource card:\n" + json.dumps(payload, ensure_ascii=False)
     return system, user
 
 
-def prepare_card(card, chat, model=None):
+def _merge_unique(left, right):
+    result = list(left or [])
+    seen = {
+        str(item).strip().casefold()
+        for item in result
+        if str(item or "").strip()
+    }
+    for item in right or []:
+        marker = str(item or "").strip().casefold()
+        if marker and marker not in seen:
+            result.append(item)
+            seen.add(marker)
+    return result
+
+
+def _merge_prose(left, right):
+    left = str(left or "").strip()
+    right = str(right or "").strip()
+    if not left:
+        return right
+    if not right or left == right:
+        return left
+    normalized_left = re.sub(r"\W+", "", left).casefold()
+    normalized_right = re.sub(r"\W+", "", right).casefold()
+    if normalized_left in normalized_right or normalized_right in normalized_left:
+        return left if len(left) >= len(right) else right
+    if difflib.SequenceMatcher(None, normalized_left, normalized_right).ratio() >= 0.68:
+        return left if len(left) >= len(right) else right
+    return left + "\n" + right
+
+
+def _merge_profile(left, right, fallback_name):
+    base = _canonical_profile(left, fallback_name)
+    incoming = _canonical_profile(right, fallback_name)
+    for section_name, section in incoming.items():
+        if not isinstance(section, dict):
+            continue
+        target = base.setdefault(section_name, {})
+        for key, value in section.items():
+            if isinstance(value, list):
+                target[key] = _merge_unique(target.get(key), value)
+            elif value and not target.get(key):
+                target[key] = value
+            elif (value and target.get(key) and value != target.get(key)
+                  and key in {"description", "summary", "speech_style", "motivation"}):
+                target[key] = _merge_prose(target[key], value)
+    base["identity"]["name"] = _text(fallback_name, 160)
+    return base
+
+
+def _result_source_refs(raw):
+    refs = []
+    main = raw.get("main_character") if isinstance(raw.get("main_character"), dict) else {}
+    refs.extend(main.get("source_refs") or main.get("source_entry_ids") or [])
+    for key in ("supporting_characters", "worldbook_entries"):
+        for item in raw.get(key) or []:
+            if isinstance(item, dict):
+                refs.extend(item.get("source_refs") or item.get("source_entry_ids") or [])
+    refs.extend(raw.get("unresolved_source_refs") or raw.get("unresolved_entry_ids") or [])
+    return [str(value or "").strip() for value in refs if str(value or "").strip()]
+
+
+def _validate_batch_result(raw, expected_refs, fallback_main_name=""):
+    if not isinstance(raw, dict):
+        raise ValueError("模型没有返回 JSON 对象")
+    known = set(expected_refs)
+    actual = set(_result_source_refs(raw))
+    unknown = sorted(actual - known)
+    if unknown:
+        raise ValueError("模型引用了本批不存在的来源：" + "、".join(unknown[:12]))
+    missing = sorted(known - actual)
+    if missing:
+        raise ValueError("模型遗漏了本批原始内容：" + "、".join(missing[:12]))
+    for item in raw.get("supporting_characters") or []:
+        name = str((item or {}).get("name") or "").strip() if isinstance(item, dict) else ""
+        if not name or not _profile_has_details((item or {}).get("profile")):
+            raise ValueError("模型返回了没有完整资料的配角")
+    character_names_by_ref = {}
+    main = raw.get("main_character") if isinstance(raw.get("main_character"), dict) else {}
+    main_name = str(
+        ((main.get("profile") or {}).get("identity") or {}).get("name")
+        or fallback_main_name
+        or ""
+    ).strip()
+    for source_ref in main.get("source_refs") or main.get("source_entry_ids") or []:
+        if main_name:
+            character_names_by_ref.setdefault(source_ref, set()).add(main_name)
+    for item in raw.get("supporting_characters") or []:
+        name = str(item.get("name") or "").strip()
+        for source_ref in item.get("source_refs") or item.get("source_entry_ids") or []:
+            if name:
+                character_names_by_ref.setdefault(source_ref, set()).add(name)
+    for item in raw.get("worldbook_entries") or []:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "")
+        refs = item.get("source_refs") or item.get("source_entry_ids") or []
+        repeated_names = {
+            name
+            for source_ref in refs
+            for name in character_names_by_ref.get(source_ref, set())
+            if name.casefold() in content.casefold()
+        }
+        if repeated_names:
+            raise ValueError(
+                "人物资料不得重复写入世界书：" + "、".join(sorted(repeated_names)))
+    return raw
+
+
+def _merge_batch_results(results, main_name):
+    merged = {
+        "main_character": {"source_refs": [], "profile": {}},
+        "supporting_characters": [],
+        "worldbook_entries": [],
+        "unresolved_source_refs": [],
+        "warnings": [],
+    }
+    supporting_by_name = {}
+    for raw in results:
+        main = raw.get("main_character") if isinstance(raw.get("main_character"), dict) else {}
+        merged_main = merged["main_character"]
+        merged_main["source_refs"] = _merge_unique(
+            merged_main["source_refs"], main.get("source_refs") or main.get("source_entry_ids"))
+        merged_main["profile"] = _merge_profile(
+            merged_main.get("profile"), main.get("profile"), main_name)
+
+        for item in raw.get("supporting_characters") or []:
+            name = str(item.get("name") or "").strip()
+            key = name.casefold()
+            if key not in supporting_by_name:
+                supporting_by_name[key] = {
+                    "name": name,
+                    "source_refs": [],
+                    "profile": {},
+                }
+            target = supporting_by_name[key]
+            target["source_refs"] = _merge_unique(
+                target["source_refs"], item.get("source_refs") or item.get("source_entry_ids"))
+            target["profile"] = _merge_profile(target.get("profile"), item.get("profile"), name)
+
+        merged["worldbook_entries"].extend(
+            copy.deepcopy(raw.get("worldbook_entries") or []))
+        merged["unresolved_source_refs"] = _merge_unique(
+            merged["unresolved_source_refs"],
+            raw.get("unresolved_source_refs") or raw.get("unresolved_entry_ids"),
+        )
+        merged["warnings"] = _merge_unique(merged["warnings"], raw.get("warnings"))
+    merged["supporting_characters"] = list(supporting_by_name.values())
+    return merged
+
+
+def prepare_card(card, chat, model=None, fallback_models=None):
     """Return a validated, side-effect-free semantic import plan."""
     normalized = card_import.normalize_card(card) if "source_format" not in card else copy.deepcopy(card)
-    payload, entries = _source_payload(normalized)
-    system, user = _prompt(payload)
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    last_error = ""
-    for attempt in range(2):
-        output = chat(messages, temperature=0.1, model=model, max_tokens=4000)
-        parsed = _json_from_text(output)
-        try:
-            plan = _normalize_result(normalized, parsed, entries)
-            plan["source_hash"] = hashlib.sha256(
-                json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
-            ).hexdigest()
-            plan["plan_id"] = "prep_" + hashlib.sha256(
-                json.dumps(plan, ensure_ascii=False, sort_keys=True).encode("utf-8")
-            ).hexdigest()[:20]
-            return plan
-        except ValueError as error:
-            last_error = str(error)
-            if attempt == 0:
-                messages.extend([
-                    {"role": "assistant", "content": output},
-                    {"role": "user", "content": "The JSON failed validation: " + last_error + ". Return the complete corrected JSON object only."},
-                ])
-    raise ValueError("角色卡整理失败：" + (last_error or "模型未返回有效 JSON"))
+    payload, entries, source_by_ref = _source_payload(normalized)
+    chunks = _payload_chunks(payload)
+    models = [model]
+    for candidate in fallback_models or []:
+        marker = (
+            str((candidate or {}).get("base") or "").strip(),
+            str((candidate or {}).get("model") or "").strip(),
+        )
+        if marker not in {
+            (str((item or {}).get("base") or "").strip(),
+             str((item or {}).get("model") or "").strip())
+            for item in models
+        }:
+            models.append(candidate)
+    batch_results = []
+    for chunk in chunks:
+        expected_refs = [source["source_ref"] for source in chunk["sources"]]
+        system, user = _prompt(chunk)
+        base_messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        last_error = ""
+        completed = False
+        for candidate in models:
+            model_base = str((candidate or {}).get("base") or "").lower()
+            request_options = (
+                {"thinking_mode": False}
+                if not candidate or "clawling" in model_base
+                else None
+            )
+            upstream_failed = False
+            for attempt in range(2):
+                messages = base_messages
+                if attempt:
+                    messages = base_messages + [{
+                        "role": "user",
+                        "content": (
+                            "The previous answer failed validation: " + last_error +
+                            ". Start over from this same batch and return one complete compact JSON object only."
+                        ),
+                    }]
+                try:
+                    output = chat(
+                        messages,
+                        temperature=0.1,
+                        model=candidate,
+                        max_tokens=6000,
+                        request_options=request_options,
+                    )
+                except Exception as error:  # network, timeout, empty/safety response
+                    last_error = str(error)
+                    upstream_failed = True
+                    break
+                try:
+                    parsed = _json_from_text(output)
+                    batch_results.append(_validate_batch_result(
+                        parsed, expected_refs, normalized.get("name") or ""))
+                    completed = True
+                    break
+                except ValueError as error:
+                    last_error = str(error)
+            if completed:
+                break
+            if not upstream_failed:
+                # The upstream answered twice but violated the contract. Keep
+                # this as a model-quality error instead of masking it by fallback.
+                break
+        if not completed:
+            batch = chunk.get("batch") or {}
+            raise ValueError(
+                f"角色卡第 {batch.get('index', '?')}/{batch.get('total', '?')} 批整理失败：" +
+                (last_error or "模型未返回有效 JSON"))
+
+    merged = _merge_batch_results(batch_results, normalized.get("name") or "")
+    plan = _normalize_result(normalized, merged, entries, source_by_ref)
+    plan["summary"]["batches"] = len(chunks)
+    plan["summary"]["source_items"] = len(source_by_ref)
+    plan["source_hash"] = hashlib.sha256(
+        json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    plan["plan_id"] = "prep_" + hashlib.sha256(
+        json.dumps(plan, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:20]
+    return plan
 
 
 def validate_plan(plan):

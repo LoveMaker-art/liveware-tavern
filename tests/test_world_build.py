@@ -288,6 +288,100 @@ class CompleteWorldBuildTests(unittest.TestCase):
         self.assertEqual(payload["before"]["productions"], 1)
         self.assertEqual(payload["before"]["cards"], 2)
 
+    def test_external_card_in_world_build_is_forced_through_preparation(self):
+        source = {
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "顾临川",
+                "description": "顾临川是调查员。林夏是与他合作的记者。归潮港在月蚀时封闭旧码头。",
+                "personality": "顾临川冷静谨慎。",
+                "first_mes": "顾临川合上记录本。",
+            },
+        }
+        prepared = {
+            "main_character": {
+                "source_refs": ["field-description", "field-personality"],
+                "profile": {
+                    "identity": {"name": "顾临川", "description": "归潮港调查员。"},
+                    "personality": {"traits": ["冷静", "谨慎"]},
+                },
+            },
+            "supporting_characters": [{
+                "name": "林夏",
+                "source_refs": ["field-description"],
+                "profile": {
+                    "identity": {"name": "林夏", "description": "与顾临川合作的记者。"},
+                    "personality": {"traits": ["敏锐"]},
+                },
+            }],
+            "worldbook_entries": [{
+                "source_refs": ["field-description"],
+                "name": "归潮港旧码头",
+                "content": "归潮港在月蚀时封闭旧码头。",
+                "keys": ["归潮港", "月蚀", "旧码头"],
+                "constant": False,
+                "priority": 5,
+                "category": "rule",
+            }],
+            "unresolved_source_refs": [],
+            "warnings": [],
+        }
+        script = textwrap.dedent(
+            f"""
+            import json
+            import sys
+            sys.path.insert(0, {str(ROOT / "skill")!r})
+            import server
+
+            server.actor.chat = lambda *args, **kwargs: {json.dumps(prepared, ensure_ascii=False)!r}
+            manifest = {{
+                "schema": "tavern-world/v1",
+                "request_id": "external-preparation-001",
+                "world": {{"name": "归潮港", "opening": "潮声逼近。"}},
+                "characters": [{{"card": {json.dumps(source, ensure_ascii=False)}, "source": "chub"}}],
+                "worldbook_entries": [],
+                "persona": {{"name": "我", "description": "调查协作者"}},
+            }}
+            result = server.ev_build_world({{"manifest": manifest}})
+            production = result["production"]
+            runtime_cast = production["runtime_cast"]
+            worldbooks = [server.load_worldbook(wid) for wid in production["worldbook_ids"]]
+            print(json.dumps({{
+                "ok": result["verification"]["ok"],
+                "cast": [
+                    {{"name": item["name"], "profile": item["profile"]}}
+                    for item in runtime_cast["characters"]
+                ],
+                "lore": [
+                    entry["content"]
+                    for book in worldbooks for entry in (book or {{}}).get("entries") or []
+                ],
+            }}, ensure_ascii=False))
+            """
+        )
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ)
+            env["TAVERN_STATE_DIR"] = state
+            env["TAVERN_MODEL_KEY"] = ""
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertTrue(payload["ok"])
+        self.assertEqual([item["name"] for item in payload["cast"]], ["顾临川", "林夏"])
+        self.assertTrue(all(item["profile"]["identity"]["description"] for item in payload["cast"]))
+        self.assertEqual(payload["lore"], ["归潮港在月蚀时封闭旧码头。"])
+
 
 if __name__ == "__main__":
     unittest.main()

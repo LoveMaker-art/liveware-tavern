@@ -68,6 +68,37 @@ class CardImportLimitTests(unittest.TestCase):
         self.assertEqual(imported["source_container"], "charx")
         self.assertEqual(imported["embedded_assets"][0]["path"], "assets/portrait.png")
 
+    def test_charx_excludes_executable_assets(self):
+        card = {
+            "spec": "chara_card_v3",
+            "spec_version": "3.0",
+            "data": {
+                "name": "Mara",
+                "description": "An archivist.",
+                "assets": [
+                    {"type": "icon", "uri": "embeded://assets/portrait.png"},
+                    {"type": "script", "uri": "embeded://assets/automation.txt"},
+                    {"type": "data", "uri": "embeded://assets/automation.js"},
+                ],
+            },
+        }
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as archive:
+            archive.writestr("card.json", json.dumps(card))
+            archive.writestr("assets/portrait.png", b"image")
+            archive.writestr("assets/automation.txt", b"command")
+            archive.writestr("assets/automation.js", b"alert(1)")
+
+        imported = card_import.import_card_archive_bytes(raw.getvalue())
+
+        self.assertEqual(imported["assets"], [
+            {"type": "icon", "uri": "embeded://assets/portrait.png"},
+        ])
+        self.assertEqual(
+            [item["path"] for item in imported["embedded_assets"]],
+            ["assets/portrait.png"],
+        )
+
     def test_rejects_charx_path_traversal(self):
         card = {
             "spec": "chara_card_v3",

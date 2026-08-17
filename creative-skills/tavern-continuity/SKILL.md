@@ -1,7 +1,7 @@
 ---
 name: tavern-continuity
 description: Diagnose and safely repair Tavern generation, compression, story-ledger, runtime-cast, prompt, and continuity problems.
-version: 1.23.15
+version: 1.23.16
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]

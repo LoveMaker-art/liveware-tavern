@@ -29,7 +29,7 @@ For each canonical section, a non-empty top-level canonical value takes preceden
 | `group_only_greetings` | top-level `group_only_greetings[]` | V3 multi-character opening alternatives; use only when the world has multiple characters and no explicit opening overrides them. |
 | `character_book` | standalone worldbook on attachment | Character-local lore may travel with the card; global lore must be separated. |
 | `assets`, `creator_notes_multilingual`, `source`, creation/modification dates | preserved V3 metadata | Keep for provenance and future presentation; do not inject into story generation by default. |
-| `tags`, `creator`, `character_version`, unknown `extensions` and unknown root/data keys | preserved source metadata | Do not discard or reinterpret them as character facts. |
+| `tags`, `creator`, `character_version`, non-executable unknown `extensions` and unknown root/data keys | preserved source metadata | Preserve ordinary metadata, but discard imported scripts, MVU/TavernHelper blocks, and executable assets because this runtime does not support them. |
 
 ## Structured Description Sections
 

@@ -276,7 +276,10 @@ def _event(ev):
     req = urllib.request.Request(CONSOLE + "/api/event", data=body,
                                  headers={"User-Agent": UA, "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        # A complex external card is prepared in several complete semantic
+        # batches. Its total request may legitimately outlive one model call.
+        timeout = 900 if ev.get("type") == "prepare_card" else 150
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
         raw = e.read()
@@ -526,7 +529,8 @@ def cmd_starter(a):
         with open(path, "rb") as f:
             png = f.read()
         card = _event({"type": "import_card",
-                       "png_base64": base64.b64encode(png).decode("ascii")})["card"]
+                       "png_base64": base64.b64encode(png).decode("ascii"),
+                       "source": entry.get("source") or "builtin:starter"})["card"]
     print(f"✅ 已导入角色库：{card.get('name')}（{card['id']}）")
     if a.new_world:
         _create_production(card, a.name)

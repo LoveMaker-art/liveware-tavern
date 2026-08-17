@@ -3,8 +3,9 @@
 纯 stdlib：支持裸 V1 JSON、V2/V3 JSON，以及 PNG/APNG 中的 tEXt、zTXt、iTXt
 角色卡元数据。V3 关键字 `ccv3` 优先，回落到兼容关键字 `chara`。
 
-铁律：不丢未知键。标准字段进入稳定结构，厂商扩展和未知字段保存在
-`source_unknown`，供未来迁移或导出使用，不参与生成提示词。
+标准字段进入稳定结构，非可执行的厂商扩展和未知字段保存在
+`source_unknown`，供未来迁移或导出使用，不参与生成提示词。当前运行时不支持
+角色卡脚本，因此导入时会丢弃正则脚本、JavaScript、MVU 和 TavernHelper 脚本数据。
 """
 import base64
 import copy
@@ -23,6 +24,82 @@ MAX_METADATA_BYTES = 2 * 1024 * 1024
 MAX_CHARX_BYTES = 20 * 1024 * 1024
 MAX_CHARX_EXPANDED_BYTES = 50 * 1024 * 1024
 MAX_CHARX_FILES = 128
+
+_UNSUPPORTED_EXECUTABLE_KEYS = {
+    "script", "scripts", "javascript", "js",
+    "regexscript", "regexscripts",
+    "tavernhelper", "tavernhelperscript", "tavernhelperscripts",
+    "scriptmanager", "stscript", "stscripts",
+    "quickreply", "quickreplies",
+}
+_UNSUPPORTED_ASSET_SUFFIXES = (".js", ".mjs", ".cjs", ".wasm")
+
+
+def _field_key(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _unsupported_executable_key(value):
+    key = _field_key(value)
+    return (
+        key in _UNSUPPORTED_EXECUTABLE_KEYS
+        or key.startswith("mvu")
+        or key.startswith("regexscript")
+        or key.startswith("tavernhelperscript")
+    )
+
+
+def _strip_unsupported_executables(value):
+    """Remove unsupported executable extension blocks without scanning prose."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_unsupported_executables(item)
+            for key, item in value.items()
+            if not _unsupported_executable_key(key)
+        }
+    if isinstance(value, list):
+        return [_strip_unsupported_executables(item) for item in value]
+    return copy.deepcopy(value)
+
+
+def _unsupported_asset(value):
+    if isinstance(value, dict):
+        kind = _field_key(value.get("type") or value.get("kind") or value.get("category"))
+        if _unsupported_executable_key(kind):
+            return True
+        path = str(value.get("uri") or value.get("path") or value.get("name") or "")
+    else:
+        path = str(value or "")
+    lowered = path.partition("?")[0].partition("#")[0].lower()
+    return lowered.endswith(_UNSUPPORTED_ASSET_SUFFIXES)
+
+
+def _safe_assets(value):
+    return [
+        _strip_unsupported_executables(item)
+        for item in _array(value)
+        if not _unsupported_asset(item)
+    ]
+
+
+def _asset_path(value):
+    if not isinstance(value, dict):
+        return ""
+    path = str(value.get("uri") or value.get("path") or value.get("name") or "").strip()
+    return re.sub(r"^(?:embeded|embedded)://", "", path, flags=re.I).lstrip("/")
+
+
+def _unsupported_asset_paths(card_obj):
+    data = card_obj.get("data") if isinstance(card_obj.get("data"), dict) else card_obj
+    if not isinstance(data, dict):
+        return set()
+    return {
+        path
+        for item in _array(data.get("assets"))
+        if _unsupported_asset(item)
+        for path in [_asset_path(item)]
+        if path
+    }
 
 
 def _iter_png_chunks(raw: bytes):
@@ -423,6 +500,7 @@ def canonical_performance(data: dict) -> dict:
 
 def normalize_card(card_obj: dict) -> dict:
     """V1/V2/V3 → Tavern 内部统一形态，并保留未知源字段。"""
+    card_obj = _strip_unsupported_executables(card_obj)
     format_info = detect_card_format(card_obj)
     data = card_obj.get("data") if isinstance(card_obj.get("data"), dict) else card_obj
     out = {
@@ -442,7 +520,7 @@ def normalize_card(card_obj: dict) -> dict:
     # 的 source 先保留(不丢未知键),server 再按渠道覆盖。显示优先 creator,无 creator 才看 source。
     out["source"] = ""
     out["source_urls"] = _array(data.get("source"))
-    out["assets"] = _array(data.get("assets"))
+    out["assets"] = _safe_assets(data.get("assets"))
     out["creator_notes_multilingual"] = data.get("creator_notes_multilingual") or {}
     out["creation_date"] = data.get("creation_date")
     out["modification_date"] = data.get("modification_date")
@@ -465,12 +543,16 @@ def import_card_bytes(png_bytes: bytes) -> dict:
     if len(png_bytes) > MAX_PNG_BYTES:
         raise ValueError("角色卡 PNG 不能超过 5 MB")
     chunks = _read_text_chunks(png_bytes)
-    card = normalize_card(_decode_card_payload(chunks))
+    card_obj = _decode_card_payload(chunks)
+    unsupported_paths = _unsupported_asset_paths(card_obj)
+    card = normalize_card(card_obj)
     embedded_assets = []
     for key, value in chunks.items():
         if not key.startswith("chara-ext-asset_:"):
             continue
         path = key.split(":", 1)[1].strip()
+        if path in unsupported_paths or _unsupported_asset(path):
+            continue
         try:
             size = len(base64.b64decode(value.encode("latin-1"), validate=True))
         except Exception:
@@ -517,6 +599,7 @@ def import_card_archive_bytes(archive_bytes: bytes) -> dict:
             card_obj = json.loads(archive.read(card_info).decode("utf-8-sig"))
         except Exception as exc:
             raise ValueError("CHARX card.json 不是有效 JSON") from exc
+        unsupported_paths = _unsupported_asset_paths(card_obj)
         card = normalize_card(card_obj)
         card["source_container"] = "charx"
         card["embedded_assets"] = [
@@ -527,7 +610,9 @@ def import_card_archive_bytes(archive_bytes: bytes) -> dict:
                 "container": "charx",
             }
             for item in files
-            if item.filename != "card.json"
+            if (item.filename != "card.json"
+                and item.filename not in unsupported_paths
+                and not _unsupported_asset(item.filename))
         ]
     return card
 

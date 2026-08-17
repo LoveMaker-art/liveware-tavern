@@ -85,7 +85,7 @@ REQUEST_AUTHORIZER = RequestAuthorizer()
 
 MAX_EVENT_BODY_BYTES = max(
     1024,
-    int(os.environ.get("TAVERN_MAX_EVENT_BODY_BYTES", str(2 * 1024 * 1024))),
+    int(os.environ.get("TAVERN_MAX_EVENT_BODY_BYTES", str(8 * 1024 * 1024))),
 )
 MAX_CLONE_BODY_BYTES = max(
     MAX_EVENT_BODY_BYTES,
@@ -1046,7 +1046,9 @@ def ev_prepare_card(ev):
         if source_url not in urls:
             urls.append(source_url)
         card["source_urls"] = urls
-    plan = card_preparation.prepare_card(card, actor.chat, model=_active_model())
+    primary, fallbacks = _card_preparation_models()
+    plan = card_preparation.prepare_card(
+        card, actor.chat, model=primary, fallback_models=fallbacks)
     return {"preparation": plan}
 
 
@@ -1133,27 +1135,47 @@ def ev_apply_card_preparation(ev):
         raise
 
 
+def _prepare_and_apply_external_card(card, source, source_url=""):
+    """Run the mandatory semantic gate before any external card is stored."""
+    source = str(source or "external").strip() or "external"
+    source_url = str(source_url or "").strip()
+    card["source"] = source
+    if source_url:
+        urls = card.get("source_urls") if isinstance(card.get("source_urls"), list) else []
+        if source_url not in urls:
+            urls.append(source_url)
+        card["source_urls"] = urls
+    primary, fallbacks = _card_preparation_models()
+    plan = card_preparation.prepare_card(
+        card, actor.chat, model=primary, fallback_models=fallbacks)
+    return ev_apply_card_preparation({
+        "preparation": plan,
+        "confirm": True,
+    })
+
+
 def ev_import_card(ev):
-    # PNG 路径：吃一张 V2/V3 角色卡 PNG（base64）。真实卡走这条，编码天然正确。出处=chub。
-    return _store_card(
-        card_import.import_card_b64(ev["png_base64"]),
-        ev.get("source") or "chub",
-        str(ev.get("source_url") or "").strip(),
-    )
+    card = card_import.import_card_b64(ev["png_base64"])
+    source = ev.get("source") or "chub"
+    if str(source).startswith("builtin:"):
+        return _store_card(card, source, str(ev.get("source_url") or "").strip())
+    return _prepare_and_apply_external_card(
+        card, source, str(ev.get("source_url") or "").strip())
 
 
 def ev_import_card_json(ev):
     # JSON 路径：吃一份卡 JSON（V1/V2/V3 形态，带 data 包或裸 obj 都行）。
     # 给 agent「原创/自造」角色卡用——不手搓 PNG，绕开 btoa(UTF-8) 把中文搞乱码的坑。出处=agent。
-    return _store_card(
-        card_import.normalize_card(ev["card"]),
-        ev.get("source") or "agent",
-        str(ev.get("source_url") or "").strip(),
-    )
+    card = card_import.normalize_card(ev["card"])
+    source = ev.get("source") or "agent"
+    if source == "agent" or str(source).startswith("builtin:"):
+        return _store_card(card, source, str(ev.get("source_url") or "").strip())
+    return _prepare_and_apply_external_card(
+        card, source, str(ev.get("source_url") or "").strip())
 
 
 def ev_import_card_archive(ev):
-    return _store_card(
+    return _prepare_and_apply_external_card(
         card_import.import_card_archive_b64(ev["charx_base64"]),
         ev.get("source") or "external",
         str(ev.get("source_url") or "").strip(),
@@ -1631,7 +1653,7 @@ def _world_build_import_card(spec):
         card = load_card(card_id)
         if not card:
             raise ValueError("card not found: " + card_id)
-        return card, False, []
+        return [card], [], []
 
     source = str(spec.get("source") or "agent").strip() or "agent"
     if isinstance(spec.get("card"), dict):
@@ -1645,6 +1667,24 @@ def _world_build_import_card(spec):
     else:
         raise ValueError("character requires card_id, card, png_base64, or charx_base64")
 
+    if source != "agent" and not source.startswith("builtin:"):
+        result = _prepare_and_apply_external_card(
+            card, source, str(spec.get("source_url") or "").strip())
+        cards = [result["card"], *(result.get("supporting_cards") or [])]
+        if len(cards) > 16:
+            if not result.get("reused"):
+                for item in cards:
+                    STATE_STORE.delete("worldbooks", "wb_" + item["id"])
+                    STATE_STORE.delete("cards", item["id"])
+            raise ValueError("外部角色卡整理出超过 16 个登场角色，请先选择本世界需要的角色")
+        created_ids = [] if result.get("reused") else [item["id"] for item in cards]
+        worldbook_ids = [
+            "wb_" + item["id"]
+            for item in cards
+            if load_worldbook("wb_" + item["id"])
+        ]
+        return cards, created_ids, worldbook_ids
+
     while load_card(card.get("id")):
         card["id"] = "card_" + secrets.token_hex(4)
     result = _store_card(card, source)
@@ -1653,7 +1693,7 @@ def _world_build_import_card(spec):
     embedded_id = "wb_" + stored["id"]
     if load_worldbook(embedded_id):
         worldbook_ids.append(embedded_id)
-    return stored, True, worldbook_ids
+    return [stored], [stored["id"]], worldbook_ids
 
 
 def _world_build_lore_spec(item):
@@ -1771,11 +1811,12 @@ def ev_build_world(ev):
         try:
             cards = []
             for spec in character_specs:
-                card, created, embedded_worldbooks = _world_build_import_card(spec)
-                cards.append(card)
-                if created:
-                    created_cards.append(card["id"])
-                    created_worldbooks.extend(embedded_worldbooks)
+                imported_cards, imported_ids, embedded_worldbooks = _world_build_import_card(spec)
+                cards.extend(imported_cards)
+                created_cards.extend(imported_ids)
+                created_worldbooks.extend(embedded_worldbooks)
+            if len(cards) > 16:
+                raise ValueError("整理后的登场角色超过 16 个，请先选择本世界需要的角色")
 
             source_worldbook_ids = []
             for worldbook_id in manifest.get("worldbook_ids") or []:
@@ -3564,6 +3605,12 @@ def _memory_models():
 
 def _active_model():
     return MODEL_REGISTRY.active_override()
+
+
+def _card_preparation_models():
+    """Active Tavern model plus config-driven fallbacks for upstream failures."""
+    primary = _active_model() or _memory_model()
+    return primary, _clawling_memory_fallbacks(primary)
 
 
 def _public_models():

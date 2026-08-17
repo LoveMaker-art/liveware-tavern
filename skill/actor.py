@@ -798,7 +798,8 @@ def build_messages(card: dict, lore: list, persona: dict, story: list,
     return msgs
 
 def _payload(messages: list, temperature: float, stream: bool,
-             model_name: str = None, max_tokens: int = None) -> dict:
+             model_name: str = None, max_tokens: int = None,
+             request_options: dict = None) -> dict:
     p = {
         "model": model_name or MODEL_NAME,
         "messages": messages,
@@ -807,6 +808,9 @@ def _payload(messages: list, temperature: float, stream: bool,
     }
     if max_tokens:
         p["max_tokens"] = max_tokens
+    options = request_options if isinstance(request_options, dict) else {}
+    if isinstance(options.get("thinking_mode"), bool):
+        p["thinking_mode"] = options["thinking_mode"]
     return p
 
 
@@ -836,14 +840,21 @@ def _read_json_response(response, limit=MODEL_MAX_RESPONSE_BYTES):
 
 
 def _chat_once(messages: list, temperature: float = None, model: dict = None,
-               max_tokens: int = None) -> str:
+               max_tokens: int = None, request_options: dict = None) -> str:
     ov = model or {}
     model_name = ov.get("model") or MODEL_NAME
     prompt_chars = sum(len((m.get("content") or "")) for m in messages)
     t0 = time.time()
     _log(event="chat_start", model=model_name, msgs=len(messages), prompt_chars=prompt_chars, temp=temperature)
     try:
-        req = _request(_payload(messages, temperature, False, model_name, max_tokens=max_tokens),
+        req = _request(_payload(
+            messages,
+            temperature,
+            False,
+            model_name,
+            max_tokens=max_tokens,
+            request_options=request_options,
+        ),
                        ov.get("base"), ov.get("key"))
         with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as r:
             data = _read_json_response(r)
@@ -867,14 +878,25 @@ def _chat_once(messages: list, temperature: float = None, model: dict = None,
           "chars=%s" % len(content),
           "usage=%s" % usage,
           flush=True)
+    if finish in ("content_filter", "safety"):
+        raise RuntimeError("模型上游拒绝处理这张卡的内容，未写入任何数据。请更换卡片或模型后重试。")
     if finish in ("length", "max_tokens"):
         raise RuntimeError("模型输出达到长度上限，已拒绝保存不完整回复。请重试或切换更稳定的模型。")
+    if not content:
+        raise RuntimeError("模型返回空内容，未写入任何数据。请重试或检查模型服务。")
     return content
 
 
-def chat(messages: list, temperature: float = None, model: dict = None, max_tokens: int = None) -> str:
+def chat(messages: list, temperature: float = None, model: dict = None,
+         max_tokens: int = None, request_options: dict = None) -> str:
     """调模型，返回回复文本（非流式）。model = 用户自配 override；None = 内置模型。"""
-    return _chat_once(messages, temperature, model, max_tokens=max_tokens)
+    return _chat_once(
+        messages,
+        temperature,
+        model,
+        max_tokens=max_tokens,
+        request_options=request_options,
+    )
 
 
 

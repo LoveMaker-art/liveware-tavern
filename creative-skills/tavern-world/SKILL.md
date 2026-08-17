@@ -1,7 +1,7 @@
 ---
 name: tavern-world
 description: Build complete Tavern worlds or prepare individual character cards, worldbooks, user Personas, and openings from an idea or existing material, with research, canonical import, and verification.
-version: 1.23.15
+version: 1.23.16
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -60,7 +60,10 @@ continuity repair, story-profile memory, or visual theme work.
    `tavern/references/conversation-cards.md`; do not dump JSON or imitate
    unavailable buttons. Ask for confirmation once if the user has not already
    approved.
-10. Assemble one world manifest. Preview it with `build-world` without `--apply`.
+10. Assemble one world manifest using only the prepared library `card_id` values
+    for external characters. Raw external JSON, PNG, CHARX, or Chub paths must
+    never be passed directly to `build-world`. Preview the manifest without
+    `--apply`.
 11. After confirmation, run the same manifest once with
    `--apply --confirm --request-id <stable-id> --json`.
 12. Treat `verification.ok: true` as success. On failure, report the error; do not
@@ -124,6 +127,8 @@ Before presenting a proposed or completed world in chat, load `tavern/references
 - Never create one temporary world per imported card.
 - Never call an external card "compatible" until `inspect-card` succeeds.
 - Never use `add-original` for a card found online; preserve its external provenance with `import-card`.
+- Never pass an external card artifact directly to `build-world`; external cards
+  must cross the mandatory preparation gate and enter the manifest by `card_id`.
 - Never store an external card whose preparation summary says the main profile is incomplete.
 - Never copy a named supporting character entry into shared world lore; keep the extracted card in the library until the user chooses to add it to the cast.
 - Never edit production, card, or worldbook JSON files directly.
