@@ -584,11 +584,10 @@ def cmd_recall(a):
 
 
 def cmd_learn(a):
-    # 把对用户的了解 / 演法调整，沉淀进技艺层 actor_self.md（跨世界共享，
-    # actor.py 会把它注入每一场戏的 prompt——所以这是「越演越懂你」的载体，
-    # 区别于 Hermes 自带的 user-profile 记忆：那层喂不到控制台生成）。
+    # 把用户明确表达的长期故事偏好写入唯一生效的结构化故事档案。
+    # 后端会据此刷新受控的 USER.md / MEMORY.md 投射；actor_self.md 不是数据源。
     res = _event({"type": "actor_grow", "change": a.change, "reason": a.reason or ""})
-    print("✅ 已记进技艺层:", res.get("appended", "(已写)"))
+    print("✅ 已记进故事档案:", res.get("appended", "(已写)"))
 
 
 def _resolve_production_for_cli(q):
@@ -600,17 +599,17 @@ def _resolve_production_for_cli(q):
 
 
 def cmd_reflect(a):
-    # 复盘一场戏 → 服务端模型蒸馏「对用户的 RP 偏好」→ 写进技艺层（不靠你临场总结）。
+    # 复盘一场戏，由服务端模型提炼可复用偏好并写入结构化故事档案。
     p = _resolve_production_for_cli(a.production)
     res = _event({"type": "reflect", "production_id": p["id"]})
     if res.get("learned"):
-        print(f"✅ 从「{p['name']}」复盘学到，已写进技艺层：\n{res['learned']}")
+        print(f"✅ 从「{p['name']}」复盘学到，已写进故事档案：\n{res['learned']}")
     else:
         print(f"（这场没学到：{res.get('reason', '')}）")
 
 
 def cmd_reflect_preview(a):
-    # 只预览复盘结果，不写 actor_self.md。
+    # 只预览复盘结果，不写入结构化故事档案。
     p = _resolve_production_for_cli(a.production)
     res = _event({"type": "reflect_preview", "production_id": p["id"]})
     print(f"=== 复盘预览：{p['name']} ===")
@@ -1881,12 +1880,12 @@ def main():
     s.add_argument("--last", type=int, default=40, help="只看最后 N 条（默认 40）")
     s.set_defaults(fn=cmd_recall)
 
-    s = sub.add_parser("learn", help="把对用户的了解/演法调整记进技艺层（actor_self，跨世界共享）")
+    s = sub.add_parser("learn", help="把用户明确表达的长期故事偏好记进结构化故事档案")
     s.add_argument("change", help="学到/调整了什么，如「用户爱慢热的戏、回复别太长」")
     s.add_argument("--reason", help="人话理由")
     s.set_defaults(fn=cmd_learn)
 
-    s = sub.add_parser("reflect", help="复盘某世界的故事 → 模型蒸馏对用户的偏好 → 自动写进技艺层")
+    s = sub.add_parser("reflect", help="复盘某世界的故事 → 模型提炼可复用偏好 → 写进结构化故事档案")
     s.add_argument("production", help="世界 id 或名字片段")
     s.set_defaults(fn=cmd_reflect)
 

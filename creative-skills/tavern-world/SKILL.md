@@ -1,7 +1,7 @@
 ---
 name: tavern-world
-description: Build complete Tavern worlds from an idea or existing material, including research, character cards, worldbooks, the user's persona, opening scene, atomic import, and verification.
-version: 1.23.14
+description: Build complete Tavern worlds or prepare individual character cards, worldbooks, user Personas, and openings from an idea or existing material, with research, canonical import, and verification.
+version: 1.23.15
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -26,6 +26,9 @@ expand, rebuild, or repair a playable Tavern world. A complete world may include
 
 This is one workflow. Do not split character-card and worldbook preparation into
 separate user-visible jobs when they serve the same world.
+
+Use the same skill when the user requests only one reusable component. Do not
+create a world unless the request actually asks for one.
 
 Do not use this skill for app deployment, model configuration, long-story
 continuity repair, story-profile memory, or visual theme work.

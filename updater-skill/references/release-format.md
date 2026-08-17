@@ -24,7 +24,7 @@ Manifest schema:
 {
   "schema": 4,
   "scope": "tavern-system",
-  "version": "1.18.1",
+  "version": "<VERSION>",
   "archive": "tavern-release.tar.gz",
   "sha256": "<archive SHA256>",
   "managed_files": ["runtime/server.py"],
@@ -89,32 +89,24 @@ skills/
   tavern-world-visuals/
 ```
 
-The schema-3 skill manifest declares `install_mode: exact-directories`, the exact
-six official directory names, and the complete file/hash set. The updater backs
-up every existing official directory and replaces those directories completely.
-For the v1.23 migration it deletes the obsolete `tavern-cards` and
-`tavern-worldbooks` directories after their references move
-into `tavern-world`. Every other skill directory is untouched. The updater also
-takes the canonical `AGENTS.md` from the verified updater archive, backs up the
-installed file, and replaces `/opt/data/AGENTS.md` completely.
+The skill manifest declares `install_mode: exact-directories`, the complete
+official directory set, and the complete file/hash set. The updater backs up
+every declared official directory and replaces those directories completely.
+Every undeclared skill directory is untouched. The updater also takes the
+canonical `AGENTS.md` from the verified updater archive, backs up the installed
+file, and replaces `/opt/data/AGENTS.md` completely.
 
 Legacy versions without their own GitHub Release may be represented by two additional assets on the latest stable Release: `baseline-v<VERSION>-manifest.json` and `tavern-baseline-v<VERSION>.tar.gz`. The archive contains only the exact allowlisted runtime tree. Its schema-1 manifest binds the version, archive SHA256, complete file list, every file hash, and embedded `.tavern-release-version` marker. It is a merge base only; it is never installed directly and never contains skills, updater code, credentials, identity state, or Tavern user data.
 
-`v1.21.0` expands the managed runtime allowlist with the first refactored service
-modules and `web/security.js`; `v1.21.3` expands the exact skill manifest from
-seven to eight directories; `v1.22.0` adds generation and continuity service
-modules; `v1.23.0` consolidates world, card, and worldbook construction into one
-atomic six-directory skill suite. Every release review starts through the
-verified Bootstrap, which installs the target release's updater before it
-reviews or applies the current manifests. This avoids coupling manifest
-compatibility to the previously installed updater version.
-Historical releases continue to validate against the allowlist active for their
-version, and the `v1.14.12` bundled baseline remains restricted to its original
-4-backend/7-frontend allowlist.
+Every release review starts through the verified Bootstrap, which installs the
+target release's updater before it reviews or applies the current manifests.
+This avoids coupling manifest compatibility to the previously installed updater.
+Historical releases continue to validate only against the allowlist and hashes
+declared by their own verified artifacts.
 
-Only the listed runtime files, the eight official frontend code files, and the
-exact contents of the six declared creative-skill directories are release
-assets. Developer smoke tools and host-side installers are not skill assets.
+Only the manifest-listed runtime and frontend code files and the exact contents
+of the declared creative-skill directories are release assets. Developer smoke
+tools and host-side installers are not skill assets.
 `runtime/actor_self.md` is the sole identity-adjacent exception: it is a neutral
 seed template used only when runtime state is absent.
 `/opt/data/tavern-state/actor_self.md`, `SOUL.md`, other identity/persona files,
