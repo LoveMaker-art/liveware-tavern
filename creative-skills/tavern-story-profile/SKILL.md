@@ -1,7 +1,7 @@
 ---
 name: tavern-story-profile
-description: Recall stories, maintain the structured story profile, and synchronize model-aggregated taste and bounded plot-ledger memory into Hermes.
-version: 1.23.16
+description: Recall Tavern stories and maintain durable, evidence-based story preferences and bounded Hermes memory projections.
+version: 1.23.17
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -13,56 +13,54 @@ metadata:
 
 # Tavern Story Profile
 
-## When to Use
+## Scope
 
-Use this skill when the user asks what the story curator remembers, refers to a previous world, gives durable story preferences, wants a reflection, asks why a recommendation fits their taste, or wants those preferences reflected in ordinary conversation.
+Use this skill when the user refers to a previous world, asks what the curator
+remembers, gives a durable play preference, requests reflection, or asks why a
+recommendation fits their taste.
 
-Do not store one-off plot facts, role state, model failures, or formatting bugs as user preference.
+Do not store one-off plot facts, current role state, bugs, tool activity, or
+formatting corrections as user preference.
 
-## Procedure
+## Workflow
 
-1. Recall the named world before discussing its history.
-2. Use learn for explicit durable preferences.
-3. Use reflect-preview before uncertain reflection.
-4. Run reflect only when the preview contains reusable preference rather than plot summary.
-5. Use card or profile-audit when the user asks to inspect the story profile or recommendation signals.
-6. Use note only for an explicit world-local creative direction; never for global format rules.
-7. Treat `/opt/data/tavern-state/story_profile.json` as the only active story-profile source. `actor_self.md` is a rendered compatibility view.
-8. Use `memory-preview` before a manual profile sync. Never append Tavern material directly to `USER.md` or `MEMORY.md`.
-9. The compact taste profile is model-aggregated from confirmed reflection notes. Runtime code may validate and render it, but must not derive taste through keyword rules.
-10. The model-generated profile must include bounded `response_adaptations`: concrete ways the story curator should recommend, organize, or discuss stories based only on confirmed taste evidence.
-11. Concrete shared events come from each world's successful model-generated `story_state`; never infer plot memory from preference notes.
-12. Each managed projection carries the canonical story-profile revision. When projected content changes, only stale active ClawChat system-prompt caches are invalidated; the next user turn rebuilds them from disk without deleting messages or changing the session id.
+1. `recall --json` before discussing a named world's events.
+2. `learn --json` only for an explicit durable preference.
+3. Use `reflect-preview` when evidence is uncertain; run `reflect` only when the
+   result is reusable preference rather than plot summary.
+4. Use `card --json` or `profile-audit --json` for memory or recommendation questions.
+5. Use `profile_memory.py` for projection audit, preview, refresh, confirmation,
+   editing, or locking. Never append Tavern text directly to `USER.md` or `MEMORY.md`.
 
-Commands:
+## Commands
 
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py recall <world> [--last N]
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py learn "preference" --reason "reason"
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py reflect-preview <world>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py reflect <world>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py card
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py profile-audit
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py note <world> "direction"
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py audit
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py memory-preview
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py memory-sync
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py refresh
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py confirm <preference_id>
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py reject <preference_id>
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py edit <preference_id> "new text" [--scope tavern|ruotang_chat|both]
-    python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py lock <preference_id> [--off]
+```sh
+CLI=/opt/data/skills/creative/tavern/scripts/tavern_cli.py
+PROFILE=/opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py
+python3 "$CLI" recall <world> --last <N> --json
+python3 "$CLI" learn "preference" --reason "evidence" --json
+python3 "$CLI" reflect-preview <world>
+python3 "$CLI" reflect <world>
+python3 "$CLI" card --json
+python3 "$CLI" profile-audit --json
+python3 "$PROFILE" audit
+python3 "$PROFILE" memory-preview
+python3 "$PROFILE" memory-sync
+python3 "$PROFILE" refresh
+python3 "$PROFILE" confirm <preference-id>
+python3 "$PROFILE" reject <preference-id>
+python3 "$PROFILE" edit <preference-id> "new text" [--scope tavern|agent_chat|both]
+python3 "$PROFILE" lock <preference-id> [--off]
+```
 
-For detailed criteria, load references/actor-memory.md.
-Before writing state, load the Tavern shared contract.
+Load `references/actor-memory.md` for storage and projection boundaries. Load
+the shared contract before any write.
 
-## Pitfalls
+## Guardrails
 
-- Ordinary chat memory is not the Tavern story profile.
-- Story preferences should alter recommendations and co-creation behavior through the managed `response_adaptations` field. They must not be treated as real-life personality evidence.
-- Story events belong to the story ledger, not actor_self.md.
-- Temporary emotion and current relationship state are not durable user preferences.
-- A director note is world-local and may be invisible in the frontend; do not use it as hidden corrective prompt storage.
-
-## Verification
-
-After learn or reflect, run `profile_memory.py audit`. Confirm the new item is durable, specific, attributable to the user, and free of private or unrelated facts. `USER.md` receives bounded model-aggregated taste and response adaptations; `MEMORY.md` receives complete, bounded event lines from successful model-generated story ledgers. Both fixed marker blocks are replaced atomically and never appended without limit.
+- `story_profile.json` is canonical; `actor_self.md` is only a compatibility view.
+- `USER.md` receives bounded taste and response adaptations.
+- `MEMORY.md` receives bounded, explicitly fictional story memories.
+- Preserve content outside managed marker blocks.
+- Story preferences may shape recommendations and tone, but are not evidence of
+  the user's real-life personality.

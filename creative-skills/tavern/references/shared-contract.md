@@ -2,52 +2,48 @@
 
 Load this reference before any specialist writes Tavern state.
 
-## Product Boundaries
+## Ownership
 
-- A world is the running container for cast, current-world lore, persona, story history, model settings, and local direction.
-- Library cards and library worldbooks are reusable templates.
-- Adding a library item to a world creates or links world-local state; it must not silently rewrite the reusable source.
-- Current-world lore is stored in production-owned worldbook files referenced by production.worldbook_ids.
-- Runtime cast profiles are world-local. origin_profile is immutable; profile is the only effective evolving profile.
-- The main story curator identity belongs in /opt/data/SOUL.md, never inside a skill.
+- Runtime code: `/opt/data/apps/tavern-runtime`
+- Persistent instance data: `/opt/data/tavern-state`
+- Shared CLI: `/opt/data/skills/creative/tavern/scripts/tavern_cli.py`
+- Release updates: `/opt/data/skills/system/tavern-updater`
+- Agent identity: `/opt/data/SOUL.md`, never inside a Tavern skill
 
-## State Paths
+Library cards and worldbooks are reusable templates. Each world owns its Persona,
+story, lore references, direction, and evolving runtime cast. `origin_profile` is
+immutable; the world-local `profile` is the effective evolving profile.
 
-- Runtime code: /opt/data/apps/tavern-runtime
-- Persistent user data: /opt/data/tavern-state
-- Shared CLI: /opt/data/skills/creative/tavern/scripts/tavern_cli.py
-- System updater: /opt/data/skills/system/tavern-updater
+## Mutation Contract
 
-## Mutation Rules
+1. Use supported CLI or API operations; never edit state JSON directly.
+2. Read or audit the target before structural repair.
+3. Change only the requested scope.
+4. Obtain explicit confirmation before deletion, history rewrite, bulk repair,
+   or any `--apply --confirm` command.
+5. Never copy world-local evolution back into a reusable card unless explicitly asked.
+6. Verify the returned identifier and stored result after every write.
 
-1. Prefer API or CLI operations over direct JSON edits.
-2. Run read-only audit, diagnosis, or planning before structural repair.
-3. Apply only the scope the user requested.
-4. Obtain explicit confirmation before deletion, history rewrite, bulk repair, or any command carrying --apply --confirm.
-5. Never overwrite production story history unless the user explicitly requests that exact history edit.
-6. Never copy world-local evolved profiles back into library cards unless the user explicitly asks to revise the reusable template.
-7. After a write, read the affected API or file and verify the result.
+Small UI-equivalent changes explicitly requested by the user, such as attaching
+one card or adding one lore entry, do not need a second planning round.
 
-Small UI-equivalent operations explicitly requested by the user, such as attaching a card, setting a persona, or adding one lore entry, may run without a separate planning round.
+## CLI Results
 
-## Prompt Ownership
+- Use `--json` whenever supported.
+- Treat `ok`, returned identifiers, and verification fields as authoritative.
+- Do not infer success from decorative terminal prose.
+- Use `doctor --json` for availability or routing uncertainty.
 
-Global narration format, punctuation, sentence boundaries, dialogue markup, language selection, and output length belong only to the runtime output protocol in actor.py.
+## Prompt Boundary
 
-Do not duplicate those rules in:
-
-- character-card system_prompt;
-- post_history_instructions;
-- worldbook entries;
-- director notes;
-- story-profile memory;
-- story history.
-
-Character cards own character identity and behavior. Worldbooks own world facts. Story state owns current events. Runtime protocol owns output form.
+Global language, punctuation, dialogue markup, formatting, and output length
+belong only to the runtime protocol. Do not duplicate them in card prompts,
+worldbooks, director notes, story profile, or story history.
 
 ## Security
 
-- Never print or repeat full model or TTS keys.
-- Never expose private user state in reports.
-- Do not modify SOUL.md, greeting.md, credentials, sessions, or persistent worlds during code maintenance.
-- Use tavern-updater for frontend/backend updates; do not improvise update commands in a creative skill.
+- Never reveal full model or TTS keys or private user state.
+- Code maintenance must not alter `SOUL.md`, greeting, credentials, sessions, or
+  persistent worlds.
+- Use `tavern-updater` for application releases; do not improvise `git pull` or
+  overwrite release-managed code from a creative skill.

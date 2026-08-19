@@ -1,7 +1,7 @@
 ---
 name: tavern-ops
-description: Configure models and operate, provision, verify, name, register, or localize Tavern Liveware.
-version: 1.23.16
+description: Configure Tavern models and operate, provision, verify, register, name, or localize Tavern Liveware.
+version: 1.23.17
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -13,45 +13,49 @@ metadata:
 
 # Tavern Operations
 
-## When to Use
+Use this skill for model configuration, runtime health, maintained restart,
+provisioning, Liveware registration, naming, and localization checks. Use
+`tavern-updater` for frontend/backend release changes.
 
-Use this skill for model configuration, health checks, local app restart, provisioning, Liveware naming or localization checks, and operational diagnosis that does not require a code update.
+## Workflow
 
-Use tavern-updater for frontend/backend version changes, merge review, rollback, or release installation.
+1. Run `doctor --json` and inspect the current configuration.
+2. For model changes, test the candidate before selecting or reporting success.
+3. Use maintained scripts for provisioning and restart; do not reconstruct
+   environment variables or kill processes manually.
+4. Verify local health and the requested public behavior.
 
-## Procedure
+## Commands
 
-1. Inspect current health and configuration before changing anything.
-2. For model changes, test the candidate before saving or selecting it.
-3. Never display full credentials.
-4. Restart through the maintained bringup script.
-5. Verify local health, public health when available, process state, and the requested behavior.
-
-Commands:
-
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py model list
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py model test [name]
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py model add <name> --base <url> --model <id> --key <key>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py model use <name>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py model rm <name>
-    sh /opt/data/skills/creative/tavern/scripts/bringup.sh
-    curl -fsS http://127.0.0.1:8799/api/health
+```sh
+CLI=/opt/data/skills/creative/tavern/scripts/tavern_cli.py
+python3 "$CLI" doctor --json
+python3 "$CLI" model list --json
+python3 "$CLI" model test [name] --json
+python3 "$CLI" model add <name> --base <url> --model <id> --key <key> --json
+python3 "$CLI" model use <name> --json
+python3 "$CLI" model rm <name> --json
+sh /opt/data/skills/creative/tavern/scripts/provision.sh
+sh /opt/data/skills/creative/tavern/scripts/bringup.sh
+```
 
 Load only the needed reference:
 
-- references/model-config.md
-- references/liveware-ops.md
-- references/i18n.md
+- `references/model-config.md`
+- `references/liveware-ops.md`
+- `references/i18n.md`
 
-Before a state-changing operation, load the Tavern shared contract.
+Load the shared contract before a state-changing operation.
 
-## Pitfalls
+## Guardrails
 
-- Do not confuse frontend model selection with availability of a server-side key.
-- Do not hardcode a user name or app title when runtime metadata should supply it.
-- Do not restart the entire Hermes gateway for a Tavern-only failure unless evidence points to the gateway.
-- Do not use this skill to overwrite frontend/backend code.
+- Never display a full model or TTS key.
+- Never hardcode agent names, app IDs, domains, or currently available models.
+- Do not confuse frontend selection with server-side credentials.
+- Do not restart the Hermes gateway for an app-only failure without evidence.
+- Do not overwrite release-managed application code from this skill.
 
-## Verification
+## Done When
 
-Health must report ok, the selected model must pass a minimal generation test, and any localization or app metadata change must be checked in both supported interface languages.
+Health is `ok`, the intended model test passes, process/registration state is
+stable, and localization or naming is verified in the affected locale.

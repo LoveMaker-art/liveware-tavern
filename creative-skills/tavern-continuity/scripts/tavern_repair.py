@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ruotang Tavern state repair tool.
+"""Tavern state repair tool.
 
 Plans and applies narrow repairs to production-owned story_state and runtime_cast.
 """
@@ -123,7 +123,7 @@ def story_fix_plan(p, request):
     state = p.get("story_state") or {}
     cast = p.get("runtime_cast") or {}
     system = (
-        "你是若棠的酒馆剧情账本修复器。根据用户的修复请求、当前 story_state、runtime_cast 摘要和最近剧情，"
+        "你是酒馆剧情账本修复器。根据用户的修复请求、当前 story_state、runtime_cast 摘要和最近剧情，"
         "只规划对 story_state 的最小修复。不要改历史对话，不要续写剧情，不要把用户偏好写进剧情状态。"
         "只输出严格 JSON 对象，字段：summary, confidence, risks, operations。"
         "operations 是数组，每项字段：op(add|update|remove), section(scene|facts|objects|open_threads|secrets|timeline|style_notes), "
@@ -164,7 +164,7 @@ def cast_fix_plan(p, request):
     cast = p.get("runtime_cast") or {}
     cards = p.get("cards") or []
     system = (
-        "你是若棠的酒馆角色状态修复器。根据用户请求、runtime_cast、角色卡摘要和最近剧情，"
+        "你是酒馆角色状态修复器。根据用户请求、runtime_cast、角色卡摘要和最近剧情，"
         "只规划对 runtime_cast 的最小修复。不要改 origin_profile，不要改角色库模板，不要改历史对话。"
         "只输出严格 JSON 对象，字段：summary, confidence, risks, operations。"
         "operations 是数组，每项字段：op(add|update|remove), target(character|relationship|user_profile|user_status), "
@@ -419,7 +419,7 @@ def cmd_cast_fix(a):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="tavern_repair", description="若棠酒馆状态修复工具")
+    ap = argparse.ArgumentParser(prog="tavern_repair", description="酒馆状态修复工具")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("story-fix", help="修复剧情账本 story_state；默认只规划，--apply --confirm 后写入")

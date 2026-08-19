@@ -1,68 +1,51 @@
 ---
 name: tavern
-description: Route Tavern requests to one specialist workflow（酒馆路由）.
-version: 1.23.16
+description: Route broad or cross-domain Tavern requests to exactly one specialist workflow.
+version: 1.23.17
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [tavern, 酒馆, routing, story-world]
+    tags: [tavern, 酒馆, routing]
     category: creative
 ---
 
 # Tavern Router
 
-## When to Use
+Use this router only when the request is ambiguous, broad, or crosses Tavern
+domains. For a specific request, load the specialist directly.
 
-Use this skill only when a Tavern request is broad, ambiguous, spans several domains, or explicitly asks which Tavern capability should handle the work.
+## Route By Outcome
 
-If the request is already specific, load the matching specialist directly.
-
-## Procedure
-
-1. Classify the request by its primary outcome.
-2. Load exactly one specialist with skill_view.
-3. Load a second specialist only when the task truly crosses ownership boundaries.
-4. Let the specialist choose its own references and commands.
-
-Routing map:
-
-| User outcome | Specialist |
+| Outcome | Skill |
 | --- | --- |
-| Recommend, find, import, create, localize, expand, rebuild, or repair a world, its character cards, worldbooks, Persona, or opening | tavern-world |
-| Import a world image or design, inspect, apply, or reset a world theme | tavern-world-visuals |
-| Recall a story or manage durable story preferences | tavern-story-profile |
-| Diagnose or repair continuity, compression, cast state, story_state, runtime_cast, prompts, or generation | tavern-continuity |
-| Configure models, restart, verify, or localize Liveware | tavern-ops |
-| Review or install Tavern frontend/backend updates | tavern-updater |
+| Find, import, create, localize, expand, or repair worlds, cards, worldbooks, Persona, or openings | `tavern-world` |
+| Apply or remove a per-world background or visual theme | `tavern-world-visuals` |
+| Recall stories or maintain durable story preferences | `tavern-story-profile` |
+| Diagnose generation, compression, story ledger, runtime cast, or continuity | `tavern-continuity` |
+| Configure models, health, restart, registration, naming, or localization | `tavern-ops` |
+| Review, install, or roll back frontend/backend releases | `tavern-updater` |
 
-Shared command entrypoint:
+## Routing Rules
 
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py <command>
+1. Choose the primary user outcome.
+2. Load exactly one specialist with `skill_view`.
+3. Load another specialist only when a second ownership boundary is genuinely required.
+4. Let the selected specialist choose references and commands.
+5. Before any write, follow `references/shared-contract.md`.
 
-All state-changing specialists must first load:
+Use the shared CLI at:
 
-    skill_view("tavern", "references/shared-contract.md")
+```sh
+python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py <command>
+```
 
-## Pitfalls
+When routing or availability is uncertain, run:
 
-- Do not load every Tavern specialist for one request. That defeats Hermes progressive disclosure.
-- Do not turn this router back into a product manual. Detailed procedures belong to specialist skills.
-- Do not create a bundle containing all Tavern skills. Bundles load every member at once.
-- Do not use tavern-updater for story data, or creative skills for runtime code updates.
+```sh
+python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py doctor --json
+```
 
-## Verification
-
-Confirm the skill index exposes these independent names:
-
-    tavern
-    tavern-world
-    tavern-story-profile
-    tavern-continuity
-    tavern-ops
-    tavern-world-visuals
-
-Test natural-language routing with one request from each row of the routing map.
-Only the selected specialist should be loaded. Card and worldbook requests must
-load `tavern-world`, not a second construction skill.
+Do not load every Tavern skill, duplicate specialist procedures here, or use a
+creative skill to update application code.

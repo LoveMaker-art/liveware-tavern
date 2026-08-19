@@ -197,15 +197,20 @@ class CharacterCardMappingTests(unittest.TestCase):
                 "data": {"description": "No name"},
             })
 
-    def test_skill_contract_names_every_canonical_section(self):
-        contract = (ROOT / "creative-skills/tavern-world/references/field-mapping.md").read_text(
+    def test_skill_contract_requires_verified_card_preparation(self):
+        contract = (ROOT / "creative-skills/tavern-world/references/card-workflow.md").read_text(
             encoding="utf-8")
-        for field in (
-                "profile.identity", "profile.appearance", "profile.personality",
-                "profile.expression", "profile.capabilities", "profile.background",
-                "entry.initial_scenario", "entry.first_message", "entry.example_dialogue",
-                "performance.system_prompt", "performance.post_history_instructions"):
-            self.assertIn(field, contract)
+        for requirement in (
+                "SillyTavern V1, V2, or V3 JSON",
+                "PNG/APNG",
+                "V3 CHARX archives",
+                "inspect-card <artifact> --json",
+                "prepare-card <artifact>",
+                "apply-card-plan /tmp/card-plan.json --confirm",
+                "card-audit <stored-card>",
+                "Character-specific facts stay in the card",
+                "Shared places, factions, rules, and history go to worldbook"):
+            self.assertIn(requirement, contract)
 
 
 if __name__ == "__main__":

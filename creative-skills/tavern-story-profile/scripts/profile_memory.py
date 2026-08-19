@@ -41,7 +41,11 @@ def main():
     edit = sub.add_parser("edit")
     edit.add_argument("preference_id")
     edit.add_argument("text")
-    edit.add_argument("--scope", choices=("tavern", "ruotang_chat", "both"))
+    edit.add_argument(
+        "--scope",
+        choices=("tavern", "agent_chat", "both", "ruotang_chat"),
+        help="Use agent_chat for the current Hermes agent; ruotang_chat is a legacy alias.",
+    )
 
     lock = sub.add_parser("lock")
     lock.add_argument("preference_id")
@@ -73,8 +77,9 @@ def main():
         return _print(story_profile.update_preference(
             STATE, SEED_ACTOR, args.preference_id, status=status))
     if args.command == "edit":
+        scope = "ruotang_chat" if args.scope == "agent_chat" else args.scope
         return _print(story_profile.update_preference(
-            STATE, SEED_ACTOR, args.preference_id, text=args.text, scope=args.scope))
+            STATE, SEED_ACTOR, args.preference_id, text=args.text, scope=scope))
     if args.command == "lock":
         return _print(story_profile.update_preference(
             STATE, SEED_ACTOR, args.preference_id, locked=not args.off))

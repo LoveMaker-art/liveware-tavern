@@ -1,50 +1,49 @@
-# Tavern Diagnostics
+# Continuity Diagnostics
 
-Use this reference when the user says a world feels wrong, output is broken, a model reply is empty, characters are confused, or the user asks why something happened.
-
-Primary command:
+Start with evidence. Do not modify state during diagnosis.
 
 ```sh
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py diagnose "<world name or id>"
+CLI=/opt/data/skills/creative/tavern/scripts/tavern_cli.py
+python3 "$CLI" doctor --json
+python3 "$CLI" diagnose <world> --json
+python3 "$CLI" recall <world> --last 12 --json
+python3 "$CLI" lore-audit <world> --json
 ```
 
-Read-only rule:
+## Ownership Map
 
-- `diagnose` must not modify cards, worlds, story, persona, or worldbooks.
-- It is the first step before proposing fixes when the cause is unclear.
+- Story messages: confirmed visible conversation history.
+- `story_state`: compressed plot facts, timeline, open threads, objects, secrets,
+  and current scene checkpoint.
+- `runtime_cast`: world-local effective profiles, persistent status, and relationships.
+- Library cards: reusable starting templates.
+- Worldbook: shared setting and knowledge boundaries.
+- Runtime protocol: language, dialogue markup, punctuation, and output length.
+- Model/transport: latency, timeout, HTTP errors, and empty upstream responses.
 
-What diagnosis checks:
+## Diagnose By Symptom
 
-- Cast presence and duplicate cards.
-- Empty `char` messages that can poison subsequent generations.
-- `{{user}}` residue in world, cards, or worldbooks.
-- Missing or weak user persona.
-- Missing worldbooks for long-running worlds.
-- Broad or duplicate lore trigger keys.
-- Recent raw actor replies and the runtime output protocol selected for them.
+- Empty or failed reply: inspect health and generation logs before changing prompts.
+- Slow reply: separate prompt assembly, upstream latency, retries, and background
+  checkpoint work. Do not assume context size without measurements.
+- Wrong identity or role: compare Persona, library card, runtime cast, recent
+  messages, and relationship state.
+- Forgotten event: check whether it is in visible history or the story ledger.
+- Lore leak: audit constant, recursive, broad, duplicated, or public-secret entries.
+- Format drift: inspect runtime protocol and raw model output. Do not add duplicate
+  rules to cards, worldbooks, notes, or history.
+- Post-checkpoint drift: compare the latest completed checkpoint, story ledger,
+  and effective cast revision.
 
-How to answer after diagnosis:
+## Runtime Invariants
 
-1. State the concrete findings, not a vague theory.
-2. Separate cause from symptom.
-3. Say whether a fix is read-only, safe edit, or risky edit.
-4. Ask before destructive cleanup or large state rewrites.
+- Checkpoints are background state maintenance; generation must remain one
+  foreground model call.
+- A checkpoint may replace old prompt history only after its ledger update succeeds.
+- Cast updates use the same completed story batch and must not derive durable
+  identity from a summary alone.
+- `origin_profile` is immutable. `profile` is the only effective evolving profile.
+- Multi-character participation is chosen in the single narration generation;
+  no separate turn-planning model call is required.
 
-Follow-up commands:
-
-```sh
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py recall "<world>" --last 12
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py lore-audit "<world>"
-python3 /opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py story-fix "<world>" "<what is wrong>" --plan
-python3 /opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py cast-fix "<world>" "<what is wrong>" --plan
-```
-
-Common interpretations:
-
-- Empty actor replies: clean empty `char` turns before continuing.
-- Role confusion: inspect persona and `{{user}}` residue.
-- Lore pollution: run `lore-audit`; broad keys or recursive entries are common causes.
-- Format drift: inspect the effective runtime protocol, selected language, raw provider response, retries, and latest history. Correct the runtime-owned rule rather than adding prompt fragments to story data.
-- Wrong plot ledger: use `story-fix --plan` from this skill to propose the smallest story_state change; apply only after the user confirms.
-- Wrong character/user status: use `cast-fix --plan` from this skill to propose the smallest runtime_cast change; apply only after the user confirms.
-- **Model timeout with zero output** (no error, no content, just timeout): the model API returns normally on a direct `curl`/`test` call but the tavern generation pipeline times out. This typically means the full prompt is too large — too many cards + worldbook entries + story history. Diagnose with: (1) `recall <world> --last 5` to check history length, (2) count cast members and worldbook entries, (3) test model directly with `model test`. Fix by pruning empty `char` entries, reducing cast if safe, or switching to a model with larger context. Server restart alone will not fix this.
+Report concrete findings, cause, impact, and the narrowest supported correction.

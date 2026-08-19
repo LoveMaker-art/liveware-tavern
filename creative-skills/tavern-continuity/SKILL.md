@@ -1,7 +1,7 @@
 ---
 name: tavern-continuity
 description: Diagnose and safely repair Tavern generation, compression, story-ledger, runtime-cast, prompt, and continuity problems.
-version: 1.23.16
+version: 1.23.17
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -15,53 +15,48 @@ metadata:
 
 ## Scope
 
-Diagnose first; repair only after an explicit user correction or a diagnosis that identifies `story_state` or `runtime_cast` as the failing layer.
+Use this skill to diagnose generation failures, slow or empty replies, context
+compression, story-ledger errors, stale runtime cast, role confusion, and
+continuity drift.
 
-This skill owns:
+- `story_state` owns confirmed plot facts, timeline, objects, secrets, and open threads.
+- `runtime_cast` owns world-local effective character/user profiles and relationships.
+- Runtime output protocol owns language and formatting.
 
-- continuity diagnosis: compression, prompt construction, generation failures, format drift, stale role state;
-- plot-ledger repair: `story_state` scene, facts, objects, secrets, open_threads, timeline, style_notes;
-- cast-state repair: `runtime_cast` character/user status, world-local profile, relationships.
-
-Route elsewhere:
-
-- worldbook trigger pollution → `tavern-world`;
-- durable user taste or RP preference → `tavern-story-profile`;
-- reusable character-card edits → `tavern-world`;
-- model, restart, health, localization → `tavern-ops`;
-- runtime/frontend code changes → updater or engineering workflow.
+Reusable card edits and lore design belong to `tavern-world`; model and process
+health belong to `tavern-ops`.
 
 ## Workflow
 
-1. Read the production and latest output before forming a theory.
-2. Run `diagnose` and, when needed, `recall`.
-3. Separate ownership: character profile, worldbook, story ledger, runtime_cast, runtime protocol.
-4. Report evidence, cause, impact, and the narrowest safe fix.
-5. For state repair, run `story-fix --plan` or `cast-fix --plan`; apply only after explicit user confirmation with `--apply --confirm`, then verify.
+1. Read the target world and latest messages before proposing a cause.
+2. Run `diagnose --json`; use `recall --json` and `lore-audit --json` only when
+   their evidence is relevant.
+3. Identify the failing owner and distinguish symptom, cause, and impact.
+4. Prefer the smallest supported fix. For ledger or cast repair, generate a
+   plan first and show it to the user.
+5. Apply only after explicit confirmation, then diagnose again.
 
 ## Commands
 
 ```sh
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py diagnose <world>
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py recall <world> --last 12
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py lore-audit <world>
-python3 /opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py story-fix <world> "repair request" --plan
-python3 /opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py cast-fix <world> "repair request" --plan
-curl -fsS http://127.0.0.1:8799/api/health
+CLI=/opt/data/skills/creative/tavern/scripts/tavern_cli.py
+REPAIR=/opt/data/skills/creative/tavern-continuity/scripts/tavern_repair.py
+python3 "$CLI" diagnose <world> --json
+python3 "$CLI" recall <world> --last 12 --json
+python3 "$CLI" lore-audit <world> --json
+python3 "$REPAIR" story-fix <world> "correction" --plan
+python3 "$REPAIR" cast-fix <world> "correction" --plan
+python3 "$REPAIR" story-fix <world> "correction" --apply --confirm
+python3 "$REPAIR" cast-fix <world> "correction" --apply --confirm
 ```
 
-## References
-
-Load only what the task needs:
-
-- `references/diagnostics.md` for inconsistent worlds, empty/slow replies, role confusion, lore pollution symptoms, and prompt/generation evidence.
-- `references/runtime-continuity.md` for compression, story ledger, runtime_cast, message segments, and prompt-construction behavior.
-- `references/state-repair.md` before choosing or applying `story-fix`/`cast-fix`.
-- `/opt/data/skills/creative/tavern/references/shared-contract.md` before any state write.
+Load `references/diagnostics.md` for runtime evidence and
+`references/state-repair.md` before a write. Also load the shared contract.
 
 ## Guardrails
 
-- Never rewrite production story history as a state repair.
-- Never edit `origin_profile` or reusable library cards from this skill.
-- Never store user taste, output-format rules, or hidden prompts in `story_state`/`runtime_cast`.
-- Never apply a repair without first showing the plan and receiving explicit confirmation.
+- Never rewrite story messages as a state repair.
+- Never edit `origin_profile` or reusable library cards here.
+- Never place preferences, formatting rules, or hidden corrective prompts into
+  `story_state` or `runtime_cast`.
+- Never apply an ambiguous or low-confidence repair.

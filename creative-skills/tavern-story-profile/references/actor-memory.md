@@ -1,69 +1,51 @@
-# Story Profile, Memory, and Reflection
+# Story Profile And Hermes Projection
 
-Use this reference when the user asks what the story curator remembers, wants to continue a previous tavern world, gives acting feedback, or asks about the story profile.
+## Sources
 
-Commands:
+- `story_profile.json`: canonical active preference profile.
+- `profile_events.jsonl`: append-only audit archive; never injected into prompts.
+- `profile_eras.json`: bounded summaries of older profile phases.
+- `actor_self.md`: rendered compatibility view, not a writable source.
+- Managed blocks in `USER.md` and `MEMORY.md`: bounded projections replaced in place.
+
+Content outside managed marker blocks is not owned by Tavern and must be preserved.
+
+## Preference Boundary
+
+Use `learn` for explicit durable preferences such as pacing, emotional tone,
+interaction density, boundaries, favored tropes, or disliked narrative habits.
+Use `reflect-preview` before uncertain inference. Reflection must not turn a
+single scene, temporary emotion, plot fact, bug report, or tool issue into taste.
+
+Confirmed evidence is model-aggregated into bounded taste fields and concrete
+`response_adaptations` for `USER.md`. These adaptations may guide recommendations,
+story organization, and conversational tone but may not be treated as real-life
+personality evidence.
+
+## Story Memory Boundary
+
+Concrete fictional memories come only from successful story-ledger checkpoints.
+They are projected into `MEMORY.md` as complete, bounded, explicitly fictional
+event lines. General life facts remain ordinary Hermes memory.
+
+Hermes already loads `USER.md` and `MEMORY.md`; do not add a second prompt hook.
+Projection revision changes invalidate only stale prompt snapshots so the next
+turn reloads current memory without deleting messages or changing the session.
+
+## Maintenance
 
 ```sh
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py card
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py recall "<world name or id>" [--last N]
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py learn "<preference learned>" --reason "<why>"
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py reflect "<world name or id>"
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py note "<world name or id>" "<director note>"
-python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py audit
-python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py memory-preview
-python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py memory-sync
-python3 /opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py refresh
+PROFILE=/opt/data/skills/creative/tavern-story-profile/scripts/profile_memory.py
+python3 "$PROFILE" audit
+python3 "$PROFILE" memory-preview
+python3 "$PROFILE" memory-sync
+python3 "$PROFILE" refresh
+python3 "$PROFILE" context
+python3 "$PROFILE" confirm <preference-id>
+python3 "$PROFILE" reject <preference-id>
+python3 "$PROFILE" edit <preference-id> "new text" [--scope tavern|agent_chat|both]
+python3 "$PROFILE" lock <preference-id> [--off]
 ```
 
-Guidance:
-
-- Use `recall` before discussing, judging, or continuing a tavern world. Tavern stories live in runtime state, not in ordinary chat history.
-- If the user says things like "上次那场", "接着昨天", "那条线", or mentions a world/character, recall first and then answer.
-- Use `learn` immediately when the user gives explicit durable story preference: pacing, tone, boundaries, favorite tropes, interaction density, or disliked narrative habits.
-- Use `reflect` after a meaningful scene, when a scene ends, when switching away from a world, or when the user asks to review a scene. It distills durable acting preferences into the actor self layer.
-- Use `note` only for explicit world-specific creative direction such as scene focus, pacing, atmosphere, or relationship tension. Global output form remains runtime-owned.
-- Use `card` when the user asks about the story curator's growth, intimacy, career stats, or what the story curator knows about them.
-
-Story profile behavior:
-
-- The story profile is the story curator's visible growth record, separate from the tavern console.
-- Reference growth naturally. Do not recite metrics unless the user asks.
-- When intimacy reaches a new stage, tell the user briefly and share the story profile liveware URL returned by `card`.
-- Good phrasing is quiet and personal: "我记得你喜欢慢一点，这次我收着走。"
-
-Storage contract:
-
-- `story_profile.json` is the canonical active profile.
-- `profile_events.jsonl` is the complete append-only audit archive and is never injected into a prompt.
-- `profile_eras.json` contains bounded phase summaries generated from archived events.
-- `actor_self.md` is a rendered compatibility view, not a writable source.
-- Fixed Tavern marker blocks in `USER.md` and `MEMORY.md` are projections. Replace them; never append a second copy.
-- `USER.md` may contain a separate, human-maintained interaction section outside the Tavern marker. Preserve it. Technical operating rules belong in `AGENTS.md` or specialist references, not user memory.
-- `MEMORY.md` may contain a small curated shared-history section outside the Tavern marker. Keep it relational and durable; do not store logs, commands, cache details, or transient runtime state.
-- Hermes natively loads `USER.md` and `MEMORY.md` into its system context. Do not add a second prompt hook for these projections.
-- The managed blocks carry a projection revision marker. A successful projection update expires only active ClawChat prompt snapshots that do not contain that revision, so Hermes reloads memory on the next user turn while preserving the conversation.
-
-Memory boundary:
-
-- Tavern acting preferences go through `learn`/`reflect`. When a new durable preference is accepted, the runtime asks the configured model to aggregate the confirmed notes into bounded taste fields and evidence-based `response_adaptations` for `USER.md`.
-- Concrete story memories come only from successful model-generated `story_state.timeline` and `story_state.open_threads` checkpoints. They are projected into `MEMORY.md` as complete bounded lines without program-written semantic summaries.
-- General life facts about the user belong in ordinary Hermes memory, not tavern runtime state.
-- Fictional story events remain explicitly labeled as story memory and must not be treated as real-life facts.
-
-## Reflection Quality
-
-Use `reflect-preview <world>` before writing uncertain memories. It reads the scene and returns what `reflect` would learn without changing `actor_self.md`.
-
-Good memories are durable user preferences: pacing, interaction style, emotional tone, disliked patterns, preferred story angles, or response density.
-
-Do not write one-off plot facts, world state, role relationships, task progress, or model/tool issues into the story profile. Those belong to the world story state, worldbook, bug report, or director note.
-
-Only run `reflect <world>` when the preview is specific enough to guide future play.
-
-## Timeline Retention
-
-- The story-profile page shows the latest eight milestones.
-- Older milestones are grouped into phase summaries; raw events remain in `profile_events.jsonl`.
-- Repeated evidence updates an existing preference instead of creating another visible timeline item.
-- A profile extraction runs in the background after each completed 15-user-turn batch or when leaving a world with an eligible batch. It must not block story generation.
+Preview before manual synchronization. After a write, audit the profile and
+confirm projections remain bounded, attributable, and free of unrelated facts.

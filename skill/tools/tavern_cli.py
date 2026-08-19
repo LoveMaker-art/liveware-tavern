@@ -64,6 +64,8 @@ TAVERN_APPS_FILE = os.environ.get(
     "TAVERN_APPS_FILE",
     os.path.join(TAVERN_STATE_DIR, "apps.json"),
 )
+TAVERN_SKILL_ROOT = os.environ.get("TAVERN_SKILL_ROOT", "/opt/data/skills")
+TAVERN_AGENTS_FILE = os.environ.get("TAVERN_AGENTS_FILE", "/opt/data/AGENTS.md")
 MAX_EXTERNAL_CARD_BYTES = 20 * 1024 * 1024
 
 
@@ -74,6 +76,18 @@ class ChubUnreachable(Exception):
 def _die(msg):
     print("错误：" + msg, file=sys.stderr)
     sys.exit(1)
+
+
+def _print_json(payload):
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _json_result(operation, result=None, **extra):
+    payload = {"ok": True, "operation": operation}
+    if result is not None:
+        payload["result"] = result
+    payload.update(extra)
+    _print_json(payload)
 
 
 def _http(url, data=None, headers=None, timeout=30):
@@ -578,8 +592,34 @@ def cmd_recall(a):
     story = p.get("story", [])
     cards = {c["id"]: c for c in json.loads(_http(CONSOLE + "/api/cards", timeout=15)).get("cards", [])}
     cname = (cards.get(p.get("card_id")) or {}).get("name") or "角色"
-    print(f"=== 世界「{p.get('name')}」（{p['id']}）· 角色 {cname} · 共 {len(story)} 条 ===")
     shown = story[-a.last:] if a.last and len(story) > a.last else story
+    if a.json:
+        messages = []
+        for message in shown:
+            character_id = message.get("character_id") or message.get("card_id")
+            speaker = "用户" if message.get("role") == "user" else (
+                (cards.get(character_id) or {}).get("name") or cname
+            )
+            messages.append({
+                "id": message.get("id"),
+                "role": message.get("role"),
+                "character_id": character_id,
+                "speaker": speaker,
+                "text": message.get("text", ""),
+            })
+        _json_result(
+            "recall",
+            {
+                "world_id": p.get("id"),
+                "world_name": p.get("name"),
+                "total_messages": len(story),
+                "returned_messages": len(messages),
+                "truncated": len(shown) < len(story),
+                "messages": messages,
+            },
+        )
+        return
+    print(f"=== 世界「{p.get('name')}」（{p['id']}）· 角色 {cname} · 共 {len(story)} 条 ===")
     if len(shown) < len(story):
         print(f"（只显示最后 {len(shown)} 条，共 {len(story)}）\n")
     for m in shown:
@@ -591,6 +631,9 @@ def cmd_learn(a):
     # 把用户明确表达的长期故事偏好写入唯一生效的结构化故事档案。
     # 后端会据此刷新受控的 USER.md / MEMORY.md 投射；actor_self.md 不是数据源。
     res = _event({"type": "actor_grow", "change": a.change, "reason": a.reason or ""})
+    if a.json:
+        _json_result("learn", res)
+        return
     print("✅ 已记进故事档案:", res.get("appended", "(已写)"))
 
 
@@ -635,6 +678,14 @@ def cmd_note(a):
         _die(f"没找到世界「{q}」——先 `list` 看有哪些。")
     p = matches[0]
     res = _event({"type": "set_note", "production_id": p["id"], "note": a.note})
+    if a.json:
+        _json_result("note", {
+            "world_id": p.get("id"),
+            "world_name": p.get("name"),
+            "author_note": res.get("author_note") or "",
+            "cleared": not bool(res.get("author_note")),
+        })
+        return
     if res.get("author_note"):
         print(f"✅ 「{p['name']}」导演提示已设：{res['author_note']}")
     else:
@@ -654,6 +705,21 @@ def _active_name():
 
 def cmd_model_list(a):
     configs, active = _models()
+    if a.json:
+        public = []
+        for config in configs:
+            public.append({
+                "id": config.get("id"),
+                "name": config.get("name"),
+                "model": config.get("model"),
+                "base": config.get("base"),
+                "builtin": bool(config.get("builtin")),
+                "key_set": bool(config.get("key_set")),
+                "key_masked": config.get("key_masked"),
+                "active": config.get("id") == active,
+            })
+        _json_result("model.list", {"active_id": active, "configs": public})
+        return
     print("大模型配置（✓ = 当前在用）：")
     for c in configs:
         mark = "✓" if c["id"] == active else "·"
@@ -669,6 +735,16 @@ def cmd_model_add(a):
     res = _event({"type": "model_add", "name": a.name, "base": a.base,
                   "model": a.model, "key": a.key})
     c = res.get("config", {})
+    if a.json:
+        _json_result("model.add", {
+            "id": c.get("id"),
+            "name": c.get("name"),
+            "model": c.get("model"),
+            "base": c.get("base"),
+            "key_masked": c.get("key_masked"),
+            "latency_ms": res.get("latency_ms"),
+        })
+        return
     print(f"✅ 已配好并切换：{c.get('name')} — {c.get('model')}"
           f"（实测通，{res.get('latency_ms')}ms · key {c.get('key_masked')}）")
     print("（跟用户确认时只报名字和 key 尾 4 位，永远不要复述完整 key）")
@@ -676,16 +752,29 @@ def cmd_model_add(a):
 
 def cmd_model_use(a):
     res = _event({"type": "model_use", "id": a.which})
+    if a.json:
+        _json_result("model.use", {"id": res.get("id"), "name": res.get("name")})
+        return
     print(f"✅ 已切换到：{res.get('name')}（下一回合就用它）")
 
 
 def cmd_model_rm(a):
     res = _event({"type": "model_delete", "id": a.which})
+    if a.json:
+        _json_result("model.remove", {"name": res.get("name"), "active_name": _active_name()})
+        return
     print(f"✅ 已删除：{res.get('name')}（当前在用：{_active_name()}）")
 
 
 def cmd_model_test(a):
     res = _event({"type": "model_test", "id": a.which or "builtin"})
+    if a.json:
+        _json_result("model.test", {
+            "model": res.get("model"),
+            "base": res.get("base"),
+            "latency_ms": res.get("latency_ms"),
+        })
+        return
     print(f"✅ 通：{res.get('model')} @ {res.get('base')} · {res.get('latency_ms')}ms")
 
 
@@ -693,6 +782,9 @@ def cmd_card(a):
     # 只读取故事档案材料：了解程度、偏好、最近记录、玩过的角色/题材。
     # 分析与推荐由主理人在聊天中完成，不放在工具层。
     d = json.loads(_http(CONSOLE + "/api/actor_card", timeout=15))
+    if a.json:
+        _json_result("story-profile.read", d)
+        return
     c, it = d.get("career", {}), d.get("intimacy", {})
     print("=== 故事档案材料 ===")
     print(f"了解程度：{it.get('level','初见')} · {it.get('blurb','')}")
@@ -778,6 +870,27 @@ def cmd_profile_audit(a):
     d = _actor_profile()
     c, it = d.get("career", {}), d.get("intimacy", {})
     knows, specs, roles, timeline, signals = _infer_profile_signals(d)
+    if a.json:
+        _json_result("story-profile.audit", {
+            "intimacy": {
+                "level": it.get("level", "初见"),
+                "log_count": it.get("log", 0),
+            },
+            "career": {
+                "world_count": c.get("productions", 0),
+                "turn_count": c.get("turns", 0),
+            },
+            "preferences": knows,
+            "topics": specs,
+            "roles": roles,
+            "signals": [
+                {"label": label, "evidence": evidence}
+                for label, evidence in signals
+            ],
+            "recent_timeline": timeline[:5],
+            "has_recommendation_evidence": bool(knows or specs or roles or signals),
+        })
+        return
     print("=== 推荐信号：故事档案只读分析 ===")
     print(f"了解程度：{it.get('level','初见')} · 世界 {c.get('productions',0)} 个 · 对话 {c.get('turns',0)} 轮 · 成长记录 {it.get('log',0)} 笔")
     print("\n可用偏好：")
@@ -1255,9 +1368,10 @@ def cmd_diagnose(a):
     p, cards, wbs = _world_context(a.world)
     story = p.get("story") or []
     persona = p.get("persona") or {}
-    print(f"=== 诊断：{p.get('name')}（{p.get('id')}）===")
-    print(f"记录：{len(story)} 条 · 用户轮次 {sum(1 for m in story if m.get('role') == 'user')} · 角色 {len(cards)} 位 · 世界书 {len(wbs)} 组")
-    print(f"我的角色：{persona.get('name') or '未设置'}" + ("（有描述）" if persona.get("description") else "（无描述）"))
+    if not a.json:
+        print(f"=== 诊断：{p.get('name')}（{p.get('id')}）===")
+        print(f"记录：{len(story)} 条 · 用户轮次 {sum(1 for m in story if m.get('role') == 'user')} · 角色 {len(cards)} 位 · 世界书 {len(wbs)} 组")
+        print(f"我的角色：{persona.get('name') or '未设置'}" + ("（有描述）" if persona.get("description") else "（无描述）"))
 
     findings = []
     if not cards:
@@ -1296,6 +1410,27 @@ def cmd_diagnose(a):
     if malformed:
         findings.append(("低", f"最近 {len(malformed)} 条角色回复没有旁白星号，可能削弱前端格式显示。"))
 
+    if a.json:
+        _json_result("world.diagnose", {
+            "world": {"id": p.get("id"), "name": p.get("name")},
+            "counts": {
+                "messages": len(story),
+                "user_turns": sum(1 for m in story if m.get("role") == "user"),
+                "cast": len(cards),
+                "worldbooks": len(wbs),
+            },
+            "persona": {
+                "name": persona.get("name"),
+                "has_description": bool(persona.get("description")),
+            },
+            "findings": [
+                {"severity": severity, "message": message}
+                for severity, message in findings
+            ],
+            "healthy": not any(severity == "高" for severity, _message in findings),
+        })
+        return
+
     if not findings:
         print("\n未发现明显结构问题。")
     else:
@@ -1312,6 +1447,57 @@ def cmd_diagnose(a):
 def cmd_lore_audit(a):
     """Read-only audit of worldbook entries and trigger hygiene."""
     p, cards, wbs = _world_context(a.world)
+    if a.json:
+        books = []
+        for wb in wbs:
+            entries = []
+            for i, entry in enumerate(wb.get("entries", []) or [], 1):
+                keys = _entry_keys(entry)
+                content = _entry_content(entry)
+                flags = []
+                if entry.get("constant"):
+                    flags.append("constant")
+                if entry.get("selective"):
+                    flags.append("selective")
+                if entry.get("recursive"):
+                    flags.append("recursive")
+                if not entry.get("enabled", True):
+                    flags.append("disabled")
+                if any(_is_broad_key(key) for key in keys):
+                    flags.append("broad_key")
+                if _has_user_token(entry):
+                    flags.append("user_token")
+                if not content:
+                    flags.append("empty_content")
+                if len(content) > 1200:
+                    flags.append("long_content")
+                item = {
+                    "index": i,
+                    "id": entry.get("uid") or entry.get("id"),
+                    "name": entry.get("name") or entry.get("uid") or entry.get("id") or f"entry-{i}",
+                    "position": entry.get("position") or "after_char",
+                    "keys": keys,
+                    "flags": flags,
+                    "content_length": len(content),
+                }
+                if a.verbose:
+                    item["content_preview"] = content[:300]
+                entries.append(item)
+            books.append({
+                "id": wb.get("id"),
+                "name": wb.get("name", "未命名世界书"),
+                "recursive": bool(wb.get("recursive")),
+                "entries": entries,
+            })
+        _json_result("world.lore-audit", {
+            "world": {"id": p.get("id"), "name": p.get("name")},
+            "cast": [
+                {"id": card.get("id"), "name": card.get("name", "角色")}
+                for card in cards
+            ],
+            "worldbooks": books,
+        })
+        return
     print(f"=== 世界书审计：{p.get('name')}（{p.get('id')}）===")
     if not wbs:
         print("当前世界没有挂载世界书。")
@@ -1497,6 +1683,12 @@ def _resolve_card(q):
 def cmd_new_world(a):
     name = a.name or "未命名世界"
     p = _event({"type": "create_blank_production", "name": name})["production"]
+    if a.json:
+        _json_result("world.create-blank", {
+            "world_id": p.get("id"),
+            "world_name": p.get("name"),
+        })
+        return
     print(f"✅ 已开启世界「{p['name']}」（{p['id']}）")
     print("   下一步可以 `attach-card <世界> <角色>` 加入角色，或 `add-lore <世界> <设定>` 接住设定。")
     print("   Liveware 入口可用 `app-link` 读取。")
@@ -1718,6 +1910,15 @@ def cmd_attach_card(a):
     res = _event({"type": "attach_card", "production_id": p["id"], "card_id": c["id"]})
     p2 = res.get("production", p)
     count = len(p2.get("card_ids") or ([p2.get("card_id")] if p2.get("card_id") else []))
+    if a.json:
+        _json_result("world.attach-card", {
+            "world_id": p2.get("id"),
+            "world_name": p2.get("name"),
+            "card_id": c.get("id"),
+            "card_name": c.get("name"),
+            "cast_count": count,
+        })
+        return
     print(f"✅ 已把「{c.get('name','?')}」加入世界「{p2.get('name','?')}」")
     print(f"   当前登场角色：{count} 位")
 
@@ -1730,6 +1931,17 @@ def cmd_add_lore(a):
     res = _event({"type": "add_lore", "production_id": p["id"], "text": text})
     e = res.get("entry", {})
     keys = "、".join(e.get("keys") or []) or "常驻"
+    if a.json:
+        production = res.get("production", p)
+        _json_result("world.add-lore", {
+            "world_id": production.get("id"),
+            "world_name": production.get("name"),
+            "entry_id": e.get("uid") or e.get("id"),
+            "entry_name": e.get("name"),
+            "keys": e.get("keys") or [],
+            "constant": bool(e.get("constant")),
+        })
+        return
     print(f"✅ 已把设定加入世界「{res.get('production', p).get('name','?')}」")
     print(f"   触发词：{keys}")
 
@@ -1737,6 +1949,25 @@ def cmd_add_lore(a):
 def cmd_list(a):
     prods = _get_productions()
     cards = {c.get("id"): c for c in _get_cards()}
+    if a.json:
+        worlds = []
+        for production in prods:
+            card_ids = production.get("card_ids") or (
+                [production.get("card_id")] if production.get("card_id") else []
+            )
+            worlds.append({
+                "id": production.get("id"),
+                "name": production.get("name"),
+                "message_count": len(production.get("story", [])),
+                "cast": [
+                    {"id": card_id, "name": cards.get(card_id, {}).get("name") or card_id}
+                    for card_id in card_ids if card_id
+                ],
+                "worldbook_ids": production.get("worldbook_ids") or [],
+                "active": bool(production.get("active")),
+            })
+        _json_result("world.list", {"count": len(worlds), "worlds": worlds})
+        return
     if not prods:
         print("还没有世界。用 `new-world --name <名字>` 开空白世界，或 `add <fullPath>` 从角色卡开始。")
         return
@@ -1747,6 +1978,97 @@ def cmd_list(a):
         cast = "，角色 " + "、".join(names[:3]) + ("等" if len(names) > 3 else "") if names else "，暂无角色"
         lore = f"，{len(p.get('worldbook_ids',[]))} 组设定" if p.get("worldbook_ids") else ""
         print(f"  · {p.get('name','?')}（{p.get('id')}，{len(p.get('story',[]))} 条记录{cast}{lore}）")
+
+
+def _probe_endpoint(path):
+    url = CONSOLE + path
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=8) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        return {"ok": True, "status": response.status, "body": body}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def _read_skill_version(relative_path):
+    path = os.path.join(TAVERN_SKILL_ROOT, relative_path, "SKILL.md")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            head = handle.read(1000)
+    except OSError:
+        return None
+    match = re.search(r"^version:\s*['\"]?([^'\"\s]+)", head, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def cmd_doctor(a):
+    """Read-only check for the local runtime, skill versions, and routing drift."""
+    probes = {
+        name: _probe_endpoint(path)
+        for name, path in (
+            ("health", "/api/health"),
+            ("worlds", "/api/productions"),
+            ("cards", "/api/cards"),
+            ("models", "/api/models"),
+        )
+    }
+    skill_versions = {
+        name: _read_skill_version(path)
+        for name, path in (
+            ("tavern", "creative/tavern"),
+            ("tavern-world", "creative/tavern-world"),
+            ("tavern-continuity", "creative/tavern-continuity"),
+            ("tavern-story-profile", "creative/tavern-story-profile"),
+            ("tavern-ops", "creative/tavern-ops"),
+            ("tavern-updater", "system/tavern-updater"),
+        )
+    }
+    try:
+        with open(TAVERN_AGENTS_FILE, encoding="utf-8") as handle:
+            agents_text = handle.read()
+    except OSError as exc:
+        agents_text = ""
+        agents_error = str(exc)
+    else:
+        agents_error = None
+    forbidden_claims = [
+        phrase
+        for phrase in ("safe current variables", "MVU variable state")
+        if phrase in agents_text
+    ]
+    health = probes["health"].get("body") or {}
+    result = {
+        "console": CONSOLE,
+        "runtime": {
+            "reachable": probes["health"]["ok"],
+            "model": health.get("model"),
+            "model_key_set": bool(health.get("key_set")),
+            "background_jobs": health.get("background_jobs") or {},
+        },
+        "endpoints": {
+            name: {key: value for key, value in probe.items() if key != "body"}
+            for name, probe in probes.items()
+        },
+        "skill_versions": skill_versions,
+        "routing": {
+            "agents_file_readable": agents_error is None,
+            "agents_file_error": agents_error,
+            "unsupported_capability_claims": forbidden_claims,
+        },
+    }
+    ok = all(probe["ok"] for probe in probes.values()) and not forbidden_claims and agents_error is None
+    payload = {"ok": ok, "operation": "doctor", "result": result}
+    if a.json:
+        _print_json(payload)
+        return
+    print("Tavern 自检：" + ("通过" if ok else "发现问题"))
+    print(f"运行时：{'可用' if result['runtime']['reachable'] else '不可用'} · 模型 {result['runtime']['model'] or '未知'}")
+    print("技能版本：" + " · ".join(f"{name}={version or '未知'}" for name, version in skill_versions.items()))
+    if forbidden_claims:
+        print("路由文档仍声明未支持能力：" + "、".join(forbidden_claims))
+    if agents_error:
+        print("AGENTS.md 不可读：" + agents_error)
 
 
 def main():
@@ -1809,6 +2131,7 @@ def main():
 
     s = sub.add_parser("new-world", help="开启空白世界")
     s.add_argument("--name", help="世界名")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_new_world)
 
     s = sub.add_parser("build-world", help="从一份清单原子创建完整世界；默认只预览")
@@ -1832,20 +2155,25 @@ def main():
     s = sub.add_parser("attach-card", help="把角色库里的角色加入一个世界")
     s.add_argument("world", help="世界 id 或名字片段")
     s.add_argument("card", help="角色卡 id 或名字片段")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_attach_card)
 
     s = sub.add_parser("add-lore", help="把自然语言设定整理进一个世界")
     s.add_argument("world", help="世界 id 或名字片段")
     s.add_argument("text", help="自然语言设定")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_add_lore)
 
     s = sub.add_parser("list", help="列出世界")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_list)
 
     s = sub.add_parser("card", help="读主理人的故事档案（生涯/亲密度/对用户的了解/成长）——自我觉察")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_card)
 
     s = sub.add_parser("profile-audit", help="把故事档案整理成推荐世界/角色时可用的偏好信号（只读）")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_profile_audit)
 
     s = sub.add_parser("recommend", help="结合故事档案、当前世界和角色库给一个可落地推荐（只读）")
@@ -1882,11 +2210,13 @@ def main():
     s = sub.add_parser("recall", help="读某世界在酒馆里走过什么（主理人读酒馆对话的唯一入口）")
     s.add_argument("production", help="世界 id 或名字片段")
     s.add_argument("--last", type=int, default=40, help="只看最后 N 条（默认 40）")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_recall)
 
     s = sub.add_parser("learn", help="把用户明确表达的长期故事偏好记进结构化故事档案")
     s.add_argument("change", help="学到/调整了什么，如「用户爱慢热的戏、回复别太长」")
     s.add_argument("--reason", help="人话理由")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_learn)
 
     s = sub.add_parser("reflect", help="复盘某世界的故事 → 模型提炼可复用偏好 → 写进结构化故事档案")
@@ -1900,15 +2230,18 @@ def main():
     s = sub.add_parser("note", help="设/清世界的导演提示(作者注释:场景方向,贴近生成点注入)")
     s.add_argument("production", help="世界 id 或名字片段")
     s.add_argument("note", help="导演提示,如当前场景焦点、关系张力或推进意图；空串清除")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_note)
 
     s = sub.add_parser("diagnose", help="诊断一个世界的角色/世界书/persona/剧情结构问题（只读）")
     s.add_argument("world", help="世界 id 或名字片段")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_diagnose)
 
     s = sub.add_parser("lore-audit", help="审计世界书触发词、常驻、递归和污染风险（只读）")
     s.add_argument("world", help="世界 id 或名字片段")
     s.add_argument("--verbose", action="store_true", help="显示每条设定内容前 300 字")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     s.set_defaults(fn=cmd_lore_audit)
 
     s = sub.add_parser("lore-fix", help="根据世界书审计生成修复方案；--apply --confirm 做保守机械修复")
@@ -1921,22 +2254,31 @@ def main():
     s = sub.add_parser("model", help="大模型配置:帮用户配/切/删自定义 API(add 先实测再落盘)")
     ms = s.add_subparsers(dest="mcmd", required=True)
     m = ms.add_parser("list", help="列全部配置(✓=当前在用)")
+    m.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     m.set_defaults(fn=cmd_model_list)
     m = ms.add_parser("add", help="加一份配置:实测通过才落盘,并自动切换过去(同名=更新)")
     m.add_argument("name", help="给配置起个名(如 DeepSeek / Kimi / 本地Ollama)")
     m.add_argument("--base", required=True, help="OpenAI-compatible base_url(到 /v1 为止)")
     m.add_argument("--model", required=True, help="model id(如 deepseek-chat / kimi-k2)")
     m.add_argument("--key", required=True, help="API key(只落酒馆 state 文件,不外传)")
+    m.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     m.set_defaults(fn=cmd_model_add)
     m = ms.add_parser("use", help="切换在用配置(名字或 id;「内置模型」= 切回默认)")
     m.add_argument("which", help="配置名 / id / 内置模型")
+    m.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     m.set_defaults(fn=cmd_model_use)
     m = ms.add_parser("rm", help="删一份配置(删的是在用的会自动回落内置模型)")
     m.add_argument("which", help="配置名 / id")
+    m.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     m.set_defaults(fn=cmd_model_rm)
     m = ms.add_parser("test", help="实测某配置通不通(不给参数=测内置模型)")
     m.add_argument("which", nargs="?", help="配置名 / id;缺省=内置模型")
+    m.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     m.set_defaults(fn=cmd_model_test)
+
+    s = sub.add_parser("doctor", help="只读检查运行时、技能版本和路由能力声明")
+    s.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    s.set_defaults(fn=cmd_doctor)
 
     a = ap.parse_args()
     a.fn(a)

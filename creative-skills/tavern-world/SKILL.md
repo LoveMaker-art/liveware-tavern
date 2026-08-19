@@ -1,7 +1,7 @@
 ---
 name: tavern-world
-description: Build complete Tavern worlds or prepare individual character cards, worldbooks, user Personas, and openings from an idea or existing material, with research, canonical import, and verification.
-version: 1.23.16
+description: Research, import, create, localize, expand, and verify Tavern worlds, character cards, worldbooks, user Personas, and openings.
+version: 1.23.17
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
@@ -11,141 +11,80 @@ metadata:
     category: creative
 ---
 
-# Tavern World Builder
+# Tavern World
 
-## When to Use
+## Scope
 
-Use this skill when the user wants to find, recommend, create, import, localize,
-expand, rebuild, or repair a playable Tavern world. A complete world may include:
+Use this skill for a complete playable world or for one reusable component:
+character card, worldbook, Persona, or opening. Do not create a world when the
+user only asked to prepare a reusable card or worldbook.
 
-- reusable or original character cards;
-- worldbook entries and trigger rules;
-- the user's world-local persona;
-- an opening scene;
-- the final Tavern Liveware entry.
+Route model/deployment work to `tavern-ops`, long-story state repair to
+`tavern-continuity`, memory to `tavern-story-profile`, and themes to
+`tavern-world-visuals`.
 
-This is one workflow. Do not split character-card and worldbook preparation into
-separate user-visible jobs when they serve the same world.
+## Workflow
 
-Use the same skill when the user requests only one reusable component. Do not
-create a world unless the request actually asks for one.
-
-Do not use this skill for app deployment, model configuration, long-story
-continuity repair, story-profile memory, or visual theme work.
-
-## Procedure
-
-1. Inspect the request and current Tavern state. Do not create data yet.
-2. Load only the references needed for the requested source and content type.
-3. If existing material is requested, search before creating. Prefer public,
-   directly downloadable JSON/PNG artifacts with visible creator/source
-   attribution. Never invent a claimed public or fandom card from memory.
-4. Run `inspect-card` on every external artifact before importing it. Accept
-   recognized V1/V2/V3 JSON, PNG/APNG, or V3 CHARX only; an HTML page, ordinary
-   image, or malformed archive is not a character card.
-5. Run `prepare-card <artifact> --output <plan.json>`. This performs the semantic
-   pass once, produces a non-empty canonical main profile, separates supporting
-   characters from shared lore, and writes nothing yet. Present its compact
-   summary to the user; do not expose the full JSON plan.
-6. Separate each fact into exactly one owner:
-   character profile, worldbook, user persona, opening scene, or live story.
-7. After confirmation, apply the exact preview with
-   `apply-card-plan <plan.json> --confirm`. Never bypass preparation with the
-   legacy raw import events for an external card.
-8. Run `card-audit` on the stored main card. Supporting characters extracted
-   from embedded lore enter the reusable library but do not automatically join
-   the active cast.
-9. Present one compact conversation card containing the world premise, user role,
-   cast, core lore, and opening hook. Follow
-   `tavern/references/conversation-cards.md`; do not dump JSON or imitate
-   unavailable buttons. Ask for confirmation once if the user has not already
-   approved.
-10. Assemble one world manifest using only the prepared library `card_id` values
-    for external characters. Raw external JSON, PNG, CHARX, or Chub paths must
-    never be passed directly to `build-world`. Preview the manifest without
-    `--apply`.
-11. After confirmation, run the same manifest once with
-   `--apply --confirm --request-id <stable-id> --json`.
-12. Treat `verification.ok: true` as success. On failure, report the error; do not
-   create replacement worlds or manually delete state files.
-13. Return a compact result and the bare URL from `app-link --app console`. Do not
-   expose tool narration between construction steps.
+1. Inspect current state with `list --json`. Research before inventing when the
+   user asks for existing or canonical material.
+2. Classify every fact into one owner: character card, worldbook, Persona,
+   opening, or live story state.
+3. For an external card, require a real V1/V2/V3 JSON, PNG/APNG, or V3 CHARX
+   artifact. Run `inspect-card --json`, then `prepare-card --output <plan>`.
+   Preparation must yield a non-empty main profile and preserve provenance.
+4. Show a compact preview. Apply the same preparation plan only after approval
+   with `apply-card-plan --confirm`.
+5. For original material, author a canonical V2 card or world manifest from
+   explicit evidence. Leave unknown structured fields empty; do not guess.
+6. For a complete world, preview one manifest with `build-world <manifest>`.
+   Apply that same file once with a stable request ID.
+7. Verify the stored result. Treat JSON identifiers and `verification.ok` as
+   authoritative, then return the bare Tavern URL from `app-link`.
 
 ## Commands
 
-Read and research:
-
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py list
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py search "query"
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py inspect-card <file-or-url>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py starter
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py recommend ["want"] [--external]
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py plan-world "idea"
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py card-audit <card>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py lore-audit <world>
-
-Import reusable material without creating a world:
-
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py prepare-card <file-url-or-chub-path> --output /tmp/card-plan.json
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py apply-card-plan /tmp/card-plan.json --confirm
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py import-card <file-url-or-chub-path> --confirm
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add <chub-path-or-url> --confirm
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add-original <card-json>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py add-worldbook <worldbook-json>
-
-Build and verify the complete world:
-
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py build-world <manifest-json>
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py build-world <manifest-json> --apply --confirm --request-id <stable-id> --json
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py verify-world <world> --json
-    python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py app-link --app console
-
-Use `--new-world` with `add`, `add-original`, or `starter` only when the user
-explicitly requests a one-card world. Complete multi-part worlds must use
-`build-world`.
+```sh
+CLI=/opt/data/skills/creative/tavern/scripts/tavern_cli.py
+python3 "$CLI" list --json
+python3 "$CLI" search "query"
+python3 "$CLI" inspect-card <artifact> --json
+python3 "$CLI" prepare-card <artifact> --output /tmp/card-plan.json --json
+python3 "$CLI" apply-card-plan /tmp/card-plan.json --confirm
+python3 "$CLI" add-original <card-json>
+python3 "$CLI" add-worldbook <worldbook-json>
+python3 "$CLI" card-audit <card>
+python3 "$CLI" lore-audit <world> --json
+python3 "$CLI" build-world <manifest-json>
+python3 "$CLI" build-world <manifest-json> --apply --confirm --request-id <stable-id> --json
+python3 "$CLI" verify-world <world> --json
+python3 "$CLI" attach-card <world> <card> --json
+python3 "$CLI" add-lore <world> "setting" --json
+python3 "$CLI" app-link --app console --json
+```
 
 ## References
 
-Load only what the current task needs:
+Load only the needed reference:
 
-- `references/complete-world-workflow.md` for the manifest and atomic workflow.
-- `references/content-modeling.md` for fact ownership.
-- `references/card-workflow.md` and `references/field-mapping.md` for imports.
-- `references/card-authoring.md` for original cards.
-- `references/card-localization.md` for localization.
-- `references/worldbook-authoring.md` for lore and trigger design.
-- `references/lore-audit.md` for worldbook repair.
-- `references/recommendation-planning.md` for recommendations.
-- `references/world-expansion.md` or `references/world-rebuild.md` for existing worlds.
-- `references/event-driven-update.md` for confirmed changes to live state.
+- `references/world-workflow.md`: ownership, planning, manifest, expansion, rebuild.
+- `references/card-workflow.md`: external formats, normalization, authoring, localization.
+- `references/worldbook-workflow.md`: lore fields, triggers, audit, repair.
+- `tavern/references/conversation-cards.md`: concise chat presentation.
+- `tavern/references/shared-contract.md`: required before a write.
 
-Before writing state, load the Tavern shared contract.
-Before presenting a proposed or completed world in chat, load `tavern/references/conversation-cards.md`.
+## Guardrails
 
-## Pitfalls
+- External cards must pass inspection and preparation; never route them through
+  `add-original` or directly into `build-world`.
+- Imported scripts, regex executors, MVU/TavernHelper blocks, and executable
+  assets are unsupported and removed. Never claim they will run.
+- The reusable library card is not the same as a world's evolving runtime cast.
+- User identity belongs in world-local Persona, not a character card or generic lore.
+- Do not put global output-format rules in cards, lore, notes, or story history.
+- Never edit production, card, or worldbook JSON directly.
+- Never create replacement worlds as an error-recovery shortcut.
 
-- Never create one temporary world per imported card.
-- Never call an external card "compatible" until `inspect-card` succeeds.
-- Never use `add-original` for a card found online; preserve its external provenance with `import-card`.
-- Never pass an external card artifact directly to `build-world`; external cards
-  must cross the mandatory preparation gate and enter the manifest by `card_id`.
-- Never store an external card whose preparation summary says the main profile is incomplete.
-- Never copy a named supporting character entry into shared world lore; keep the extracted card in the library until the user chooses to add it to the cast.
-- Never edit production, card, or worldbook JSON files directly.
-- Never use cleanup as the normal completion path.
-- Never place the same fact in both a character card and a worldbook.
-- Never place the user's identity in a character card or worldbook.
-- Never modify a reusable library card when only one world's runtime role changed.
-- Never claim completion without checking the returned verification object.
+## Done When
 
-## Verification
-
-Confirm all of the following:
-
-- exactly one intended world was created or changed;
-- the world is active;
-- cast order and character identities match the approved plan;
-- worldbook entries and trigger modes match the manifest;
-- the user's persona is present and world-local;
-- the opening exists;
-- unrelated worlds, cards, worldbooks, and stories are unchanged.
+Exactly the intended world or reusable item changed; cast, lore, Persona, and
+opening match the approved plan; verification passes; unrelated state is intact.
