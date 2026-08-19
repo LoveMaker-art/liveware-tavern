@@ -1,41 +1,72 @@
-# Liveware Tavern
+# Tavern
 
 > [!IMPORTANT]
-> **Nora-specific component, not a universal Agent plugin.** This repository is the source and release channel for the Tavern component built specifically for **Nora**, the author's own Hermes Agent on ClawChat. The installer and updater are intended only for official Nora instances and mirrors derived from the Nora image. They are not supported as a way to add Tavern to an arbitrary Hermes or ClawChat Agent.
+> **Tavern is an open-source, agent-compatible multi-character storytelling system.** The core runtime can run as an independent web application, integrate with an Agent through its HTTP API or command-line tools, or be exposed inside ClawChat through the optional Liveware adapter.
 >
-> **这是诺拉的专属组件，并非通用 Agent 插件。** 本仓库是作者自己的 ClawChat Hermes Agent「诺拉」所使用的酒馆组件及其版本发布渠道。安装器和更新器仅面向官方诺拉实例，以及基于诺拉镜像创建的实例；不能将其理解为给任意 Hermes 或 ClawChat Agent 一键添加酒馆的通用方案。
+> **Tavern 是一个开源、可适配 Agent 的多角色互动故事系统。** 核心运行时可以作为独立 Web 应用运行，也可以通过 HTTP API 或命令行工具接入 Agent；在 ClawChat 中，还可以选择使用 Liveware 适配层作为应用入口。
 
-Liveware Tavern is Nora's stateful, multi-character story application. It combines reusable character cards, worldbooks, per-world personas, long-story memory, model selection, and a mobile-friendly Liveware console.
+Tavern is not defined by Liveware. Its core consists of a stateful Python runtime, a browser frontend, and a local JSON data layer. It provides reusable character cards, worldbooks, per-world personas, multi-character conversations, long-story continuity, model selection, text-to-speech, and mobile-friendly reading and interaction.
 
-## Project Scope
+Liveware is one optional delivery channel for ClawChat. Hermes skills are one first-party Agent integration. Neither is required to run the core Tavern application.
 
-Supported use:
+## Architecture
 
-- Updating an official Nora instance.
-- Updating a mirrored instance originally created from the Nora image.
-- Reviewing or adapting the source under the terms of the AGPL license.
+Tavern is divided into three layers:
 
-Not supported:
+1. **Core runtime** - `server.py`, the browser frontend in `web/`, model access, and state stored under `TAVERN_STATE_DIR`. This layer can run independently.
+2. **Agent integration** - the included Hermes skills let an Agent create worlds, import and normalize cards, manage continuity, operate the application, and update the system. Other Agent frameworks can integrate through the same HTTP API or CLI with their own adapter.
+3. **ClawChat integration** - the optional Hook, Liveware registration, and tunnel expose the running application inside ClawChat. They are not part of the core execution requirement.
 
-- Installing Tavern directly into an unrelated Hermes or ClawChat Agent.
-- Treating the included skills, `AGENTS.md`, hooks, runtime, or identity integration as a drop-in general-purpose package.
-- Assuming compatibility with another Agent's personality, memory layout, skills, Liveware registration, or existing application data.
+Agent-compatible does not mean that one framework-specific installer can configure every Agent automatically. The core runtime is reusable; the included skills, Hook, `AGENTS.md`, and updater target the Hermes `/opt/data` layout. Other Agent frameworks should keep the runtime and provide an adapter for their own tool, identity, memory, and lifecycle conventions.
 
-The source is public for transparency, version delivery, and licensed adaptation. Integrating it into another Agent requires an independent compatibility review and corresponding code changes; the release installer does not perform that adaptation.
+## Deployment Modes
+
+### Standalone Web Application
+
+The standalone runtime needs Python 3, PyYAML, a writable state directory, and an OpenAI-compatible chat-completions endpoint.
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r skill/requirements.txt
+
+export TAVERN_STATE_DIR="$PWD/tavern-state"
+export TAVERN_MODEL_BASE="https://your-model-provider.example/v1"
+export TAVERN_MODEL_KEY="your-api-key"
+export TAVERN_MODEL="deepseek-v4-flash"
+export TAVERN_HOST="127.0.0.1"
+
+python3 skill/server.py --port 8799
+```
+
+Open `http://127.0.0.1:8799/` in a browser. The bundled official text-model identifier is `deepseek-v4-flash`; other OpenAI-compatible models can be added through Tavern's custom-model configuration. ClawChat identity sync, Liveware registration, and Agent-managed workflows are unavailable unless their adapters are installed.
+
+### Hermes Agent Integration
+
+The repository includes a Tavern routing skill and specialist Hermes skills for world construction, continuity, story profiles, operations, and visual customization. The managed release layout places the runtime under `/opt/data/apps/tavern-runtime`, persistent state under `/opt/data/tavern-state`, and skills under `/opt/data/skills`.
+
+The bundled updater performs a compatibility review before replacing managed runtime, frontend, skill, and `AGENTS.md` files. Instance data remains outside the release boundary.
+
+### ClawChat Liveware Integration
+
+On ClawChat, the optional gateway-startup Hook provisions or restores the Liveware applications, starts the same Tavern runtime, binds the tunnel, and registers the Tavern and Story Profile entries. The browser application and its data remain the same core Tavern system used in standalone mode.
 
 ## Repository Layout
 
-- `skill/` - Tavern runtime, frontend source, and state-free offline starter cards.
-- `creative-skills/` - The lightweight Tavern router plus five specialist Hermes skills.
-- `updater-skill/` - Independent Hermes skill for verified in-place updates from GitHub Releases.
-- `bootstrap/` - One-time installer for legacy instances that do not have `tavern-updater` yet.
-- `scripts/build_release.py` - Builds the signed-by-hash release assets consumed by the updater.
+- `skill/` - Core Tavern runtime, browser frontend, state-free starter content, and compatibility references.
+- `creative-skills/` - The Tavern router and specialist Hermes Agent skills.
+- `updater-skill/` - Verified in-place updater for the managed Hermes deployment layout.
+- `bootstrap/` - Installer that refreshes the updater before a managed update review.
+- `scripts/build_release.py` - Builds hash-manifested release assets.
+- `tests/` - Runtime, API, import, continuity, security, and frontend tests.
 
 ## Data Boundary
 
-Application releases never contain or overwrite instance data. User worlds, cards, worldbooks, stories, model choices, app registration, and identity state live under `/opt/data/tavern-state` on each instance.
+Application releases never contain or overwrite instance data. In the managed Hermes layout, user worlds, cards, worldbooks, stories, model choices, app registration, and identity state live under `/opt/data/tavern-state`.
 
 Credentials, ClawChat databases, sessions, logs, `.env` files, and `/opt/data/config.yaml` are not part of this repository or release archives.
+
+In standalone deployments, set `TAVERN_STATE_DIR` to choose the persistent data location.
 
 ## Build A Release
 
@@ -57,17 +88,13 @@ dist/baseline-v1.14.12-manifest.json
 dist/tavern-baseline-v1.14.12.tar.gz
 ```
 
-Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Nora mirrors can then update the runtime, atomically replace the exact six official creative-skill directories, delete the two obsolete construction-skill directories, update the updater, and replace the complete release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical-baseline assets let legacy Nora instances complete the same three-way review when their original version predates this repository's stable Releases.
+Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Managed Hermes deployments can then update the runtime, atomically replace the official creative-skill directories, remove obsolete managed skill directories, update the updater, and replace the release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical baselines allow older managed deployments to complete the same three-way review.
 
-## Bootstrap A Legacy Instance
+## Bootstrap A Managed Hermes Deployment
 
-Download `tavern-updater-bootstrap.py` and `bootstrap-manifest.json` from the
-latest stable GitHub Release. Verify the script SHA256 against the manifest,
-then run it with Python 3. The bootstrap backs up and refreshes only the updater
-skill, then automatically generates `check`, `review`, and `report` output with
-the target release's own compatibility rules. It does not replace
-`/opt/data/AGENTS.md`, runtime code, creative skills, frontend code, or user data
-during review, and never applies the Tavern update without explicit approval.
+Download `tavern-updater-bootstrap.py` and `bootstrap-manifest.json` from the latest stable GitHub Release. Verify the script SHA256 against the manifest, then run it with Python 3. The bootstrap backs up and refreshes only the updater skill, then generates `check`, `review`, and `report` output using the target release's compatibility rules.
+
+During review it does not replace `/opt/data/AGENTS.md`, runtime code, creative skills, frontend code, or user data, and it never applies the Tavern update without explicit approval.
 
 Release assets use these stable names:
 
@@ -77,26 +104,23 @@ https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/instal
 https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/bootstrap-manifest.json
 ```
 
-One-command installation and update for an official Nora instance or Nora-derived mirror:
+One-command installation and update for a compatible Hermes `/opt/data` deployment:
 
 ```sh
 curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
-Do not run this command on an unrelated Agent. On a supported Nora instance,
-running it is the user's explicit authorization to install the reported
-conflict-free update. Merge conflicts or failed health checks stop the process;
-application failures restore the previous managed files.
+Running this command is explicit authorization to install the reported conflict-free update. Merge conflicts or failed health checks stop the process; application failures restore the previous managed files. For a non-Hermes Agent or a different filesystem layout, use the standalone runtime and build a framework-specific adapter instead of running this installer unchanged.
 
 ## Install The Updater Skill Manually
 
-Place `updater-skill/` at:
+For the managed Hermes layout, place `updater-skill/` at:
 
 ```text
 /opt/data/skills/system/tavern-updater/
 ```
 
-Nora can then check and install a verified stable release after explicit user confirmation. Every update review starts through the verified Bootstrap, even when the updater is already installed, so managed-file additions or removals can never make an older updater reject a newer release format before it has refreshed itself.
+The Agent can then check and install a verified stable release after explicit user confirmation. Every update review starts through the verified Bootstrap, even when the updater is already installed, so managed-file additions or removals cannot make an older updater reject a newer release format before refreshing itself.
 
 ## License
 
