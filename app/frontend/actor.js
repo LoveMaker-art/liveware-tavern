@@ -5,6 +5,9 @@
 'use strict';
 const t = I18N.t;
 const { escapeHtml: esc, safeSameOriginTarget } = TavernUI;
+let personalityRevision = '';
+let personalityOriginal = '';
+let personalityMaxChars = 20000;
 
 async function loadIdentity() {
   try {
@@ -78,11 +81,88 @@ function render(d) {
       <div class="acAvatar">✦</div>
       <div class="acName">${esc(d.name || t('acNameFallback'))}</div>
       <div class="acTagline">${esc(d.tagline || '')}</div>
+      <button id="personalityOpen" class="acPersonalityOpen hidden" type="button">${esc(t('personalityOpen'))}</button>
     </div>
     <div class="acStats">${stats}</div>
     ${intimacy}
     ${knowsBlock}
     ${timelineBlock}`;
+  setupPersonalityEntry();
+}
+
+async function setupPersonalityEntry() {
+  const button = document.getElementById('personalityOpen');
+  if (!button) return;
+  try {
+    const response = await fetch('/api/personality');
+    const data = await response.json();
+    if (!response.ok || !data.supported) return;
+    button.classList.remove('hidden');
+    button.onclick = () => openPersonality(data);
+  } catch (_) {}
+}
+
+function personalityDirty() {
+  return document.getElementById('personalityContent').value !== personalityOriginal;
+}
+
+function updatePersonalityCount() {
+  const size = document.getElementById('personalityContent').value.length;
+  document.getElementById('personalityCount').textContent = `${size} / ${personalityMaxChars}`;
+}
+
+function openPersonality(data) {
+  personalityRevision = data.revision || '';
+  personalityOriginal = data.content || '';
+  personalityMaxChars = Number(data.max_chars) || 20000;
+  const input = document.getElementById('personalityContent');
+  input.maxLength = personalityMaxChars;
+  input.value = personalityOriginal;
+  document.getElementById('personalityStatus').textContent = '';
+  updatePersonalityCount();
+  const editor = document.getElementById('personalityEditor');
+  editor.classList.remove('hidden');
+  editor.setAttribute('aria-hidden', 'false');
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(0, 0);
+  input.scrollTop = 0;
+}
+
+function closePersonality(force = false) {
+  if (!force && personalityDirty() && !confirm(t('personalityDiscard'))) return;
+  const editor = document.getElementById('personalityEditor');
+  editor.classList.add('hidden');
+  editor.setAttribute('aria-hidden', 'true');
+}
+
+async function savePersonality() {
+  const input = document.getElementById('personalityContent');
+  const button = document.getElementById('personalitySave');
+  const status = document.getElementById('personalityStatus');
+  if (!input.value.trim()) {
+    status.textContent = t('personalityEmpty');
+    return;
+  }
+  button.disabled = true;
+  status.textContent = t('personalitySaving');
+  try {
+    const response = await fetch('/api/personality', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: input.value, revision: personalityRevision }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.code === 'revision_conflict' ? t('personalityConflict') : (data.error || response.status));
+    personalityRevision = data.revision;
+    personalityOriginal = data.content;
+    input.value = data.content;
+    status.textContent = t('personalitySaved');
+    updatePersonalityCount();
+  } catch (error) {
+    status.textContent = t('personalitySaveFailed', { err: error.message || error });
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function load() {
@@ -114,3 +194,7 @@ loadIdentity().finally(() => {
   I18N.applyStatic();
   load();
 });
+
+document.getElementById('personalityContent').addEventListener('input', updatePersonalityCount);
+document.getElementById('personalityCancel').addEventListener('click', () => closePersonality());
+document.getElementById('personalitySave').addEventListener('click', savePersonality);

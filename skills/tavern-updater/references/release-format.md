@@ -49,6 +49,7 @@ runtime/
   memory_cache.py
   message_segments.py
   model_registry.py
+  personality_service.py
   production_views.py
   reply_format.py
   request_security.py
@@ -90,6 +91,8 @@ The separately verified creative-skill archive contains the router and five spec
 ```text
 skills/
   tavern/
+    plugins/
+      tavern-soul-reload/
   tavern-world/
   tavern-story-profile/
   tavern-continuity/

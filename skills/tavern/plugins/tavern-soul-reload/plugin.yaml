@@ -1,0 +1,3 @@
+name: tavern-soul-reload
+version: "1.0"
+description: Reload the Agent personality after Tavern saves SOUL.md.

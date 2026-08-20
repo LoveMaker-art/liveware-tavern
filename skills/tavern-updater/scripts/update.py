@@ -113,6 +113,8 @@ CREATIVE_SKILL_FILES = {
     "tavern/hooks/tavern-liveware-register/HOOK.yaml",
     "tavern/hooks/tavern-liveware-register/handler.py",
     "tavern/hooks/tavern-liveware-register/run.sh",
+    "tavern/plugins/tavern-soul-reload/__init__.py",
+    "tavern/plugins/tavern-soul-reload/plugin.yaml",
     "tavern/references/conversation-cards.md",
     "tavern/references/shared-contract.md",
     "tavern/scripts/bringup.sh",
@@ -225,6 +227,7 @@ MODULAR_RUNTIME_FILES = EXPANDED_RUNTIME_FILES | {
 SINGLE_PASS_RUNTIME_FILES = MODULAR_RUNTIME_FILES - {"turn_plan_service.py"}
 VOICE_CATALOG_RUNTIME_FILES = SINGLE_PASS_RUNTIME_FILES | {"qwen_audio_voices.json"}
 CARD_PREPARATION_RUNTIME_FILES = VOICE_CATALOG_RUNTIME_FILES | {"card_preparation.py"}
+PERSONALITY_RUNTIME_FILES = CARD_PREPARATION_RUNTIME_FILES | {"personality_service.py"}
 STARTER_ASSET_FILES = {
     "assets/fixtures/starter/index.json",
     "assets/fixtures/starter/audrey-barista.png",
@@ -236,7 +239,8 @@ STARTER_ASSET_FILES = {
     "assets/fixtures/starter/reiko-samurai.png",
     "assets/fixtures/starter/yan-buddy.png",
 }
-RUNTIME_FILES = CARD_PREPARATION_RUNTIME_FILES | STARTER_ASSET_FILES
+STARTER_ASSET_RUNTIME_FILES = CARD_PREPARATION_RUNTIME_FILES | STARTER_ASSET_FILES
+RUNTIME_FILES = PERSONALITY_RUNTIME_FILES | STARTER_ASSET_FILES
 OBSOLETE_MANAGED_FILES = {
     "runtime/turn_plan_service.py",
 }
@@ -246,6 +250,7 @@ MODULAR_RUNTIME_VERSION = (1, 22, 0)
 SINGLE_PASS_RUNTIME_VERSION = (1, 23, 6)
 VOICE_CATALOG_RUNTIME_VERSION = (1, 23, 9)
 CARD_PREPARATION_RUNTIME_VERSION = (1, 23, 13)
+PERSONALITY_RUNTIME_VERSION = (1, 24, 0)
 STARTER_ASSET_RUNTIME_VERSION = (1, 23, 18)
 ALLOWED_MANAGED = {
     "runtime": RUNTIME_FILES | {"turn_plan_service.py"},
@@ -271,8 +276,10 @@ def version_key(value):
 
 def runtime_files_for_version(version):
     key = version_key(version)
-    if key >= STARTER_ASSET_RUNTIME_VERSION:
+    if key >= PERSONALITY_RUNTIME_VERSION:
         return RUNTIME_FILES
+    if key >= STARTER_ASSET_RUNTIME_VERSION:
+        return STARTER_ASSET_RUNTIME_FILES
     if key >= CARD_PREPARATION_RUNTIME_VERSION:
         return CARD_PREPARATION_RUNTIME_FILES
     if key >= VOICE_CATALOG_RUNTIME_VERSION:

@@ -28,6 +28,8 @@ TAVERN_APP="${TAVERN_APP_DIR:-$DATA_ROOT/apps/tavern-runtime}"
 TAVERN_STATE="${TAVERN_STATE_DIR:-$DATA_ROOT/tavern-state}"
 HOOK_SOURCE="$TAVERN_SKILL/hooks/tavern-liveware-register"
 HOOK_TARGET="$HERMES_HOME/hooks/tavern-liveware-register"
+SOUL_PLUGIN_SOURCE="$TAVERN_SKILL/plugins/tavern-soul-reload"
+SOUL_PLUGIN_TARGET="$HERMES_HOME/plugins/tavern-soul-reload"
 LW_DIR="$HERMES_HOME/clawchat/liveware"
 
 # Keep the gateway-startup hook aligned with the installed Tavern skill. The
@@ -39,6 +41,17 @@ if [ -f "$HOOK_SOURCE/HOOK.yaml" ] && [ -f "$HOOK_SOURCE/handler.py" ] && [ -f "
   cp "$HOOK_SOURCE/handler.py" "$HOOK_TARGET/handler.py"
   cp "$HOOK_SOURCE/run.sh" "$HOOK_TARGET/run.sh"
   chmod 755 "$HOOK_TARGET/run.sh"
+fi
+
+# Install the Hermes integration that refreshes the cached Agent after SOUL.md
+# changes. It uses Hermes' public plugin hook surface and never edits core code.
+if [ -f "$SOUL_PLUGIN_SOURCE/plugin.yaml" ] && [ -f "$SOUL_PLUGIN_SOURCE/__init__.py" ]; then
+  mkdir -p "$SOUL_PLUGIN_TARGET"
+  cp "$SOUL_PLUGIN_SOURCE/plugin.yaml" "$SOUL_PLUGIN_TARGET/plugin.yaml"
+  cp "$SOUL_PLUGIN_SOURCE/__init__.py" "$SOUL_PLUGIN_TARGET/__init__.py"
+  if command -v hermes >/dev/null 2>&1; then
+    hermes plugins enable tavern-soul-reload >/dev/null 2>&1 || true
+  fi
 fi
 
 LW_BIN="${LIVEWARE_BIN:-}"
@@ -142,6 +155,7 @@ if [ "$NEED_SERVER" = "1" ]; then
   export TAVERN_MODEL_KEY="$MODEL_KEY"
   export TAVERN_MODEL_BASE="$MODEL_BASE"
   export TAVERN_TTS_BASE="$TTS_BASE"
+  export TAVERN_PERSONALITY_FILE="${TAVERN_PERSONALITY_FILE:-$HERMES_HOME/SOUL.md}"
   setsid "$PY" "$TAVERN_APP/server.py" --port "$PORT" \
     9>&- > "$TAVERN_STATE/server.log" 2>&1 < /dev/null &
   unset TAVERN_MODEL_KEY

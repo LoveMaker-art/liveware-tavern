@@ -49,6 +49,8 @@ SKILL_FILES = (
     "tavern/hooks/tavern-liveware-register/HOOK.yaml",
     "tavern/hooks/tavern-liveware-register/handler.py",
     "tavern/hooks/tavern-liveware-register/run.sh",
+    "tavern/plugins/tavern-soul-reload/__init__.py",
+    "tavern/plugins/tavern-soul-reload/plugin.yaml",
     "tavern/references/conversation-cards.md",
     "tavern/references/shared-contract.md",
     "tavern/scripts/bringup.sh",

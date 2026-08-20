@@ -25,6 +25,7 @@ import actor  # noqa: E402
 import card_import  # noqa: E402
 import card_preparation  # noqa: E402
 import generation_service  # noqa: E402
+import personality_service  # noqa: E402
 import story_profile  # noqa: E402
 import story_state_service  # noqa: E402
 import runtime_cast_service  # noqa: E402
@@ -3957,6 +3958,8 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, {"production": production})
         if path == "/api/identity":
             return self._json(200, {**app_identity(), "agent_user_id": agent_user_id()})
+        if path == "/api/personality":
+            return self._json(200, personality_service.read_document())
         if path == "/api/actor":
             # 兼容技能/旧前端的故事档案原文与应用元数据；当前控制台使用轻量 /api/identity。
             return self._json(200, {"actor_self": actor_self_text(), "version": liveware_version(),
@@ -4039,6 +4042,16 @@ class H(BaseHTTPRequestHandler):
                 return self._json(400, {"ok": False, "error": str(e)})
             except Exception as e:
                 return self._json(500, {"ok": False, "error": str(e)})
+        if path == "/api/personality":
+            try:
+                ev = json.loads(request_body or b"{}")
+                saved = personality_service.write_document(
+                    ev.get("content"), ev.get("revision"))
+                return self._json(200, {"ok": True, **saved})
+            except personality_service.PersonalityConflict as e:
+                return self._json(409, {"ok": False, "code": "revision_conflict", "error": str(e)})
+            except ValueError as e:
+                return self._json(400, {"ok": False, "error": str(e)})
         if path != "/api/event":
             return self._json(404, {"error": "unknown endpoint"})
         try:

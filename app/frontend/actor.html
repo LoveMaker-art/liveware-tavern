@@ -23,6 +23,18 @@
     <div id="acRoot" class="acCard">
       <div class="acEmpty" data-i18n="acLoading">读取故事档案…</div>
     </div>
+    <section id="personalityEditor" class="acPersonality hidden" aria-hidden="true">
+      <div class="acPersonalityBar">
+        <button id="personalityCancel" class="acTextButton" type="button" data-i18n="personalityCancel">取消</button>
+        <div class="acPersonalityTitle" data-i18n="personalityTitle">人格设定</div>
+        <button id="personalitySave" class="acTextButton acTextButtonPrimary" type="button" data-i18n="personalitySave">保存</button>
+      </div>
+      <div class="acPersonalityBody">
+        <p class="acPersonalityHint" data-i18n="personalityHint">这里决定主理人的性格、语气与相处方式。</p>
+        <textarea id="personalityContent" class="acPersonalityInput" spellcheck="false"></textarea>
+        <div class="acPersonalityMeta"><span id="personalityStatus"></span><span id="personalityCount"></span></div>
+      </div>
+    </section>
   </main>
   <script src="i18n.js"></script>
   <script src="security.js"></script>

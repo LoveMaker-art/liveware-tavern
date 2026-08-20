@@ -25,6 +25,8 @@ DATA_ROOT="${TAVERN_DATA_ROOT:-$HERMES_HOME}"
 TAVERN_SKILL="${TAVERN_SKILL_DIR:-$HERMES_HOME/skills/creative/tavern}"
 TAVERN_APP="${TAVERN_APP_DIR:-$DATA_ROOT/apps/tavern-runtime}"
 TAVERN_STATE="${TAVERN_STATE_DIR:-$DATA_ROOT/tavern-state}"
+SOUL_PLUGIN_SOURCE="$TAVERN_SKILL/plugins/tavern-soul-reload"
+SOUL_PLUGIN_TARGET="$HERMES_HOME/plugins/tavern-soul-reload"
 LW_DIR="$HERMES_HOME/clawchat/liveware"
 LW="${LIVEWARE_BIN:-}"
 if [ -z "$LW" ]; then
@@ -46,6 +48,14 @@ fi
 APPS="$TAVERN_STATE/apps.json"
 IDENTITY="$TAVERN_STATE/app_identity.json"
 mkdir -p "$TAVERN_STATE"
+if [ -f "$SOUL_PLUGIN_SOURCE/plugin.yaml" ] && [ -f "$SOUL_PLUGIN_SOURCE/__init__.py" ]; then
+  mkdir -p "$SOUL_PLUGIN_TARGET"
+  cp "$SOUL_PLUGIN_SOURCE/plugin.yaml" "$SOUL_PLUGIN_TARGET/plugin.yaml"
+  cp "$SOUL_PLUGIN_SOURCE/__init__.py" "$SOUL_PLUGIN_TARGET/__init__.py"
+  if command -v hermes >/dev/null 2>&1; then
+    hermes plugins enable tavern-soul-reload >/dev/null 2>&1 || true
+  fi
+fi
 if [ ! -f "$IDENTITY" ]; then
   cat > "$IDENTITY" <<'JSON'
 {
