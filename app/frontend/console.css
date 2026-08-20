@@ -396,6 +396,11 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .loreItem+.loreItem{border-top:1px solid var(--line)}
 .loreTop{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
 .loreText2{font-size:12.5px;color:var(--ink2);white-space:pre-wrap}
+.loreSummaryItem{cursor:pointer;outline:none;transition:background .15s,color .15s,padding .15s,margin .15s}
+.loreSummaryItem:hover{margin-inline:-7px;padding-inline:7px;background:var(--bg);border-radius:var(--radius2)}
+.loreSummaryItem:focus-visible{margin-inline:-7px;padding-inline:7px;box-shadow:inset 2px 0 0 var(--brand);border-radius:var(--radius2)}
+.loreSummaryItem .loreText2{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.loreDetailSheet .cardDetailBlock:last-child p{font-size:13.5px;line-height:1.75}
 .itemActions{display:flex;align-items:center;gap:2px;flex:0 0 auto}
 .itemEdit{width:28px;height:28px;display:grid;place-items:center;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);opacity:.72;cursor:pointer}
 .itemEdit:hover{opacity:1;color:var(--brand);background:rgba(255,128,48,.08);border-color:rgba(255,128,48,.22)}
@@ -422,6 +427,8 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .actorMore{margin-top:10px;font-size:11.5px;color:var(--brandink);background:none;border:0;
   padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .actorMore:hover{text-decoration:underline}
+.castActions{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.castActions .actorMore{margin-top:10px}
 /* 文本模型：panel 展示当前配置，sheet 区分官方目录与自定义 API。 */
 .mdlCur{font-size:13px;color:var(--ink);margin:0;font-weight:600}
 .mdlModel{font-size:11px;color:var(--muted);font-weight:400;margin-left:6px}
