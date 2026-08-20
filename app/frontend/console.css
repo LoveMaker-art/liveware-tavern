@@ -248,7 +248,7 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
   body.has-history-scroll .convo{padding-right:34px}
 }
 /* 回合节奏:同回合内(我的话→主理人的回复)收紧、回合之间放松——段落 vs 场景的呼吸层次 */
-.thread{max-width:var(--world-content-width);margin:0 auto;display:flex;flex-direction:column}
+.thread{width:100%;max-width:var(--world-content-width);min-width:0;margin:0 auto;display:flex;flex-direction:column}
 .turn{margin-top:30px}
 .turn:first-child{margin-top:0}
 .turn.user + .turn.char{margin-top:14px}
@@ -259,12 +259,14 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--brand);outline-o
 .emptyMark{color:var(--brand);font-size:32px;opacity:.7;margin-bottom:6px}
 .empty .hint{font-size:13px}
 
-.turn{display:flex;flex-direction:column}
+.turn{display:flex;min-width:0;flex-direction:column}
 .turn.user{align-items:flex-end}
-.char .body{font-family:var(--world-body-font);font-size:15.5px;line-height:1.68;color:var(--world-ink);white-space:pre-wrap}
+.char .body{font-family:var(--world-body-font);font-size:15.5px;line-height:1.68;color:var(--world-ink);white-space:pre-wrap;
+  overflow-wrap:anywhere;word-break:break-word;line-break:auto}
 .char .nar{font-family:var(--world-narration-font);font-style:italic;color:var(--world-muted)}
 .user .body{font-family:var(--world-body-font);background:var(--world-userbg);color:var(--world-ink2);border-radius:var(--radius);
-  padding:8px 13px;max-width:80%;font-size:14px;line-height:1.6;white-space:pre-wrap}
+  padding:8px 13px;max-width:80%;min-width:0;font-size:14px;line-height:1.6;white-space:pre-wrap;
+  overflow-wrap:anywhere;word-break:break-word;line-break:auto}
 .user .nar{font-family:var(--world-narration-font);font-style:italic;color:var(--world-muted)}
 
 /* 有背景图时可选的局部阅读底。只包住正文，不覆盖图片、回合间留白或操作栏。
