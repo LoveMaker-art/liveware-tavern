@@ -8,7 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "skill"))
+sys.path.insert(0, str(ROOT / "app/backend"))
 IMPORT_STATE = tempfile.TemporaryDirectory(prefix="tavern-story-import-")
 os.environ["TAVERN_STATE_DIR"] = IMPORT_STATE.name
 

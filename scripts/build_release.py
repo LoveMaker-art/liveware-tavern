@@ -8,10 +8,19 @@ import shutil
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "skill"
-CREATIVE_SKILLS = ROOT / "creative-skills"
+APP = ROOT / "app"
+BACKEND = APP / "backend"
+FRONTEND = APP / "frontend"
+ASSETS = APP / "assets"
+HERMES = ROOT / "integrations/hermes"
+CREATIVE_SKILLS = HERMES / "skills/creative"
+SYSTEM_SKILLS = HERMES / "skills/system"
+HERMES_AGENTS = HERMES / "AGENTS.md"
+CLAWCHAT = ROOT / "integrations/clawchat"
+SHARED_TOOLS = ROOT / "tools"
 LEGACY_BASELINES = ROOT / "legacy-baselines"
-UPDATER = ROOT / "updater-skill"
+UPDATER = SYSTEM_SKILLS / "tavern-updater"
+MODEL_API_MANAGER = SYSTEM_SKILLS / "model-api-manager"
 DIST = ROOT / "dist"
 STAGE = DIST / "release"
 ARCHIVE = DIST / "tavern-release.tar.gz"
@@ -26,7 +35,6 @@ BOOTSTRAP_MANIFEST = DIST / "bootstrap-manifest.json"
 LEGACY_BACKEND_FILES = ("actor.py", "actor_self.md", "server.py", "card_import.py")
 BACKEND_FILES = (
     "actor.py",
-    "actor_self.md",
     "background_jobs.py",
     "card_import.py",
     "card_preparation.py",
@@ -48,8 +56,10 @@ BACKEND_FILES = (
     "tts_service.py",
 )
 RUNTIME_DATA_FILES = (
+    "actor_self.md",
     "qwen_audio_voices.json",
 )
+STARTER_ASSET_DIR = "fixtures/starter"
 LEGACY_FRONTEND_FILES = (
     "actor.html",
     "actor.js",
@@ -82,6 +92,11 @@ CREATIVE_SKILL_NAMES = (
     "tavern-ops",
     "tavern-world-visuals",
 )
+SYSTEM_SKILL_NAMES = (
+    "model-api-manager",
+)
+
+
 def copy(source, destination):
     if source.is_dir():
         shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.bak*", "*.before-*", "*.log"))
@@ -96,17 +111,23 @@ def main():
     (STAGE / "runtime").mkdir(parents=True)
     (STAGE / "updater").mkdir(parents=True)
     for name in BACKEND_FILES:
-        copy(SOURCE / name, STAGE / "runtime" / name)
+        copy(BACKEND / name, STAGE / "runtime" / name)
     for name in RUNTIME_DATA_FILES:
-        copy(SOURCE / name, STAGE / "runtime" / name)
+        copy(ASSETS / name, STAGE / "runtime" / name)
+    copy(
+        ASSETS / STARTER_ASSET_DIR,
+        STAGE / "runtime/assets" / STARTER_ASSET_DIR,
+    )
     for name in FRONTEND_FILES:
-        copy(SOURCE / "reader" / name, STAGE / "runtime/web" / name)
+        copy(FRONTEND / name, STAGE / "runtime/web" / name)
     (STAGE / "runtime/.tavern-release-version").write_text(version + "\n", encoding="utf-8")
     copy(UPDATER / "SKILL.md", STAGE / "updater/SKILL.md")
     copy(UPDATER / "scripts", STAGE / "updater/scripts")
     copy(UPDATER / "references", STAGE / "updater/references")
+    copy(HERMES_AGENTS, STAGE / "updater/references/AGENTS.md")
     if (UPDATER / "agents").is_dir():
         copy(UPDATER / "agents", STAGE / "updater/agents")
+    copy(MODEL_API_MANAGER, STAGE / "system-skills/model-api-manager")
     files = {
         path.relative_to(STAGE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(STAGE.rglob("*"))
@@ -115,6 +136,7 @@ def main():
     with tarfile.open(ARCHIVE, "w:gz", format=tarfile.PAX_FORMAT) as package:
         package.add(STAGE / "runtime", arcname="runtime")
         package.add(STAGE / "updater", arcname="updater")
+        package.add(STAGE / "system-skills", arcname="system-skills")
     digest = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
     manifest = {
         "schema": 4,
@@ -130,6 +152,14 @@ def main():
     (SKILL_STAGE / "skills").mkdir(parents=True)
     for name in CREATIVE_SKILL_NAMES:
         copy(CREATIVE_SKILLS / name, SKILL_STAGE / "skills" / name)
+    tavern_skill = SKILL_STAGE / "skills/tavern"
+    copy(SHARED_TOOLS / "tavern_cli.py", tavern_skill / "scripts/tavern_cli.py")
+    copy(CLAWCHAT / "scripts/bringup.sh", tavern_skill / "scripts/bringup.sh")
+    copy(CLAWCHAT / "scripts/provision.sh", tavern_skill / "scripts/provision.sh")
+    copy(
+        CLAWCHAT / "hooks/tavern-liveware-register",
+        tavern_skill / "hooks/tavern-liveware-register",
+    )
     skill_files = {
         path.relative_to(SKILL_STAGE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(SKILL_STAGE.rglob("*"))

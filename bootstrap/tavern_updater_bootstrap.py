@@ -73,6 +73,14 @@ SKILL_FILES = (
     "tavern-world-visuals/references/theme-schema.md",
     "tavern-world-visuals/scripts/world_theme.py",
 )
+SYSTEM_SKILL_FILES = (
+    "model-api-manager/SKILL.md",
+    "model-api-manager/references/hermes-model.md",
+    "model-api-manager/references/provider-protocols.md",
+    "model-api-manager/references/security-and-rollback.md",
+    "model-api-manager/references/tavern-model.md",
+    "model-api-manager/scripts/model_api_manager.py",
+)
 AGENTS_RELEASE_FILE = "references/AGENTS.md"
 
 
@@ -148,6 +156,9 @@ def validate_release(release, manifest, archive_path, skill_manifest, skill_arch
     required = {"updater/" + name for name in UPDATER_FILES}
     if not required.issubset(managed) or not required.issubset(hashes):
         raise RuntimeError("release does not contain the complete updater skill")
+    required_system_skills = {"system-skills/" + name for name in SYSTEM_SKILL_FILES}
+    if not required_system_skills.issubset(managed) or not required_system_skills.issubset(hashes):
+        raise RuntimeError("release does not contain the complete managed system-skill set")
     if (skill_manifest.get("schema") != 3
             or skill_manifest.get("scope") != "tavern-creative-skills"
             or skill_manifest.get("install_mode") != "exact-directories"
@@ -174,7 +185,7 @@ def extract_updater(archive_path, manifest, destination):
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts or not path.parts:
                 raise RuntimeError("release archive contains an unsafe path")
-            if path.parts[0] not in ("runtime", "updater"):
+            if path.parts[0] not in ("runtime", "updater", "system-skills"):
                 raise RuntimeError("release archive contains an unmanaged top-level path")
             if member.issym() or member.islnk() or member.isdev():
                 raise RuntimeError("release archive contains an unsupported link or device")
@@ -303,7 +314,7 @@ def main():
         "release_version": manifest["version"],
         "agents_updated": agents_changed,
         "backup": backup,
-        "next_step": "Show one update report and wait for approval. All six Tavern skills and the complete release-managed AGENTS.md are included in that plan and must not be offered as separate follow-ups.",
+        "next_step": "Show one update report and wait for approval. All six creative skills, the managed model API system skill, and the complete release-managed AGENTS.md are included in that plan and must not be offered as separate follow-ups.",
     }
     if not args.skip_report:
         result.update(generate_report(updater_target / "scripts/update.py", data_root))

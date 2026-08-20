@@ -52,17 +52,18 @@ class RepositoryHygieneTests(unittest.TestCase):
         )
         updater = load_module(
             "tavern_updater_allowlist",
-            ROOT / "updater-skill/scripts/update.py",
+            ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py",
         )
 
         self.assertEqual(set(bootstrap.SKILL_FILES), updater.CREATIVE_SKILL_FILES)
+        self.assertEqual(set(bootstrap.SYSTEM_SKILL_FILES), updater.SYSTEM_SKILL_FILES)
 
     def test_bootstrap_transition_guidance_is_consistent(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        updater_skill = (ROOT / "updater-skill/SKILL.md").read_text(encoding="utf-8")
-        updater_agents = (ROOT / "updater-skill/references/AGENTS.md").read_text(encoding="utf-8")
+        updater_skill = (ROOT / "integrations/hermes/skills/system/tavern-updater/SKILL.md").read_text(encoding="utf-8")
+        updater_agents = (ROOT / "integrations/hermes/AGENTS.md").read_text(encoding="utf-8")
         bootstrap_source = (ROOT / "bootstrap/tavern_updater_bootstrap.py").read_text(encoding="utf-8")
-        updater_source = (ROOT / "updater-skill/scripts/update.py").read_text(encoding="utf-8")
+        updater_source = (ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py").read_text(encoding="utf-8")
 
         command = "install-tavern-updater.sh | sh"
         self.assertIn(command, readme)
@@ -100,6 +101,17 @@ class RepositoryHygieneTests(unittest.TestCase):
             "runtime/story_state_service.py",
             "runtime/tts_service.py",
             "runtime/web/security.js",
+            "runtime/assets/fixtures/starter/index.json",
+            "runtime/assets/fixtures/starter/audrey-barista.png",
+            "runtime/assets/fixtures/starter/doria-android.png",
+            "runtime/assets/fixtures/starter/ichitora-detective.png",
+            "runtime/assets/fixtures/starter/kuchanan-explorer.png",
+            "runtime/assets/fixtures/starter/librarian.png",
+            "runtime/assets/fixtures/starter/medieval-knight.png",
+            "runtime/assets/fixtures/starter/reiko-samurai.png",
+            "runtime/assets/fixtures/starter/yan-buddy.png",
+            "system-skills/model-api-manager/SKILL.md",
+            "system-skills/model-api-manager/scripts/model_api_manager.py",
         }
         self.assertTrue(expected.issubset(set(manifest["managed_files"])))
         with tarfile.open(archive, "r:gz") as package:
@@ -111,6 +123,9 @@ class RepositoryHygieneTests(unittest.TestCase):
         forbidden = (
             ROOT / "skill/SOUL.md",
             ROOT / "agentchat/chat_server.py",
+            ROOT / "skill/tools/bringup.sh",
+            ROOT / "skill/tools/provision.sh",
+            ROOT / "skill/tools/tavern_cli.py",
             ROOT / "skill/tools/install.sh",
             ROOT / "skill/tools/make_test_card.py",
             ROOT / "skill/tools/smoke.py",
@@ -118,6 +133,38 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "skill/fixtures/worldbook_rainy_city.json",
         )
         self.assertFalse([str(path.relative_to(ROOT)) for path in forbidden if path.exists()])
+
+    def test_documented_install_paths_exist(self):
+        self.assertTrue((ROOT / "requirements.txt").is_file())
+        self.assertTrue((ROOT / ".env.example").is_file())
+        for name in ("standalone.md", "hermes.md", "architecture.md", "configuration.md"):
+            self.assertTrue((ROOT / "docs" / name).is_file(), name)
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("skill/requirements.txt", readme)
+        self.assertIn("requirements.txt", readme)
+
+        self.assertTrue((ROOT / "app/backend/server.py").is_file())
+        self.assertTrue((ROOT / "app/frontend/index.html").is_file())
+        self.assertTrue((ROOT / "app/assets/fixtures/starter/index.json").is_file())
+        self.assertTrue((ROOT / "integrations/hermes/SOUL.md").is_file())
+        self.assertFalse(any((ROOT / "skill").rglob("*")))
+
+    def test_hermes_scripts_have_one_source_of_truth(self):
+        self.assertTrue((ROOT / "integrations/clawchat/scripts/bringup.sh").is_file())
+        self.assertTrue((ROOT / "integrations/clawchat/scripts/provision.sh").is_file())
+        self.assertTrue((ROOT / "tools/tavern_cli.py").is_file())
+        self.assertTrue((
+            ROOT / "integrations/clawchat/hooks/tavern-liveware-register/HOOK.yaml"
+        ).is_file())
+        self.assertFalse((ROOT / "integrations/hermes/skills/creative/tavern/scripts").exists())
+        self.assertFalse((ROOT / "integrations/hermes/skills/creative/tavern/hooks").exists())
+        duplicates = [
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "skill/tools").glob("*")
+            if path.is_file()
+        ]
+        self.assertEqual(duplicates, [])
 
     def test_skill_release_contains_complete_split_skill_suite(self):
         archive = ROOT / "dist/tavern-skill.tar.gz"
@@ -172,7 +219,7 @@ class RepositoryHygieneTests(unittest.TestCase):
 
     def test_all_creative_skill_versions_match_release(self):
         release_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        for skill_file in sorted((ROOT / "creative-skills").glob("*/SKILL.md")):
+        for skill_file in sorted((ROOT / "integrations/hermes/skills/creative").glob("*/SKILL.md")):
             version_line = next(
                 line for line in skill_file.read_text(encoding="utf-8").splitlines()
                 if line.startswith("version:")
@@ -183,12 +230,44 @@ class RepositoryHygieneTests(unittest.TestCase):
                 skill_file.relative_to(ROOT).as_posix(),
             )
 
+        updater_skill = ROOT / "integrations/hermes/skills/system/tavern-updater/SKILL.md"
+        updater_version = next(
+            line for line in updater_skill.read_text(encoding="utf-8").splitlines()
+            if line.startswith("version:")
+        )
+        self.assertEqual(updater_version.split(":", 1)[1].strip(), release_version)
+
     def test_release_contains_one_canonical_agents_file(self):
-        canonical = ROOT / "updater-skill/references/AGENTS.md"
+        canonical = ROOT / "integrations/hermes/AGENTS.md"
         self.assertTrue(canonical.is_file())
         self.assertTrue(canonical.read_text(encoding="utf-8").startswith("# AGENTS.md"))
-        self.assertFalse((ROOT / "updater-skill/references/agents-block.md").exists())
+        self.assertFalse((ROOT / "integrations/hermes/skills/system/tavern-updater/references/agents-block.md").exists())
         self.assertNotIn("tavern-updater:start", canonical.read_text(encoding="utf-8"))
+
+    def test_soul_is_a_source_template_not_a_release_managed_file(self):
+        soul = ROOT / "integrations/hermes/SOUL.md"
+        self.assertTrue(soul.is_file())
+        manifest_path = ROOT / "dist/manifest.json"
+        skill_manifest_path = ROOT / "dist/skill-manifest.json"
+        if not manifest_path.is_file() or not skill_manifest_path.is_file():
+            self.skipTest("build release assets before identity-boundary validation")
+        managed = (
+            json.loads(manifest_path.read_text(encoding="utf-8"))["managed_files"]
+            + json.loads(skill_manifest_path.read_text(encoding="utf-8"))["managed_files"]
+        )
+        self.assertFalse(any(path.lower().endswith("soul.md") for path in managed))
+
+    def test_managed_system_skill_is_packaged_from_hermes_integration(self):
+        source = ROOT / "integrations/hermes/skills/system/model-api-manager"
+        self.assertTrue((source / "SKILL.md").is_file())
+        self.assertTrue((source / "scripts/model_api_manager.py").is_file())
+        archive = ROOT / "dist/tavern-release.tar.gz"
+        if not archive.is_file():
+            self.skipTest("build release assets before archive validation")
+        with tarfile.open(archive, "r:gz") as package:
+            names = {member.name for member in package.getmembers() if member.isfile()}
+        self.assertIn("system-skills/model-api-manager/SKILL.md", names)
+        self.assertIn("system-skills/model-api-manager/scripts/model_api_manager.py", names)
 
     def test_legacy_baseline_release_is_runtime_only_and_hash_complete(self):
         manifest_path = ROOT / "dist/baseline-v1.14.12-manifest.json"
@@ -208,7 +287,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertEqual(set(manifest["files"]), names)
 
     def test_persona_profile_has_accessible_detail_entry(self):
-        app = (ROOT / "skill/reader/app.js").read_text(encoding="utf-8")
+        app = (ROOT / "app/frontend/app.js").read_text(encoding="utf-8")
         self.assertIn('data-persona-detail="1"', app)
         self.assertIn('role="button"', app)
         self.assertIn("openPersonaDetailSheet", app)

@@ -12,7 +12,10 @@ import urllib.request
 from pathlib import Path
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[1] / "skill"
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = ROOT / "app/backend"
+FRONTEND_ROOT = ROOT / "app/frontend"
+ASSET_ROOT = ROOT / "app/assets"
 
 
 def _unused_loopback_port():
@@ -25,8 +28,13 @@ class BootstrapHttpTests(unittest.TestCase):
     def test_frontend_bootstrap_endpoints_on_real_server(self):
         with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as runtime_dir:
             runtime_root = Path(runtime_dir)
-            shutil.copytree(SOURCE_ROOT, runtime_root, dirs_exist_ok=True)
-            (runtime_root / "reader").rename(runtime_root / "web")
+            shutil.copytree(BACKEND_ROOT, runtime_root, dirs_exist_ok=True)
+            shutil.copytree(FRONTEND_ROOT, runtime_root / "web")
+            shutil.copy2(ASSET_ROOT / "actor_self.md", runtime_root / "actor_self.md")
+            shutil.copy2(
+                ASSET_ROOT / "qwen_audio_voices.json",
+                runtime_root / "qwen_audio_voices.json",
+            )
             port = _unused_loopback_port()
             environment = dict(os.environ)
             environment.update({

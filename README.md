@@ -1,131 +1,87 @@
 # Tavern
 
-> [!IMPORTANT]
-> **Tavern is an open-source, agent-compatible multi-character storytelling system.** The core runtime can run as an independent web application, integrate with an Agent through its HTTP API or command-line tools, or be exposed inside ClawChat through the optional Liveware adapter.
->
-> **Tavern 是一个开源、可适配 Agent 的多角色互动故事系统。** 核心运行时可以作为独立 Web 应用运行，也可以通过 HTTP API 或命令行工具接入 Agent；在 ClawChat 中，还可以选择使用 Liveware 适配层作为应用入口。
+Tavern 是一个开源的多角色互动故事系统。它包含可独立运行的 Web
+酒馆、持久化世界与角色数据，以及一套面向 Hermes Agent 的管理技能。
 
-Tavern is not defined by Liveware. Its core consists of a stateful Python runtime, a browser frontend, and a local JSON data layer. It provides reusable character cards, worldbooks, per-world personas, multi-character conversations, long-story continuity, model selection, text-to-speech, and mobile-friendly reading and interaction.
+> Tavern 不依赖 Liveware 才能运行。Liveware 只是 ClawChat 中的可选展示入口；
+> Hermes 技能是当前仓库提供的 Agent 集成方式。
 
-Liveware is one optional delivery channel for ClawChat. Hermes skills are one first-party Agent integration. Neither is required to run the core Tavern application.
+## 选择部署方式
 
-## Architecture
+| 目标 | 使用内容 | 文档 |
+| --- | --- | --- |
+| 只运行酒馆 Web 应用 | `app/` | [独立部署](docs/standalone.md) |
+| 安装 Hermes Agent + 酒馆 | `app/`、`integrations/hermes/`、`integrations/clawchat/` | [Hermes 部署](docs/hermes.md) |
+| 理解代码、状态与发布边界 | 全仓库 | [项目架构](docs/architecture.md) |
+| 配置模型、存储、安全与性能 | 环境变量和实例状态 | [配置参考](docs/configuration.md) |
 
-Tavern is divided into three layers:
+## 五分钟启动独立酒馆
 
-1. **Core runtime** - `server.py`, the browser frontend in `web/`, model access, and state stored under `TAVERN_STATE_DIR`. This layer can run independently.
-2. **Agent integration** - the included Hermes skills let an Agent create worlds, import and normalize cards, manage continuity, operate the application, and update the system. Other Agent frameworks can integrate through the same HTTP API or CLI with their own adapter.
-3. **ClawChat integration** - the optional Hook, Liveware registration, and tunnel expose the running application inside ClawChat. They are not part of the core execution requirement.
-
-Agent-compatible does not mean that one framework-specific installer can configure every Agent automatically. The core runtime is reusable; the included skills, Hook, `AGENTS.md`, and updater target the Hermes `/opt/data` layout. Other Agent frameworks should keep the runtime and provide an adapter for their own tool, identity, memory, and lifecycle conventions.
-
-## Deployment Modes
-
-### Standalone Web Application
-
-The standalone runtime needs Python 3, PyYAML, a writable state directory, and an OpenAI-compatible chat-completions endpoint.
+需要 Python 3.10+ 和一个 OpenAI-compatible Chat Completions 接口。
 
 ```sh
+git clone https://github.com/LoveMaker-art/liveware-tavern.git
+cd liveware-tavern
+
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r skill/requirements.txt
+pip install -r requirements.txt
 
 export TAVERN_STATE_DIR="$PWD/tavern-state"
-export TAVERN_MODEL_BASE="https://your-model-provider.example/v1"
-export TAVERN_MODEL_KEY="your-api-key"
-export TAVERN_MODEL="deepseek-v4-flash"
-export TAVERN_HOST="127.0.0.1"
+export TAVERN_MODEL_BASE="https://your-provider.example/v1"
+export TAVERN_MODEL_KEY="replace-with-your-key"
+export TAVERN_MODEL="your-model-id"
 
-python3 skill/server.py --port 8799
+python3 app/backend/server.py --port 8799
 ```
 
-Open `http://127.0.0.1:8799/` in a browser. The bundled official text-model identifier is `deepseek-v4-flash`; other OpenAI-compatible models can be added through Tavern's custom-model configuration. ClawChat identity sync, Liveware registration, and Agent-managed workflows are unavailable unless their adapters are installed.
+打开 <http://127.0.0.1:8799/>。运行数据只写入 `TAVERN_STATE_DIR`，不会写回源码目录。
 
-### Hermes Agent Integration
+## 当前 Agent 适配状态
 
-The repository includes a Tavern routing skill and specialist Hermes skills for world construction, continuity, story profiles, operations, and visual customization. The managed release layout places the runtime under `/opt/data/apps/tavern-runtime`, persistent state under `/opt/data/tavern-state`, and skills under `/opt/data/skills`.
+- **Hermes：已适配。** Agent 可通过六个创意技能、两个系统技能及共享 CLI 创建世界、导入角色卡和世界书、维护剧情连续性、配置模型并管理运行服务与版本。
+- **ClawChat：已适配。** 可选 Hook 会在 Gateway 启动时恢复 Tavern 服务并注册两个 Liveware 入口。
+- **其他 Agent：尚未提供即装即用适配器。** Tavern 已有本地 HTTP API，但本仓库当前没有 MCP Server，也没有承诺稳定的通用工具协议。不要仅凭“存在 HTTP API”把它描述为已完成通用 Agent 适配。
 
-The bundled updater performs a compatibility review before replacing managed runtime, frontend, skill, and `AGENTS.md` files. Instance data remains outside the release boundary.
+## 仓库结构
 
-### ClawChat Liveware Integration
+```text
+app/backend/                    Tavern 后端唯一源码
+app/frontend/                   Tavern Web 前端唯一源码
+app/assets/                     内置模板和运行资源
+integrations/hermes/            Hermes SOUL、路由、创意技能与系统技能
+integrations/clawchat/          ClawChat Hook、Liveware 部署与恢复脚本
+tools/                          Agent 与运维共享的 Tavern CLI
+bootstrap/                      更新器 Bootstrap
+docs/                           部署、配置与架构文档
+scripts/                        发布构建脚本
+tests/                          后端、前端、更新器与仓库边界测试
+```
 
-On ClawChat, the optional gateway-startup Hook provisions or restores the Liveware applications, starts the same Tavern runtime, binds the tunnel, and registers the Tavern and Story Profile entries. The browser application and its data remain the same core Tavern system used in standalone mode.
+核心运行时不包含用户世界、角色卡、故事、密钥、ClawChat 会话或注册信息。详见[项目架构](docs/architecture.md)。
 
-## Repository Layout
-
-- `skill/` - Core Tavern runtime, browser frontend, state-free starter content, and compatibility references.
-- `creative-skills/` - The Tavern router and specialist Hermes Agent skills.
-- `updater-skill/` - Verified in-place updater for the managed Hermes deployment layout.
-- `bootstrap/` - Installer that refreshes the updater before a managed update review.
-- `scripts/build_release.py` - Builds hash-manifested release assets.
-- `tests/` - Runtime, API, import, continuity, security, and frontend tests.
-
-## Data Boundary
-
-Application releases never contain or overwrite instance data. In the managed Hermes layout, user worlds, cards, worldbooks, stories, model choices, app registration, and identity state live under `/opt/data/tavern-state`.
-
-Credentials, ClawChat databases, sessions, logs, `.env` files, and `/opt/data/config.yaml` are not part of this repository or release archives.
-
-In standalone deployments, set `TAVERN_STATE_DIR` to choose the persistent data location.
-
-## Build A Release
+## 测试
 
 ```sh
+PYTHONPATH=app/backend python3 -m unittest discover -s tests -v
+node --test tests/frontend_security.test.js
 python3 scripts/build_release.py
 ```
 
-This creates:
+## Hermes 更新
 
-```text
-dist/manifest.json
-dist/tavern-release.tar.gz
-dist/skill-manifest.json
-dist/tavern-skill.tar.gz
-dist/tavern-updater-bootstrap.py
-dist/install-tavern-updater.sh
-dist/bootstrap-manifest.json
-dist/baseline-v1.14.12-manifest.json
-dist/tavern-baseline-v1.14.12.tar.gz
-```
-
-Create a stable GitHub Release tagged `v<VERSION>` and attach every generated asset. Managed Hermes deployments can then update the runtime, atomically replace the official creative-skill directories, remove obsolete managed skill directories, update the updater, and replace the release-managed `AGENTS.md` through one reviewed transaction. Custom skill directories remain untouched. Verified historical baselines allow older managed deployments to complete the same three-way review.
-
-## Bootstrap A Managed Hermes Deployment
-
-Download `tavern-updater-bootstrap.py` and `bootstrap-manifest.json` from the latest stable GitHub Release. Verify the script SHA256 against the manifest, then run it with Python 3. The bootstrap backs up and refreshes only the updater skill, then generates `check`, `review`, and `report` output using the target release's compatibility rules.
-
-During review it does not replace `/opt/data/AGENTS.md`, runtime code, creative skills, frontend code, or user data, and it never applies the Tavern update without explicit approval.
-
-Release assets use these stable names:
-
-```text
-https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/tavern-updater-bootstrap.py
-https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh
-https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/bootstrap-manifest.json
-```
-
-One-command installation and update for a compatible Hermes `/opt/data` deployment:
+兼容的 `/opt/data` Hermes 实例可通过经过校验的 Bootstrap 审查并安装稳定版本：
 
 ```sh
 curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
-Running this command is explicit authorization to install the reported conflict-free update. Merge conflicts or failed health checks stop the process; application failures restore the previous managed files. For a non-Hermes Agent or a different filesystem layout, use the standalone runtime and build a framework-specific adapter instead of running this installer unchanged.
-
-## Install The Updater Skill Manually
-
-For the managed Hermes layout, place `updater-skill/` at:
-
-```text
-/opt/data/skills/system/tavern-updater/
-```
-
-The Agent can then check and install a verified stable release after explicit user confirmation. Every update review starts through the verified Bootstrap, even when the updater is already installed, so managed-file additions or removals cannot make an older updater reject a newer release format before refreshing itself.
+更新器只管理发布清单中的代码和技能。用户世界、模型配置、身份、故事与素材位于
+`/opt/data/tavern-state`，不在覆盖范围内。具体流程见 [Hermes 部署](docs/hermes.md)。
 
 ## License
 
-Copyright (c) 2026 ClawChat Tavern contributors.
+本项目采用 GNU Affero General Public License v3.0 only（`AGPL-3.0-only`）。
+详见 [LICENSE](LICENSE)。通过网络提供修改版服务时，应按 AGPL 第 13 条向用户提供对应源码。
 
-Current development is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [`LICENSE`](LICENSE). Modified network services must offer their corresponding source code to users as required by AGPL section 13.
-
-Releases through `v1.18.1` remain available under the MIT License that accompanied those releases.
+`v1.18.1` 及更早版本仍按当时随版本附带的 MIT License 发布。

@@ -11,7 +11,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "skill"))
+sys.path.insert(0, str(ROOT / "app/backend"))
 
 from memory_cache import ByteLRUCache  # noqa: E402
 from tts_service import FALLBACK_VOICES  # noqa: E402
@@ -45,7 +45,7 @@ class TtsDiskCacheTests(unittest.TestCase):
         cls.env.start()
         spec = importlib.util.spec_from_file_location(
             "tavern_server_tts_test",
-            ROOT / "skill/server.py",
+            ROOT / "app/backend/server.py",
         )
         cls.server = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.server

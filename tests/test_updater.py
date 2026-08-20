@@ -18,7 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "tavern_updater_under_test",
-    ROOT / "updater-skill/scripts/update.py",
+    ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py",
 )
 UPDATER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPDATER)
@@ -36,7 +36,7 @@ class UpdaterMergeTests(unittest.TestCase):
         UPDATER.LOCK = UPDATER.UPDATE_ROOT / "update.lock"
         UPDATER.TARGETS = {
             area: self.root / "installed" / area
-            for area in ("runtime", "skills", "updater")
+            for area in ("runtime", "skills", "system-skills", "updater")
         }
         UPDATER.AGENTS_PATH = self.root / "installed/AGENTS.md"
         UPDATER.SKIP_SERVICE = True
@@ -44,6 +44,7 @@ class UpdaterMergeTests(unittest.TestCase):
         UPDATER.ALLOWED_MANAGED = {
             "runtime": {"server.py"},
             "skills": set(UPDATER.CREATIVE_SKILL_FILES),
+            "system-skills": set(UPDATER.SYSTEM_SKILL_FILES),
             "updater": set(),
         }
 
@@ -59,6 +60,10 @@ class UpdaterMergeTests(unittest.TestCase):
 
     def write_official_skill_stage(self, root, marker="release"):
         for name in UPDATER.CREATIVE_SKILL_FILES:
+            self.write(root, name, marker + ":" + name + "\n")
+
+    def write_official_system_skill_stage(self, root, marker="release"):
+        for name in UPDATER.SYSTEM_SKILL_FILES:
             self.write(root, name, marker + ":" + name + "\n")
 
     def test_default_release_discovery_avoids_github_api(self):
@@ -188,11 +193,19 @@ class UpdaterMergeTests(unittest.TestCase):
         )
         self.assertEqual(
             UPDATER.runtime_files_for_version("1.23.13"),
+            UPDATER.CARD_PREPARATION_RUNTIME_FILES,
+        )
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.23.18"),
             UPDATER.RUNTIME_FILES,
         )
         self.assertIn("generation_service.py", UPDATER.RUNTIME_FILES)
         self.assertIn("qwen_audio_voices.json", UPDATER.RUNTIME_FILES)
         self.assertIn("card_preparation.py", UPDATER.RUNTIME_FILES)
+        self.assertIn("assets/fixtures/starter/index.json", UPDATER.RUNTIME_FILES)
+        self.assertFalse(
+            UPDATER.STARTER_ASSET_FILES & UPDATER.CARD_PREPARATION_RUNTIME_FILES
+        )
         self.assertNotIn("card_preparation.py", UPDATER.VOICE_CATALOG_RUNTIME_FILES)
         self.assertNotIn("qwen_audio_voices.json", UPDATER.SINGLE_PASS_RUNTIME_FILES)
         self.assertNotIn("generation_service.py", UPDATER.EXPANDED_RUNTIME_FILES)
@@ -367,6 +380,11 @@ class UpdaterMergeTests(unittest.TestCase):
                 if path.startswith("runtime/")
             },
             "skills": set(UPDATER.CREATIVE_SKILL_FILES),
+            "system-skills": {
+                path.partition("/")[2]
+                for path in manifest["managed_files"]
+                if path.startswith("system-skills/")
+            },
             "updater": {
                 path.partition("/")[2]
                 for path in manifest["managed_files"]
@@ -440,6 +458,35 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertIn("replaced", {item["status"] for item in report})
         self.assertEqual(UPDATER.tree_hashes(output), UPDATER.tree_hashes(incoming))
 
+    def test_system_skill_is_replaced_exactly_and_other_system_skills_are_preserved(self):
+        staged = self.root / "staged/system-skills"
+        self.write_official_system_skill_stage(staged)
+        self.write(
+            UPDATER.TARGETS["system-skills"],
+            "model-api-manager/references/stale.md",
+            "stale\n",
+        )
+        self.write(
+            UPDATER.TARGETS["system-skills"],
+            "custom-system-skill/SKILL.md",
+            "custom\n",
+        )
+
+        UPDATER.replace_official_system_skills(staged)
+
+        self.assertFalse((
+            UPDATER.TARGETS["system-skills"]
+            / "model-api-manager/references/stale.md"
+        ).exists())
+        self.assertEqual((
+            UPDATER.TARGETS["system-skills"]
+            / "custom-system-skill/SKILL.md"
+        ).read_text(), "custom\n")
+        self.assertEqual(
+            UPDATER.official_system_skill_hashes(),
+            UPDATER.official_system_skill_hashes(staged),
+        )
+
     def test_skill_fingerprint_covers_unlisted_files_inside_official_directories(self):
         path = self.write(UPDATER.TARGETS["skills"], "tavern/local-note.md", "one\n")
         before = UPDATER.managed_fingerprint(["runtime/server.py"])
@@ -468,18 +515,35 @@ class UpdaterMergeTests(unittest.TestCase):
             UPDATER.stage_agents(unpacked, self.root / "plan")
 
     def test_complete_skill_directories_and_agents_are_restored_on_rollback(self):
-        managed = ["runtime/server.py"] + ["skills/" + name for name in UPDATER.CREATIVE_SKILL_FILES]
+        managed = (
+            ["runtime/server.py"]
+            + ["skills/" + name for name in UPDATER.CREATIVE_SKILL_FILES]
+            + ["system-skills/" + name for name in UPDATER.SYSTEM_SKILL_FILES]
+        )
         self.write(UPDATER.TARGETS["runtime"], "server.py", "runtime\n")
         self.write(UPDATER.TARGETS["skills"], "tavern/scripts/smoke.py", "legacy\n")
         self.write(UPDATER.TARGETS["skills"], "tavern-cards/SKILL.md", "old card skill\n")
         self.write(UPDATER.TARGETS["skills"], "tavern-worldbooks/SKILL.md", "old lore skill\n")
         self.write(UPDATER.TARGETS["skills"], "custom-skill/SKILL.md", "custom\n")
+        self.write(
+            UPDATER.TARGETS["system-skills"],
+            "model-api-manager/references/local.md",
+            "local system skill data\n",
+        )
+        self.write(
+            UPDATER.TARGETS["system-skills"],
+            "custom-system-skill/SKILL.md",
+            "custom system\n",
+        )
         self.write(self.root / "installed", "AGENTS.md", "local agents\n")
         backup = UPDATER.backup_current("1.19.7", managed)
 
         staged = self.root / "staged/skills"
         self.write_official_skill_stage(staged)
         UPDATER.replace_official_skills(staged)
+        staged_system = self.root / "staged/system-skills"
+        self.write_official_system_skill_stage(staged_system)
+        UPDATER.replace_official_system_skills(staged_system)
         UPDATER.atomic_write_text(UPDATER.AGENTS_PATH, "updated agents\n")
         UPDATER.restore(backup)
 
@@ -488,6 +552,14 @@ class UpdaterMergeTests(unittest.TestCase):
         self.assertEqual((UPDATER.TARGETS["skills"] / "tavern-worldbooks/SKILL.md").read_text(), "old lore skill\n")
         self.assertFalse((UPDATER.TARGETS["skills"] / "tavern-world").exists())
         self.assertEqual((UPDATER.TARGETS["skills"] / "custom-skill/SKILL.md").read_text(), "custom\n")
+        self.assertEqual((
+            UPDATER.TARGETS["system-skills"]
+            / "model-api-manager/references/local.md"
+        ).read_text(), "local system skill data\n")
+        self.assertEqual((
+            UPDATER.TARGETS["system-skills"]
+            / "custom-system-skill/SKILL.md"
+        ).read_text(), "custom system\n")
         self.assertEqual(UPDATER.AGENTS_PATH.read_text(), "local agents\n")
 
     def test_default_report_omits_file_hashes(self):
@@ -568,7 +640,7 @@ class RuntimeStateBoundaryTests(unittest.TestCase):
             )
             subprocess.run(
                 [sys.executable, "-c", command],
-                cwd=ROOT / "skill",
+                cwd=ROOT / "app/backend",
                 env=env,
                 check=True,
             )

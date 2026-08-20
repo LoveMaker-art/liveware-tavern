@@ -6,7 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "tavern_card_import_under_test",
-    ROOT / "skill/card_import.py",
+    ROOT / "app/backend/card_import.py",
 )
 CARD_IMPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CARD_IMPORT)
@@ -198,7 +198,7 @@ class CharacterCardMappingTests(unittest.TestCase):
             })
 
     def test_skill_contract_requires_verified_card_preparation(self):
-        contract = (ROOT / "creative-skills/tavern-world/references/card-workflow.md").read_text(
+        contract = (ROOT / "integrations/hermes/skills/creative/tavern-world/references/card-workflow.md").read_text(
             encoding="utf-8")
         for requirement in (
                 "SillyTavern V1, V2, or V3 JSON",

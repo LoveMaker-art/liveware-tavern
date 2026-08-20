@@ -7,7 +7,7 @@ global.document = {
   createElement(tag) { return { tagName: tag.toUpperCase(), className: "" }; },
 };
 
-require("../skill/reader/security.js");
+require("../app/frontend/security.js");
 const { TavernUI } = window;
 
 assert.equal(TavernUI.escapeHtml('<img src=x onerror="x">'), "&lt;img src=x onerror=&quot;x&quot;&gt;");

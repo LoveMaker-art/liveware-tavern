@@ -19,7 +19,7 @@ class CompleteWorldBuildTests(unittest.TestCase):
     def test_external_v3_import_inspects_before_writing(self):
         spec = importlib.util.spec_from_file_location(
             "tavern_cli_external_card_test",
-            ROOT / "skill/tools/tavern_cli.py",
+            ROOT / "tools/tavern_cli.py",
         )
         cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cli)
@@ -82,7 +82,7 @@ class CompleteWorldBuildTests(unittest.TestCase):
             f"""
             import json
             import sys
-            sys.path.insert(0, {str(ROOT / "skill")!r})
+            sys.path.insert(0, {str(ROOT / "app/backend")!r})
             import server
 
             first = server.ev_import_card_json({{"card": {{
@@ -129,7 +129,7 @@ class CompleteWorldBuildTests(unittest.TestCase):
     def test_json_apply_output_contains_only_one_json_document(self):
         spec = importlib.util.spec_from_file_location(
             "tavern_cli_world_build_test",
-            ROOT / "skill/tools/tavern_cli.py",
+            ROOT / "tools/tavern_cli.py",
         )
         cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cli)
@@ -175,7 +175,7 @@ class CompleteWorldBuildTests(unittest.TestCase):
             f"""
             import json
             import sys
-            sys.path.insert(0, {str(ROOT / "skill")!r})
+            sys.path.insert(0, {str(ROOT / "app/backend")!r})
             import server
 
             def card(name, opening):
@@ -331,7 +331,7 @@ class CompleteWorldBuildTests(unittest.TestCase):
             f"""
             import json
             import sys
-            sys.path.insert(0, {str(ROOT / "skill")!r})
+            sys.path.insert(0, {str(ROOT / "app/backend")!r})
             import server
 
             server.actor.chat = lambda *args, **kwargs: {json.dumps(prepared, ensure_ascii=False)!r}

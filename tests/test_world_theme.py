@@ -4,7 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "creative-skills/tavern-world-visuals/scripts/world_theme.py"
+MODULE_PATH = ROOT / "integrations/hermes/skills/creative/tavern-world-visuals/scripts/world_theme.py"
 SPEC = importlib.util.spec_from_file_location("tavern_world_theme", MODULE_PATH)
 WORLD_THEME = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(WORLD_THEME)

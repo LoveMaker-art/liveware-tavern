@@ -14,7 +14,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UPDATER = ROOT / "updater-skill/scripts/update.py"
+UPDATER = ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py"
 
 
 def sha256(path):
@@ -44,6 +44,10 @@ def extract_install(assets, data_root):
             package.extractall(stage)
         shutil.copytree(stage / "runtime", data_root / "apps/tavern-runtime")
         shutil.copytree(stage / "updater", data_root / "skills/system/tavern-updater")
+        for skill in (stage / "system-skills").iterdir():
+            if skill.is_dir():
+                shutil.copytree(skill, data_root / "skills/system" / skill.name)
+        shutil.copy2(stage / "updater/references/AGENTS.md", data_root / "AGENTS.md")
         creative_root = data_root / "skills/creative"
         creative_root.mkdir(parents=True)
         for skill in (stage / "skills").iterdir():

@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skill"
-if str(SKILL) not in sys.path:
-    sys.path.insert(0, str(SKILL))
+BACKEND = ROOT / "app/backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
 
 import generation_service
 import message_segments
