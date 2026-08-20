@@ -52,7 +52,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         )
         updater = load_module(
             "tavern_updater_allowlist",
-            ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py",
+            ROOT / "skills/tavern-updater/scripts/update.py",
         )
 
         self.assertEqual(set(bootstrap.SKILL_FILES), updater.CREATIVE_SKILL_FILES)
@@ -60,10 +60,10 @@ class RepositoryHygieneTests(unittest.TestCase):
 
     def test_bootstrap_transition_guidance_is_consistent(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        updater_skill = (ROOT / "integrations/hermes/skills/system/tavern-updater/SKILL.md").read_text(encoding="utf-8")
+        updater_skill = (ROOT / "skills/tavern-updater/SKILL.md").read_text(encoding="utf-8")
         updater_agents = (ROOT / "integrations/hermes/AGENTS.md").read_text(encoding="utf-8")
         bootstrap_source = (ROOT / "bootstrap/tavern_updater_bootstrap.py").read_text(encoding="utf-8")
-        updater_source = (ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py").read_text(encoding="utf-8")
+        updater_source = (ROOT / "skills/tavern-updater/scripts/update.py").read_text(encoding="utf-8")
 
         command = "install-tavern-updater.sh | sh"
         self.assertIn(command, readme)
@@ -151,14 +151,15 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse(any((ROOT / "skill").rglob("*")))
 
     def test_hermes_scripts_have_one_source_of_truth(self):
-        self.assertTrue((ROOT / "integrations/clawchat/scripts/bringup.sh").is_file())
-        self.assertTrue((ROOT / "integrations/clawchat/scripts/provision.sh").is_file())
+        canonical = ROOT / "skills/tavern"
+        self.assertTrue((canonical / "scripts/bringup.sh").is_file())
+        self.assertTrue((canonical / "scripts/provision.sh").is_file())
+        self.assertTrue((canonical / "scripts/runtime.sh").is_file())
+        self.assertTrue((canonical / "scripts/tavern_cli.py").is_file())
         self.assertTrue((ROOT / "tools/tavern_cli.py").is_file())
-        self.assertTrue((
-            ROOT / "integrations/clawchat/hooks/tavern-liveware-register/HOOK.yaml"
-        ).is_file())
-        self.assertFalse((ROOT / "integrations/hermes/skills/creative/tavern/scripts").exists())
-        self.assertFalse((ROOT / "integrations/hermes/skills/creative/tavern/hooks").exists())
+        self.assertTrue((canonical / "hooks/tavern-liveware-register/HOOK.yaml").is_file())
+        self.assertFalse((ROOT / "integrations/clawchat").exists())
+        self.assertFalse((ROOT / "integrations/hermes/skills").exists())
         duplicates = [
             path.relative_to(ROOT).as_posix()
             for path in (ROOT / "skill/tools").glob("*")
@@ -183,6 +184,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             {
                 "skills/tavern/scripts/bringup.sh",
                 "skills/tavern/scripts/provision.sh",
+                "skills/tavern/scripts/runtime.sh",
                 "skills/tavern/scripts/tavern_cli.py",
                 "skills/tavern-continuity/scripts/tavern_repair.py",
                 "skills/tavern-story-profile/scripts/profile_memory.py",
@@ -219,7 +221,11 @@ class RepositoryHygieneTests(unittest.TestCase):
 
     def test_all_creative_skill_versions_match_release(self):
         release_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        for skill_file in sorted((ROOT / "integrations/hermes/skills/creative").glob("*/SKILL.md")):
+        creative_names = (
+            "tavern", "tavern-world", "tavern-story-profile",
+            "tavern-continuity", "tavern-ops", "tavern-world-visuals",
+        )
+        for skill_file in (ROOT / "skills" / name / "SKILL.md" for name in creative_names):
             version_line = next(
                 line for line in skill_file.read_text(encoding="utf-8").splitlines()
                 if line.startswith("version:")
@@ -230,7 +236,7 @@ class RepositoryHygieneTests(unittest.TestCase):
                 skill_file.relative_to(ROOT).as_posix(),
             )
 
-        updater_skill = ROOT / "integrations/hermes/skills/system/tavern-updater/SKILL.md"
+        updater_skill = ROOT / "skills/tavern-updater/SKILL.md"
         updater_version = next(
             line for line in updater_skill.read_text(encoding="utf-8").splitlines()
             if line.startswith("version:")
@@ -241,7 +247,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         canonical = ROOT / "integrations/hermes/AGENTS.md"
         self.assertTrue(canonical.is_file())
         self.assertTrue(canonical.read_text(encoding="utf-8").startswith("# AGENTS.md"))
-        self.assertFalse((ROOT / "integrations/hermes/skills/system/tavern-updater/references/agents-block.md").exists())
+        self.assertFalse((ROOT / "skills/tavern-updater/references/agents-block.md").exists())
         self.assertNotIn("tavern-updater:start", canonical.read_text(encoding="utf-8"))
 
     def test_soul_is_a_source_template_not_a_release_managed_file(self):
@@ -258,7 +264,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse(any(path.lower().endswith("soul.md") for path in managed))
 
     def test_managed_system_skill_is_packaged_from_hermes_integration(self):
-        source = ROOT / "integrations/hermes/skills/system/model-api-manager"
+        source = ROOT / "skills/model-api-manager"
         self.assertTrue((source / "SKILL.md").is_file())
         self.assertTrue((source / "scripts/model_api_manager.py").is_file())
         archive = ROOT / "dist/tavern-release.tar.gz"

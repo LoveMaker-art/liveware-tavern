@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -36,6 +37,18 @@ USER_END = "<!-- TAVERN_USER_PROFILE_END -->"
 MEMORY_START = "<!-- TAVERN_SHARED_MEMORY_START -->"
 MEMORY_END = "<!-- TAVERN_SHARED_MEMORY_END -->"
 PROJECTION_REVISION_PREFIX = "<!-- TAVERN_PROJECTION_REVISION:"
+
+
+def _default_hermes_home() -> Path:
+    configured = os.environ.get("HERMES_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    if sys.platform.startswith("linux") and Path("/opt/data/skills").is_dir():
+        return Path("/opt/data")
+    return (Path.home() / ".hermes").resolve()
+
+
+HERMES_HOME = _default_hermes_home()
 
 _LOCK = threading.RLock()
 
@@ -530,7 +543,8 @@ def _invalidate_hermes_prompt_cache(
     state_db: str | Path | None = None,
 ) -> dict:
     """Expire active ClawChat prompts that predate this projection revision."""
-    path = Path(state_db or os.environ.get("TAVERN_HERMES_STATE_DB", "/opt/data/state.db"))
+    path = Path(state_db or os.environ.get(
+        "TAVERN_HERMES_STATE_DB", HERMES_HOME / "state.db"))
     if not path.exists():
         return {"checked": False, "invalidated": 0}
 
@@ -582,7 +596,8 @@ def sync_hermes_memories(
     *,
     state_db: str | Path | None = None,
 ) -> dict:
-    root = Path(memories_dir or os.environ.get("TAVERN_HERMES_MEMORIES_DIR", "/opt/data/memories"))
+    root = Path(memories_dir or os.environ.get(
+        "TAVERN_HERMES_MEMORIES_DIR", HERMES_HOME / "memories"))
     root.mkdir(parents=True, exist_ok=True)
     targets = (
         (root / "USER.md", USER_START, USER_END, _user_projection(profile)),

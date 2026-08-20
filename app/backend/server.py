@@ -74,7 +74,23 @@ from story_ledger import (  # noqa: E402
 )
 from tts_service import TTSService  # noqa: E402
 
-STATE = os.environ.get("TAVERN_STATE_DIR", "/opt/data/tavern-state")
+
+def _default_hermes_home():
+    configured = os.environ.get("HERMES_HOME")
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+    if sys.platform.startswith("linux") and os.path.isdir("/opt/data/skills"):
+        return "/opt/data"
+    return os.path.abspath(os.path.expanduser("~/.hermes"))
+
+
+HERMES_HOME = _default_hermes_home()
+DATA_ROOT = os.path.abspath(os.path.expanduser(
+    os.environ.get("TAVERN_DATA_ROOT", HERMES_HOME)))
+HERMES_MEMORIES_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("TAVERN_HERMES_MEMORIES_DIR", os.path.join(HERMES_HOME, "memories"))))
+STATE = os.path.abspath(os.path.expanduser(
+    os.environ.get("TAVERN_STATE_DIR", os.path.join(DATA_ROOT, "tavern-state"))))
 READER = (
     os.path.join(APP_ROOT, "frontend")
     if os.path.isdir(os.path.join(APP_ROOT, "frontend"))
@@ -195,7 +211,7 @@ def _write(path, value):
 
 def _clawchat_agent_profile():
     """Best-effort local ClawChat profile metadata for name/avatar sync."""
-    path = "/opt/data/memories/owner.md"
+    path = os.path.join(HERMES_MEMORIES_DIR, "owner.md")
     profile = {}
     try:
         with open(path, encoding="utf-8") as file:
@@ -276,7 +292,7 @@ def liveware_version():
         pass
 
     # 旧安装没有 release marker 时，回落到技能 frontmatter。
-    skill_md = "/opt/data/skills/creative/tavern/SKILL.md"
+    skill_md = os.path.join(HERMES_HOME, "skills/creative/tavern/SKILL.md")
     for path in (skill_md, os.path.join(HERE, "SKILL.md")):
         try:
             with open(path, encoding="utf-8") as f:
@@ -295,7 +311,9 @@ def agent_user_id():
     if envv:
         return envv
     try:
-        with open("/opt/data/config.yaml", encoding="utf-8") as f:
+        with open(os.environ.get(
+                "HERMES_CONFIG_PATH", os.path.join(HERMES_HOME, "config.yaml")),
+                encoding="utf-8") as f:
             for line in f:
                 s = line.strip()
                 if s.startswith("user_id:"):
@@ -3529,7 +3547,8 @@ def ev_set_note(ev):
 # 自定义配置可由 reader 或 CLI 写入。key 只落 server 端 state 文件（0600），
 # 任何读端点一律脱敏。
 MODELS_PATH = os.path.join(STATE, "model_configs.json")
-HERMES_CONFIG_PATH = os.environ.get("HERMES_CONFIG_PATH", "/opt/data/config.yaml")
+HERMES_CONFIG_PATH = os.environ.get(
+    "HERMES_CONFIG_PATH", os.path.join(HERMES_HOME, "config.yaml"))
 OFFICIAL_MODELS = ("deepseek-v4-flash",)
 MODEL_REGISTRY = ModelRegistry(
     MODELS_PATH,

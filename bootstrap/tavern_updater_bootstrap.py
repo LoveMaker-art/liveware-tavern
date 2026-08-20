@@ -53,6 +53,7 @@ SKILL_FILES = (
     "tavern/references/shared-contract.md",
     "tavern/scripts/bringup.sh",
     "tavern/scripts/provision.sh",
+    "tavern/scripts/runtime.sh",
     "tavern/scripts/tavern_cli.py",
     "tavern-world/SKILL.md",
     "tavern-world/references/card-workflow.md",
@@ -281,7 +282,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Install Tavern's verified updater on a legacy Hermes instance and generate an update report."
     )
-    parser.add_argument("--data-root", default=os.environ.get("TAVERN_DATA_ROOT", "/opt/data"))
+    default_home = os.environ.get("HERMES_HOME")
+    if not default_home:
+        default_home = (
+            "/opt/data"
+            if sys.platform.startswith("linux") and Path("/opt/data/skills").is_dir()
+            else str(Path.home() / ".hermes")
+        )
+    parser.add_argument(
+        "--data-root",
+        default=os.environ.get("TAVERN_DATA_ROOT", default_home),
+    )
     parser.add_argument("--apply", action="store_true", help="apply the reviewed update after installation")
     parser.add_argument("--confirm", action="store_true", help="confirm that this command authorizes update installation")
     parser.add_argument("--release-dir", help=argparse.SUPPRESS)

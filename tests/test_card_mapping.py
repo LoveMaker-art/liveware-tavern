@@ -198,7 +198,7 @@ class CharacterCardMappingTests(unittest.TestCase):
             })
 
     def test_skill_contract_requires_verified_card_preparation(self):
-        contract = (ROOT / "integrations/hermes/skills/creative/tavern-world/references/card-workflow.md").read_text(
+        contract = (ROOT / "skills/tavern-world/references/card-workflow.md").read_text(
             encoding="utf-8")
         for requirement in (
                 "SillyTavern V1, V2, or V3 JSON",

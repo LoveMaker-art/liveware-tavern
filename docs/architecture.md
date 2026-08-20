@@ -21,12 +21,12 @@ TAVERN_STATE_DIR
 | `app/backend/` | 后端运行时唯一源码 |
 | `app/frontend/` | Web 前端唯一源码 |
 | `app/assets/` | 内置角色模板、默认档案和音色目录 |
-| `integrations/hermes/skills/creative/` | Tavern 路由技能与五个专业工作流 |
-| `integrations/hermes/skills/system/` | 更新与模型 API 管理等系统工作流 |
+| `skills/` | Hermes Custom Tap；Tavern 路由、专业工作流、系统技能和共享脚本 |
 | `integrations/hermes/AGENTS.md` | Hermes 的发布托管路由说明 |
 | `integrations/hermes/SOUL.md` | Hermes 首次部署人格模板；安装后归实例所有 |
-| `integrations/clawchat/` | ClawChat Hook 与 Liveware 生命周期脚本 |
-| `tools/tavern_cli.py` | Hermes 技能使用的共享结构化 CLI |
+| `skills/tavern/hooks/` | 可选 ClawChat Hook |
+| `skills/tavern/scripts/` | 共享结构化 CLI、通用运行脚本和可选 Liveware 生命周期脚本 |
+| `tools/tavern_cli.py` | 兼容旧源码调用的薄入口；实现仍在 `skills/tavern/scripts/` |
 | `bootstrap/` | 更新器自举 |
 
 不要在 `app/` 下复制 Hermes 脚本。发布包由 `scripts/build_release.py` 从上述唯一源码生成，
@@ -45,12 +45,13 @@ TAVERN_STATE_DIR
 - `apps.json`、`app_identity.json`：可选 Liveware 实例信息
 
 发布包不得包含这些文件，也不得包含 API Key、聊天数据库、日志或用户会话。
-实例中的 `/opt/data/SOUL.md` 同样属于身份数据：源码模板可用于首次部署，常规
+实例中的 `$HERMES_HOME/SOUL.md` 同样属于身份数据：源码模板可用于首次部署，常规
 Tavern Release 与更新器不得管理、替换或回滚它。
 
 ## Agent 边界
 
-当前一等支持的是 Hermes：技能调用共享 CLI，CLI 调用 Tavern 本机 HTTP API。
+当前一等支持的是 Hermes：技能调用共享 CLI，CLI 调用 Tavern 本机 HTTP API。技能仓库遵循
+Hermes Custom Tap 的 `skills/<slug>/SKILL.md` 结构，安装位置由当前 `$HERMES_HOME` 决定。
 HTTP API 是前端和 CLI 的运行时接口，但目前不是承诺长期兼容的通用 Agent 协议。
 
 仓库当前没有 MCP Server。未来添加 MCP 或其他 Agent 适配器时，应放在独立适配目录，

@@ -11,7 +11,7 @@ Tavern 是一个开源的多角色互动故事系统。它包含可独立运行�
 | 目标 | 使用内容 | 文档 |
 | --- | --- | --- |
 | 只运行酒馆 Web 应用 | `app/` | [独立部署](docs/standalone.md) |
-| 安装 Hermes Agent + 酒馆 | `app/`、`integrations/hermes/`、`integrations/clawchat/` | [Hermes 部署](docs/hermes.md) |
+| 安装 Hermes Agent + 酒馆 | `app/`、`skills/`、`integrations/hermes/` | [Hermes 部署](docs/hermes.md) |
 | 理解代码、状态与发布边界 | 全仓库 | [项目架构](docs/architecture.md) |
 | 配置模型、存储、安全与性能 | 环境变量和实例状态 | [配置参考](docs/configuration.md) |
 
@@ -37,11 +37,28 @@ python3 app/backend/server.py --port 8799
 
 打开 <http://127.0.0.1:8799/>。运行数据只写入 `TAVERN_STATE_DIR`，不会写回源码目录。
 
-## 当前 Agent 适配状态
+## Hermes Agent 集成
 
-- **Hermes：已适配。** Agent 可通过六个创意技能、两个系统技能及共享 CLI 创建世界、导入角色卡和世界书、维护剧情连续性、配置模型并管理运行服务与版本。
+- **Hermes：已适配。** 仓库根目录的 `skills/` 是一个符合 Hermes 官方结构的 Custom Tap。Agent 可通过六个创意技能、两个系统技能及共享 CLI 创建世界、导入角色卡和世界书、维护剧情连续性、配置模型并管理运行服务与版本。
 - **ClawChat：已适配。** 可选 Hook 会在 Gateway 启动时恢复 Tavern 服务并注册两个 Liveware 入口。
 - **其他 Agent：尚未提供即装即用适配器。** Tavern 已有本地 HTTP API，但本仓库当前没有 MCP Server，也没有承诺稳定的通用工具协议。不要仅凭“存在 HTTP API”把它描述为已完成通用 Agent 适配。
+
+已经运行 Tavern、只需安装 Hermes 技能时：
+
+```sh
+hermes skills tap add LoveMaker-art/liveware-tavern
+hermes skills install LoveMaker-art/liveware-tavern/tavern
+hermes skills install LoveMaker-art/liveware-tavern/tavern-world
+hermes skills install LoveMaker-art/liveware-tavern/tavern-story-profile
+hermes skills install LoveMaker-art/liveware-tavern/tavern-continuity
+hermes skills install LoveMaker-art/liveware-tavern/tavern-ops
+hermes skills install LoveMaker-art/liveware-tavern/tavern-world-visuals
+hermes skills install LoveMaker-art/liveware-tavern/tavern-updater
+hermes skills install LoveMaker-art/liveware-tavern/model-api-manager
+```
+
+Hermes 会把技能安装到当前 profile 的 `$HERMES_HOME/skills/`。新会话自动生效；应用部署与
+ClawChat 注册仍按 [Hermes 部署](docs/hermes.md) 完成。
 
 ## 仓库结构
 
@@ -49,9 +66,9 @@ python3 app/backend/server.py --port 8799
 app/backend/                    Tavern 后端唯一源码
 app/frontend/                   Tavern Web 前端唯一源码
 app/assets/                     内置模板和运行资源
-integrations/hermes/            Hermes SOUL、路由、创意技能与系统技能
-integrations/clawchat/          ClawChat Hook、Liveware 部署与恢复脚本
-tools/                          Agent 与运维共享的 Tavern CLI
+skills/                         Hermes Custom Tap：技能、共享 CLI 与可选 ClawChat 适配器
+integrations/hermes/            可选 AGENTS 与 SOUL 实例模板
+tools/                          兼容旧调用路径的 Tavern CLI 入口
 bootstrap/                      更新器 Bootstrap
 docs/                           部署、配置与架构文档
 scripts/                        发布构建脚本
@@ -70,14 +87,14 @@ python3 scripts/build_release.py
 
 ## Hermes 更新
 
-兼容的 `/opt/data` Hermes 实例可通过经过校验的 Bootstrap 审查并安装稳定版本：
+Hermes 实例可通过经过校验的 Bootstrap 安装或更新应用与整套技能：
 
 ```sh
 curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
 更新器只管理发布清单中的代码和技能。用户世界、模型配置、身份、故事与素材位于
-`/opt/data/tavern-state`，不在覆盖范围内。具体流程见 [Hermes 部署](docs/hermes.md)。
+`$TAVERN_STATE_DIR`，不在覆盖范围内。具体流程见 [Hermes 部署](docs/hermes.md)。
 
 ## License
 

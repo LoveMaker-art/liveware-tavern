@@ -18,7 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "tavern_updater_under_test",
-    ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py",
+    ROOT / "skills/tavern-updater/scripts/update.py",
 )
 UPDATER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPDATER)

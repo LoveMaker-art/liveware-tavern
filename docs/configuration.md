@@ -1,7 +1,7 @@
 # 配置参考
 
 以下变量由 Tavern 核心运行时读取。独立部署只需配置“必需”部分；Hermes 部署通常由
-`bringup.sh` 从 `/opt/data/config.yaml` 解析模型地址和密钥。
+`bringup.sh` 从 `$HERMES_HOME/config.yaml` 解析模型地址和密钥。
 
 ## 必需配置
 
@@ -10,10 +10,10 @@
 | `TAVERN_MODEL_BASE` | 无 | OpenAI-compatible API 根地址，通常以 `/v1` 结尾 |
 | `TAVERN_MODEL_KEY` | 无 | 文本模型密钥 |
 | `TAVERN_MODEL` | `deepseek-v4-flash` | 模型 ID |
-| `TAVERN_STATE_DIR` | `/opt/data/tavern-state` | 持久化状态根目录 |
+| `TAVERN_STATE_DIR` | `$TAVERN_DATA_ROOT/tavern-state` | 持久化状态根目录；独立模式建议显式设置 |
 
 独立部署必须显式设置状态目录、模型地址和密钥。Hermes 环境在未设置模型变量时可读取
-`/opt/data/config.yaml`，但这只是 Hermes 兼容回退，不应作为独立部署方式。
+`$HERMES_HOME/config.yaml`，但这只是 Hermes 兼容回退，不应作为独立部署方式。
 
 ## 服务与安全
 

@@ -15,8 +15,10 @@ import html
 import json
 import os
 import re
+import sys
 import time
 import urllib.request
+from pathlib import Path
 
 import yaml
 
@@ -26,13 +28,28 @@ from story_ledger import (
     validated_story_state as _validated_story_state,
 )
 
+
+def _default_hermes_home():
+    configured = os.environ.get("HERMES_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    if sys.platform.startswith("linux") and Path("/opt/data/skills").is_dir():
+        return Path("/opt/data")
+    return (Path.home() / ".hermes").resolve()
+
+
+HERMES_HOME = _default_hermes_home()
+DATA_ROOT = Path(os.environ.get("TAVERN_DATA_ROOT", HERMES_HOME)).expanduser().resolve()
+HERMES_CONFIG_PATH = Path(os.environ.get(
+    "HERMES_CONFIG_PATH", HERMES_HOME / "config.yaml")).expanduser().resolve()
+
 def _load_model_base():
     """Resolve the built-in provider endpoint without a service-specific default."""
     base = os.environ.get("TAVERN_MODEL_BASE")
     if base:
         return base.strip().rstrip("/")
     try:
-        with open("/opt/data/config.yaml", encoding="utf-8") as f:
+        with HERMES_CONFIG_PATH.open(encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         provider = (cfg.get("providers") or {}).get("clawling") or {}
         model = cfg.get("model") or {}
@@ -83,7 +100,7 @@ def _load_key():
     if k:
         return k
     try:
-        with open("/opt/data/config.yaml", encoding="utf-8") as f:
+        with HERMES_CONFIG_PATH.open(encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         provider = (cfg.get("providers") or {}).get("clawling") or {}
         model = cfg.get("model") or {}
@@ -92,7 +109,7 @@ def _load_key():
             return str(k).strip()
     except (OSError, yaml.YAMLError, TypeError):
         pass
-    env_paths = ["/opt/data/.hermes-tavern/.env"]
+    env_paths = [str(DATA_ROOT / ".hermes-tavern/.env")]
     expanded = os.path.expanduser("~/.hermes-tavern/.env")
     if expanded not in env_paths:
         env_paths.append(expanded)
