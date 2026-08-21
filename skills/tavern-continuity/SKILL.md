@@ -1,7 +1,7 @@
 ---
 name: tavern-continuity
 description: Diagnose Tavern generation, memory, and continuity problems.
-version: 1.24.1
+version: 1.24.2
 author: ClawChat Tavern
 license: AGPL-3.0-only
 platforms: [linux, macos, windows]
