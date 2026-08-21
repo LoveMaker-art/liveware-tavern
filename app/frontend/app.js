@@ -694,6 +694,7 @@ function librarySectionHtml(actorSec, modelsSec) {
       <button class="actorMore" id="openCardLibrary">${CARD_SVG}${esc(t("openCardLibrary"))}</button>
       <button class="actorMore" id="openWorldbookLibrary">${WORLD_SVG}${esc(t("openWorldbookLibrary"))}</button>
     </div>
+    <button class="actorMore" id="importExternalCast" ${state._externalCastImporting ? "disabled" : ""}>${UPLOAD_SVG}${esc(t(state._externalCastImporting ? "parsingCard" : "castFromExternal"))}</button>
     <div class="librarySupport">
       ${actorSec}
       ${modelsSec}
@@ -761,10 +762,7 @@ function renderPanel() {
       </div>
       <div class="pFoldBody${charFold}" id="charBody">
         ${castHtml}
-        ${state._editCast ? `<div class="castActions">
-          <button class="actorMore" id="addCast">${PLUS_SVG}${esc(t("addCast"))}</button>
-          <button class="actorMore" id="importExternalCast" ${state._externalCastImporting ? "disabled" : ""}>${UPLOAD_SVG}${esc(t(state._externalCastImporting ? "parsingCard" : "castFromExternal"))}</button>
-        </div>` : ""}
+        ${state._editCast ? `<div class="castActions"><button class="actorMore" id="addCast">${PLUS_SVG}${esc(t("addCast"))}</button></div>` : ""}
       </div></div>`;
     const lore = [];
     const currentWorldbooks = Array.isArray(p.worldbooks)
