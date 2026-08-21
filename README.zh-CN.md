@@ -1,0 +1,144 @@
+<div align="center">
+
+# Tavern
+
+### 为多角色 AI 故事保留一个真正持续生长的世界
+
+一个可独立运行，也可由 Hermes Agent 操作的开源互动故事系统。
+
+[English](README.md) · [快速开始](#快速开始) · [接入 Hermes](#接入-hermes-agent) · [文档导航](#文档导航)
+
+[![最新版本](https://img.shields.io/github/v/release/LoveMaker-art/liveware-tavern?display_name=tag&sort=semver)](https://github.com/LoveMaker-art/liveware-tavern/releases/latest)
+[![许可证：AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-8b5cf6.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
+[![Hermes 技能](https://img.shields.io/badge/Hermes-custom%20tap-111827.svg)](docs/hermes.md)
+
+</div>
+
+![Tavern 桌面端界面](docs/images/tavern-desktop.jpg)
+
+Tavern 保存普通聊天界面最容易丢失的部分：世界、登场角色、你的角色、触发设定、人物变化，以及经过压缩整理的剧情账本。前端只专注于当下这一幕，连续性由背后的状态系统维护。
+
+## 核心能力
+
+- **多角色世界**：同一场景中包含你的角色、登场角色、世界书、触发设定和持久会话。
+- **长剧情连续性**：按阶段整理剧情账本，并以结构化方式更新长期角色状态。
+- **角色卡兼容**：对常见 Tavern / SillyTavern 角色卡数据进行解析和标准化导入。
+- **完整故事交互**：继续、重生成、编辑、智能回复、文本模型选择和语音播放。
+- **世界视觉风格**：每个世界可独立设置桌面与手机背景、字体、颜色和阅读表面。
+- **Agent 驱动**：Hermes 可通过技能创建世界、导入素材、管理模型、检查状态和更新应用。
+- **代码与数据分离**：发布更新不会覆盖用户故事、角色、模型密钥或上传素材。
+
+## 界面预览
+
+| 手机沉浸阅读 | 世界与角色工作区 |
+| --- | --- |
+| ![Tavern 手机端故事界面](docs/images/tavern-mobile.jpg) | ![Tavern 世界与角色面板](docs/images/world-and-cast.jpg) |
+
+同一个世界既可以在手机上专注阅读，也可以在桌面端查看角色、世界设定、素材库、模型与故事档案。
+
+## 选择部署方式
+
+| 目标 | 安装内容 | 适用场景 |
+| --- | --- | --- |
+| 单独运行 Tavern | `app/` | 私有部署或自托管互动故事 Web 应用 |
+| Hermes + Tavern | `app/`、`skills/`、`integrations/hermes/` | 让 Agent 通过自然语言构建和管理世界 |
+| 接入 ClawChat Liveware | Hermes 部署加可选 Hook | 从 ClawChat 对话中直接打开 Tavern |
+
+Tavern 不依赖 Liveware 才能运行。Liveware 只是 ClawChat 中的可选展示入口；Hermes 是本仓库已经提供的 Agent 集成方式。
+
+## 快速开始
+
+需要 Python 3.10+，以及一个兼容 OpenAI Chat Completions 的模型接口。
+
+```bash
+git clone https://github.com/LoveMaker-art/liveware-tavern.git
+cd liveware-tavern
+
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+
+export TAVERN_STATE_DIR="$PWD/tavern-state"
+export TAVERN_MODEL_BASE="https://your-provider.example/v1"
+export TAVERN_MODEL_KEY="replace-with-your-key"
+export TAVERN_MODEL="your-model-id"
+
+python3 app/backend/server.py --port 8799
+```
+
+打开 [http://127.0.0.1:8799](http://127.0.0.1:8799)。运行数据只写入 `TAVERN_STATE_DIR`，不会写回源码目录。
+
+正式部署、反向代理、环境变量和数据目录说明见[独立部署](docs/standalone.md)与[配置参考](docs/configuration.md)。
+
+## 接入 Hermes Agent
+
+已经安装 Hermes 时，可使用经过校验的 Bootstrap 安装或更新 Tavern 应用、完整技能和受管理的 Hermes 集成文件：
+
+```bash
+curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
+```
+
+更新器会检查发布清单与兼容性、创建回滚材料、应用受管理文件，并在完成后执行健康检查。世界、角色卡、故事、模型配置、身份与上传素材都不在覆盖范围内。
+
+如果 Tavern 已经运行，只需要技能，可按 [Hermes Custom Tap 指南](docs/hermes.md#只安装技能)单独安装。
+
+## 系统关系
+
+```mermaid
+flowchart LR
+    U[用户] --> W[Tavern Web 前端]
+    H[Hermes Agent] --> S[Hermes 技能]
+    S --> C[共享 Tavern CLI]
+    W --> A[Tavern HTTP API]
+    C --> A
+    A --> M[OpenAI 兼容模型]
+    A --> D[(Tavern 数据目录)]
+    G[ClawChat Liveware] -. 可选 .-> W
+```
+
+前端与 Hermes 技能通过同一套 Tavern API 和状态数据工作。Agent 不直接改生产 JSON，而是通过共享 CLI 与 HTTP 边界完成操作。
+
+## 仓库结构
+
+```text
+app/backend/             Tavern 后端源码
+app/frontend/            Tavern Web 前端源码
+app/assets/              内置模板与运行资源
+skills/                  Hermes Custom Tap 与共享 CLI
+integrations/hermes/     可选 AGENTS 与 SOUL 模板
+tools/                   可移植的 Tavern CLI 入口
+bootstrap/               带校验的更新器 Bootstrap
+docs/                    部署、配置与架构文档
+scripts/                 发布构建工具
+tests/                   后端、前端、更新器与边界测试
+```
+
+源码仓库不应包含任何用户世界、角色卡、聊天记录、密钥、ClawChat 会话或注册数据。
+
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [独立部署](docs/standalone.md) | 不使用 Hermes 的本地与服务器安装 |
+| [Hermes 部署](docs/hermes.md) | 技能、路径、Hook、ClawChat 与更新 |
+| [配置参考](docs/configuration.md) | 模型、存储、安全与性能 |
+| [项目架构](docs/architecture.md) | 运行边界、状态、API 与发布设计 |
+| [参与贡献](CONTRIBUTING.md) | 开发流程与 Pull Request 规范 |
+| [安全策略](SECURITY.md) | 漏洞报告与密钥处理原则 |
+
+## 开发与测试
+
+```bash
+PYTHONPATH=app/backend python3 -m unittest discover -s tests -v
+node --test tests/frontend_security.test.js
+python3 scripts/build_release.py
+```
+
+修改运行边界、状态迁移、更新器清单或共享技能前，请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 开源协议
+
+Tavern 采用 [GNU AGPL-3.0-only](LICENSE)。通过网络提供修改后的版本时，需要按 AGPL 第 13 条向用户提供对应源码。
+
+`v1.18.1` 及更早版本仍按当时随版本附带的 MIT License 发布。
