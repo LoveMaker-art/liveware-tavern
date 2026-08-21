@@ -1,6 +1,6 @@
 <div align="center">
 
-# Tavern
+# Nora's Tavern
 
 ### Persistent worlds for multi-character AI stories
 
@@ -8,7 +8,7 @@ An open-source storytelling system that runs as a standalone web app or as a con
 
 [简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Hermes integration](#hermes-agent) · [Documentation](#documentation)
 
-[![Latest release](https://img.shields.io/github/v/release/LoveMaker-art/liveware-tavern?display_name=tag&sort=semver)](https://github.com/LoveMaker-art/liveware-tavern/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/LoveMaker-art/noras-tavern?display_name=tag&sort=semver)](https://github.com/LoveMaker-art/noras-tavern/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-8b5cf6.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![Hermes skills](https://img.shields.io/badge/Hermes-custom%20tap-111827.svg)](docs/hermes.md)
@@ -17,7 +17,7 @@ An open-source storytelling system that runs as a standalone web app or as a con
 
 ![Tavern desktop interface](docs/images/tavern-desktop.jpg)
 
-Tavern keeps the parts of a long-running story that ordinary chat interfaces tend to lose: the world, the cast, the player's persona, active lore, character changes, and a compact story ledger. The interface stays focused on the scene while the state model works behind it.
+Nora's Tavern keeps the parts of a long-running story that ordinary chat interfaces tend to lose: the world, the cast, the player's persona, active lore, character changes, and a compact story ledger. The interface stays focused on the scene while the state model works behind it.
 
 ## What It Includes
 
@@ -52,8 +52,8 @@ Tavern does not require Liveware. Liveware is an optional ClawChat surface; Herm
 Requirements: Python 3.10+ and an OpenAI-compatible Chat Completions endpoint.
 
 ```bash
-git clone https://github.com/LoveMaker-art/liveware-tavern.git
-cd liveware-tavern
+git clone https://github.com/LoveMaker-art/noras-tavern.git
+cd noras-tavern
 
 python3 -m venv .venv
 . .venv/bin/activate
@@ -76,7 +76,7 @@ For production deployment, reverse proxies, environment variables, and storage b
 For an existing Hermes installation, the verified bootstrap installs or updates the Tavern application, the complete skill set, and the managed Hermes integration files:
 
 ```bash
-curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
+curl -fsSL https://github.com/LoveMaker-art/noras-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
 The updater reviews the release manifest, checks compatibility, creates rollback material, applies managed files, and performs a health check. Worlds, cards, stories, model configuration, identity, and uploaded assets remain outside its overwrite boundary.
@@ -139,6 +139,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before changing runtime boundaries, state
 
 ## License
 
-Tavern is licensed under [GNU AGPL-3.0-only](LICENSE). If you provide a modified version over a network, you must make the corresponding source available as required by section 13 of the AGPL.
+Nora's Tavern is licensed under [GNU AGPL-3.0-only](LICENSE). If you provide a modified version over a network, you must make the corresponding source available as required by section 13 of the AGPL.
 
 Releases up to and including `v1.18.1` remain available under the MIT License shipped with those releases.

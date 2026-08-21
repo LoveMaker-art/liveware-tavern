@@ -12,8 +12,8 @@
 ## 安装
 
 ```sh
-git clone https://github.com/LoveMaker-art/liveware-tavern.git
-cd liveware-tavern
+git clone https://github.com/LoveMaker-art/noras-tavern.git
+cd noras-tavern
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt

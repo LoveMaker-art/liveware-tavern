@@ -16,7 +16,7 @@ import urllib.request
 import uuid
 
 
-REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/liveware-tavern")
+REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/noras-tavern")
 RELEASE_BASE_URL = os.environ.get(
     "TAVERN_BOOTSTRAP_RELEASE_BASE_URL",
     f"https://github.com/{REPO}/releases/latest/download",

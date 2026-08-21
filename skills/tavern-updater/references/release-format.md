@@ -1,6 +1,6 @@
 # Release Format
 
-The updater reads the latest stable GitHub Release from `LoveMaker-art/liveware-tavern`.
+The updater reads the latest stable GitHub Release from `LoveMaker-art/noras-tavern`.
 
 Required assets:
 

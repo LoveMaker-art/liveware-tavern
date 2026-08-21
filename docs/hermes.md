@@ -11,7 +11,7 @@ Tavern 使用 Hermes 官方的技能目录规则：`$HERMES_HOME/skills/` 是已
 需要同时安装 Tavern Web 应用、全部技能和更新器时，运行经过清单校验的 Bootstrap：
 
 ```sh
-curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
+curl -fsSL https://github.com/LoveMaker-art/noras-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
 它会以 `$HERMES_HOME` 为数据根目录；若未设置，则使用 Hermes 默认的 `~/.hermes`。
@@ -36,15 +36,15 @@ Bootstrap 会先下载 manifest、验证归档和逐文件哈希，再审查当�
 Tavern 已在本机或其他位置运行，只需要让 Hermes 控制它时，可使用官方 Custom Tap：
 
 ```sh
-hermes skills tap add LoveMaker-art/liveware-tavern
-hermes skills install LoveMaker-art/liveware-tavern/tavern
-hermes skills install LoveMaker-art/liveware-tavern/tavern-world
-hermes skills install LoveMaker-art/liveware-tavern/tavern-story-profile
-hermes skills install LoveMaker-art/liveware-tavern/tavern-continuity
-hermes skills install LoveMaker-art/liveware-tavern/tavern-ops
-hermes skills install LoveMaker-art/liveware-tavern/tavern-world-visuals
-hermes skills install LoveMaker-art/liveware-tavern/tavern-updater
-hermes skills install LoveMaker-art/liveware-tavern/model-api-manager
+hermes skills tap add LoveMaker-art/noras-tavern
+hermes skills install LoveMaker-art/noras-tavern/tavern
+hermes skills install LoveMaker-art/noras-tavern/tavern-world
+hermes skills install LoveMaker-art/noras-tavern/tavern-story-profile
+hermes skills install LoveMaker-art/noras-tavern/tavern-continuity
+hermes skills install LoveMaker-art/noras-tavern/tavern-ops
+hermes skills install LoveMaker-art/noras-tavern/tavern-world-visuals
+hermes skills install LoveMaker-art/noras-tavern/tavern-updater
+hermes skills install LoveMaker-art/noras-tavern/model-api-manager
 ```
 
 技能安装后会进入当前 `$HERMES_HOME/skills/<category>/`。使用 `hermes skills update`

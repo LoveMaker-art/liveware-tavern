@@ -1,6 +1,6 @@
 <div align="center">
 
-# Tavern
+# Nora's Tavern
 
 ### 为多角色 AI 故事保留一个真正持续生长的世界
 
@@ -8,7 +8,7 @@
 
 [English](README.md) · [快速开始](#快速开始) · [接入 Hermes](#接入-hermes-agent) · [文档导航](#文档导航)
 
-[![最新版本](https://img.shields.io/github/v/release/LoveMaker-art/liveware-tavern?display_name=tag&sort=semver)](https://github.com/LoveMaker-art/liveware-tavern/releases/latest)
+[![最新版本](https://img.shields.io/github/v/release/LoveMaker-art/noras-tavern?display_name=tag&sort=semver)](https://github.com/LoveMaker-art/noras-tavern/releases/latest)
 [![许可证：AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-8b5cf6.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![Hermes 技能](https://img.shields.io/badge/Hermes-custom%20tap-111827.svg)](docs/hermes.md)
@@ -17,7 +17,7 @@
 
 ![Tavern 桌面端界面](docs/images/tavern-desktop.jpg)
 
-Tavern 保存普通聊天界面最容易丢失的部分：世界、登场角色、你的角色、触发设定、人物变化，以及经过压缩整理的剧情账本。前端只专注于当下这一幕，连续性由背后的状态系统维护。
+Nora's Tavern 保存普通聊天界面最容易丢失的部分：世界、登场角色、你的角色、触发设定、人物变化，以及经过压缩整理的剧情账本。前端只专注于当下这一幕，连续性由背后的状态系统维护。
 
 ## 核心能力
 
@@ -52,8 +52,8 @@ Tavern 不依赖 Liveware 才能运行。Liveware 只是 ClawChat 中的可选�
 需要 Python 3.10+，以及一个兼容 OpenAI Chat Completions 的模型接口。
 
 ```bash
-git clone https://github.com/LoveMaker-art/liveware-tavern.git
-cd liveware-tavern
+git clone https://github.com/LoveMaker-art/noras-tavern.git
+cd noras-tavern
 
 python3 -m venv .venv
 . .venv/bin/activate
@@ -76,7 +76,7 @@ python3 app/backend/server.py --port 8799
 已经安装 Hermes 时，可使用经过校验的 Bootstrap 安装或更新 Tavern 应用、完整技能和受管理的 Hermes 集成文件：
 
 ```bash
-curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
+curl -fsSL https://github.com/LoveMaker-art/noras-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
 更新器会检查发布清单与兼容性、创建回滚材料、应用受管理文件，并在完成后执行健康检查。世界、角色卡、故事、模型配置、身份与上传素材都不在覆盖范围内。
@@ -139,6 +139,6 @@ python3 scripts/build_release.py
 
 ## 开源协议
 
-Tavern 采用 [GNU AGPL-3.0-only](LICENSE)。通过网络提供修改后的版本时，需要按 AGPL 第 13 条向用户提供对应源码。
+Nora's Tavern 采用 [GNU AGPL-3.0-only](LICENSE)。通过网络提供修改后的版本时，需要按 AGPL 第 13 条向用户提供对应源码。
 
 `v1.18.1` 及更早版本仍按当时随版本附带的 MIT License 发布。

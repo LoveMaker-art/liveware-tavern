@@ -1,6 +1,6 @@
-# Contributing to Tavern
+# Contributing to Nora's Tavern
 
-Thank you for helping improve Tavern. This project treats the web application, Hermes integration, updater, and user state as separate ownership boundaries. Changes should preserve those boundaries.
+Thank you for helping improve Nora's Tavern. This project treats the web application, Hermes integration, updater, and user state as separate ownership boundaries. Changes should preserve those boundaries.
 
 ## Before You Start
 
@@ -11,8 +11,8 @@ Thank you for helping improve Tavern. This project treats the web application, H
 ## Local Development
 
 ```bash
-git clone https://github.com/LoveMaker-art/liveware-tavern.git
-cd liveware-tavern
+git clone https://github.com/LoveMaker-art/noras-tavern.git
+cd noras-tavern
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt

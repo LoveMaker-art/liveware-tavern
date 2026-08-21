@@ -75,7 +75,7 @@ class UpdaterMergeTests(unittest.TestCase):
             release = UPDATER.release_from_download()
 
         request.assert_called_once_with(
-            "https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/manifest.json"
+            "https://github.com/LoveMaker-art/noras-tavern/releases/latest/download/manifest.json"
         )
         self.assertEqual(release["tag"], "v1.23.10")
         self.assertNotIn("api.github.com", " ".join(release["assets"].values()))

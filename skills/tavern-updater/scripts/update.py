@@ -20,7 +20,7 @@ import time
 import urllib.request
 import uuid
 
-REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/liveware-tavern")
+REPO = os.environ.get("TAVERN_UPDATE_REPO", "LoveMaker-art/noras-tavern")
 API_OVERRIDE = os.environ.get("TAVERN_UPDATE_API")
 TAG_API_OVERRIDE = os.environ.get("TAVERN_UPDATE_TAG_API")
 API = API_OVERRIDE or f"https://api.github.com/repos/{REPO}/releases/latest"
