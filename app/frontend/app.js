@@ -3,7 +3,8 @@ const $ = (s) => document.querySelector(s);
 const t = I18N.t;  // 文案一律走 i18n.js 的 STRINGS(locale contract,liveware-frontend §i18n)
 const state = { cards: [], libraryCards: [], cardMap: {}, worldbooks: {}, libraryWorldbooks: [], productions: [], activeId: null, active: null,
   agentUserId: "", models: null, tts: null, busy: false, pendingSend: null, stick: true, _anchor: null,
-  persona: {}, _foldChar: true, _foldLore: true, _editPersona: false, _editCast: false, _editLore: false };
+  persona: {}, _foldChar: true, _foldLore: true, _editPersona: false, _editCast: false, _editLore: false,
+  _externalCastImporting: false };
 const { escapeHtml: esc, element: el } = TavernUI;
 
 function fmt(s) {
@@ -144,6 +145,8 @@ const SLIDERS_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"
 const SPEAKER_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>';
 const USER_PLUS_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19a6 6 0 0 0-12 0"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/></svg>';
 const UPLOAD_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4M3 15v4a2 2 0 0 0 2 2"/></svg>';
+const EXTERNAL_CARD_MAX_PNG_BYTES = 5 * 1024 * 1024;
+const EXTERNAL_CARD_MAX_JSON_BYTES = 2 * 1024 * 1024;
 const CLAWCHAT_OFFICIAL_DEVELOPER_ID = "usr_01KPSPHRDQF9HARGBKBDCF5X6H";
 const PAUSE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
 const speechState = { audio: null, button: null, url: "", controller: null };
@@ -760,7 +763,7 @@ function renderPanel() {
         ${castHtml}
         ${state._editCast ? `<div class="castActions">
           <button class="actorMore" id="addCast">${PLUS_SVG}${esc(t("addCast"))}</button>
-          <button class="actorMore" id="importExternalCast">${UPLOAD_SVG}${esc(t("castFromExternal"))}</button>
+          <button class="actorMore" id="importExternalCast" ${state._externalCastImporting ? "disabled" : ""}>${UPLOAD_SVG}${esc(t(state._externalCastImporting ? "parsingCard" : "castFromExternal"))}</button>
         </div>` : ""}
       </div></div>`;
     const lore = [];
@@ -772,8 +775,11 @@ function renderPanel() {
     const alwaysLore = lore.filter((e) => e.constant || !(Array.isArray(e.keys) && e.keys.filter(Boolean).length));
     const namedLore = lore.filter((e) => !e.constant && Array.isArray(e.keys) && e.keys.filter(Boolean).length);
     const renderLoreItems = (items, showLabel) => items.length ? items.map((e) => `<div class="loreItem loreSummaryItem" data-lore-detail="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" role="button" tabindex="0">
-          ${showLabel || state._editLore ? `<div class="loreTop">${showLabel ? `<span class="lk">${esc(loreLabel(e))}</span>` : `<span></span>`}${state._editLore ? `<span class="itemActions"><button class="itemEdit" data-lore-edit="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" aria-label="${esc(t("editLore"))}" title="${esc(t("editLore"))}">${PENCIL_SVG}</button><button class="loreDel" data-lore-del="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" aria-label="${esc(t("delete"))}" title="${esc(t("delete"))}">${TRASH_SVG}</button></span>` : ""}</div>` : ""}
-          <div class="loreText2">${esc(loreSummary(e))}</div>
+          <div class="loreSummaryLine">
+            ${showLabel ? `<span class="lk">${esc(loreLabel(e))}</span>` : ""}
+            <span class="loreText2">${esc(loreSummary(e))}</span>
+            ${state._editLore ? `<span class="itemActions"><button class="itemEdit" data-lore-edit="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" aria-label="${esc(t("editLore"))}" title="${esc(t("editLore"))}">${PENCIL_SVG}</button><button class="loreDel" data-lore-del="1" data-wid="${esc(e._worldbookId || "")}" data-entry-id="${esc(e.id || "")}" data-entry-index="${e._entryIndex}" aria-label="${esc(t("delete"))}" title="${esc(t("delete"))}">${TRASH_SVG}</button></span>` : ""}
+          </div>
         </div>`).join("") : `<p class="pmuted">${esc(t("pNone"))}</p>`;
     const loreFold = state._foldLore ? " folded" : "";
     const loreSec = `<div class="pSection pFold">
@@ -1496,24 +1502,41 @@ async function importCardJson(raw) {
 }
 
 async function importExternalCast(file) {
-  if (!file || !state.active) return;
+  if (!file || !state.active || state._externalCastImporting) return;
   const isPng = /\.png$/i.test(file.name || "") || file.type === "image/png";
   const isJson = /\.json$/i.test(file.name || "") || file.type === "application/json";
   if (!isPng && !isJson) { toast(t("dropWrongType")); return; }
+  const maxBytes = isPng ? EXTERNAL_CARD_MAX_PNG_BYTES : EXTERNAL_CARD_MAX_JSON_BYTES;
+  if (file.size > maxBytes) { toast(t("externalCardTooLarge", { mb: Math.floor(maxBytes / 1024 / 1024) })); return; }
+  const productionId = state.active.id;
+  state._externalCastImporting = true;
+  renderPanel();
   toast(t("parsingCard"));
   try {
     let result;
     if (isPng) {
-      result = await bridge.event({ type: "import_card", png_base64: await fileToB64(file) });
+      result = await bridge.event({ type: "import_card", png_base64: await fileToB64(file), source: "external" });
     } else {
       let card;
       try { card = JSON.parse(await file.text()); }
       catch (_) { toast(t("badCardJson")); return; }
-      result = await bridge.event({ type: "import_card_json", card });
+      result = await bridge.event({ type: "import_card_json", card, source: "external" });
+    }
+    const importedCards = [result && result.card, ...(Array.isArray(result && result.supporting_cards) ? result.supporting_cards : [])]
+      .filter((card, index, cards) => card && card.id
+        && cards.findIndex((candidate) => candidate && candidate.id === card.id) === index);
+    if (!importedCards.length) throw new Error(t("externalCardEmpty"));
+    for (const card of importedCards) {
+      await bridge.event({ type: "attach_card", production_id: productionId, card_id: card.id });
     }
     await loadAll();
-    await attachCardToActive(result.card.id);
-  } catch (e) { toast(t("importFailed", { err: e.message })); }
+    toast(t("externalCastImported", { n: importedCards.length }));
+  } catch (e) {
+    toast(t("importFailed", { err: e.message }));
+  } finally {
+    state._externalCastImporting = false;
+    renderPanel();
+  }
 }
 
 function chooseExternalCastFile() {
