@@ -1,44 +1,67 @@
 # Hermes + Tavern 部署
 
-本仓库的 Agent 集成以 Hermes `/opt/data` 布局为准。安装完成后：
+Tavern 使用 Hermes 官方的技能目录规则：`$HERMES_HOME/skills/` 是已安装技能的唯一来源。
+没有设置 `HERMES_HOME` 时，Hermes 默认使用 `~/.hermes`；使用 profile 时应让 Hermes
+提供对应的 `HERMES_HOME`，不要把路径写死为 `~/.hermes` 或 `/opt/data`。
 
-```text
-/opt/data/apps/tavern-runtime/          核心运行时
-/opt/data/tavern-state/                 用户和实例数据
-/opt/data/skills/creative/tavern*/      创意技能
-/opt/data/skills/system/tavern-updater/ 更新技能
-/opt/data/skills/system/model-api-manager/ 模型 API 管理技能
-/opt/data/AGENTS.md                     Tavern 路由说明
-/opt/data/SOUL.md                       Agent 人格与相处方式
-```
+## 两种安装方式
 
-首次从源码部署 Agent 时，可将模板复制为实例人格文件：
+### 完整安装
 
-```sh
-install -m 600 integrations/hermes/SOUL.md /opt/data/SOUL.md
-```
-
-仓库模板提供诺拉的默认人格。部署后 `/opt/data/SOUL.md` 归实例所有，不属于 Tavern
-代码发布；更新器不会覆盖用户后续调整的名字、人格或相处方式。
-
-## 推荐安装与更新
+需要同时安装 Tavern Web 应用、全部技能和更新器时，运行经过清单校验的 Bootstrap：
 
 ```sh
 curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/download/install-tavern-updater.sh | sh -s -- --apply --confirm
 ```
 
-这个命令先更新并验证更新器，再完成兼容性审查。只有无冲突且校验通过的文件才会进入
-应用阶段；启动或健康检查失败时会回滚受管理文件。
+它会以 `$HERMES_HOME` 为数据根目录；若未设置，则使用 Hermes 默认的 `~/.hermes`。
+旧 ClawChat 容器只有在真实存在 `/opt/data/skills` 时才会自动进入兼容模式。
 
-更新边界：
+默认安装结果：
 
-- 会更新发布清单中的后端、前端、Tavern 创意技能、系统技能、更新技能与受管理的 `AGENTS.md`。
-- 不会覆盖 `/opt/data/tavern-state`、模型密钥、ClawChat 会话、用户世界和自定义技能。
-- 不应使用 `git pull` 直接覆盖正在运行的 `/opt/data/apps/tavern-runtime`。
+```text
+$HERMES_HOME/apps/tavern-runtime/             Tavern 运行时
+$HERMES_HOME/tavern-state/                    用户和实例数据
+$HERMES_HOME/skills/creative/tavern*/         创意技能
+$HERMES_HOME/skills/system/tavern-updater/    更新技能
+$HERMES_HOME/skills/system/model-api-manager/ 模型 API 管理技能
+```
+
+Bootstrap 会先下载 manifest、验证归档和逐文件哈希，再审查当前基线与新版本的兼容性。
+只有无冲突的计划才会应用；健康检查失败时回滚受管理文件。用户世界、角色、故事、密钥、
+素材、`SOUL.md` 和其他自定义技能均不在覆盖范围内。
+
+### 只安装技能
+
+Tavern 已在本机或其他位置运行，只需要让 Hermes 控制它时，可使用官方 Custom Tap：
+
+```sh
+hermes skills tap add LoveMaker-art/liveware-tavern
+hermes skills install LoveMaker-art/liveware-tavern/tavern
+hermes skills install LoveMaker-art/liveware-tavern/tavern-world
+hermes skills install LoveMaker-art/liveware-tavern/tavern-story-profile
+hermes skills install LoveMaker-art/liveware-tavern/tavern-continuity
+hermes skills install LoveMaker-art/liveware-tavern/tavern-ops
+hermes skills install LoveMaker-art/liveware-tavern/tavern-world-visuals
+hermes skills install LoveMaker-art/liveware-tavern/tavern-updater
+hermes skills install LoveMaker-art/liveware-tavern/model-api-manager
+```
+
+技能安装后会进入当前 `$HERMES_HOME/skills/<category>/`。使用 `hermes skills update`
+更新 Tap 技能；新会话自动加载，当前会话需要立即生效时按 Hermes 的提示使用 `--now`
+或重新开始会话。
+
+若 Tavern 不在默认位置，给运行环境设置：
+
+```sh
+export TAVERN_APP_DIR=/absolute/path/to/tavern/app
+export TAVERN_STATE_DIR=/absolute/path/to/tavern-state
+export TAVERN_CONSOLE=http://127.0.0.1:8799
+```
 
 ## Hermes 如何驱动 Tavern
 
-`integrations/hermes/skills/creative/tavern/SKILL.md` 是路由器，只负责把请求交给一个专业技能：
+`tavern` 是轻量路由技能，只把请求交给一个专业工作流：
 
 | 技能 | 职责 |
 | --- | --- |
@@ -50,29 +73,37 @@ curl -fsSL https://github.com/LoveMaker-art/liveware-tavern/releases/latest/down
 | `tavern-updater` | 版本审查、安装和回滚 |
 | `model-api-manager` | 区分 Agent 与 Tavern 配置域，验证并接入模型 API |
 
-技能通过唯一共享 CLI 执行结构化操作：
+技能不直接修改生产 JSON。它们调用同包安装的结构化 CLI，CLI 再调用 Tavern 本机 HTTP
+API；运行时负责校验和数据一致性。标准入口为：
 
 ```sh
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py doctor --json
+python3 "$HERMES_HOME/skills/creative/tavern/scripts/tavern_cli.py" doctor --json
 ```
 
-核心运行时仍通过本机 HTTP API 读写状态。技能负责理解用户意图、选择安全命令、确认写入
-并验证结果；CLI 负责稳定参数与机器可读返回；运行时负责实际数据一致性。
+如果只运行独立 Tavern，`tavern-ops` 中的 `runtime.sh` 可启动、停止和检查服务：
 
-## ClawChat / Liveware
+```sh
+sh "$HERMES_HOME/skills/creative/tavern/scripts/runtime.sh" restart
+```
 
-源码位于 `integrations/clawchat/` 的 `tavern-liveware-register` Hook 在 Gateway 启动时调用：
+## 可选的人格与 ClawChat 适配
 
-1. `provision.sh` 创建或复用 Tavern 和 Story Profile 应用并完成注册。
-2. `bringup.sh` 启动运行时、绑定 tunnel 并恢复入口。
+`integrations/hermes/SOUL.md` 是首次部署的人格模板，不是技能依赖，也不会由更新器覆盖。
+需要使用它时再复制到当前 profile：
 
-这两个脚本只适用于已安装 ClawChat 插件和 Liveware 二进制的 Hermes 实例。独立部署不需要它们。
+```sh
+install -m 600 integrations/hermes/SOUL.md "$HERMES_HOME/SOUL.md"
+```
+
+ClawChat Hook、Liveware 注册和恢复脚本随 `tavern` 技能安装，但只有检测到相应插件和
+Liveware 二进制时才使用。普通 Hermes 或独立 Tavern 不会触发这条链路。
 
 ## 验证
 
 ```sh
-python3 /opt/data/skills/creative/tavern/scripts/tavern_cli.py doctor --json
+hermes skills list
+python3 "$HERMES_HOME/skills/creative/tavern/scripts/tavern_cli.py" doctor --json
 curl -fsS http://127.0.0.1:8799/api/health
 ```
 
-`doctor` 应确认运行时、技能版本和路由能力；健康接口应返回 `"ok": true`。
+`doctor` 应确认 API、技能和实例路径；健康接口应返回 `"ok": true`。

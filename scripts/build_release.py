@@ -13,14 +13,11 @@ BACKEND = APP / "backend"
 FRONTEND = APP / "frontend"
 ASSETS = APP / "assets"
 HERMES = ROOT / "integrations/hermes"
-CREATIVE_SKILLS = HERMES / "skills/creative"
-SYSTEM_SKILLS = HERMES / "skills/system"
+SKILLS = ROOT / "skills"
 HERMES_AGENTS = HERMES / "AGENTS.md"
-CLAWCHAT = ROOT / "integrations/clawchat"
-SHARED_TOOLS = ROOT / "tools"
 LEGACY_BASELINES = ROOT / "legacy-baselines"
-UPDATER = SYSTEM_SKILLS / "tavern-updater"
-MODEL_API_MANAGER = SYSTEM_SKILLS / "model-api-manager"
+UPDATER = SKILLS / "tavern-updater"
+MODEL_API_MANAGER = SKILLS / "model-api-manager"
 DIST = ROOT / "dist"
 STAGE = DIST / "release"
 ARCHIVE = DIST / "tavern-release.tar.gz"
@@ -43,6 +40,7 @@ BACKEND_FILES = (
     "memory_cache.py",
     "message_segments.py",
     "model_registry.py",
+    "personality_service.py",
     "production_views.py",
     "reply_format.py",
     "request_security.py",
@@ -151,15 +149,7 @@ def main():
 
     (SKILL_STAGE / "skills").mkdir(parents=True)
     for name in CREATIVE_SKILL_NAMES:
-        copy(CREATIVE_SKILLS / name, SKILL_STAGE / "skills" / name)
-    tavern_skill = SKILL_STAGE / "skills/tavern"
-    copy(SHARED_TOOLS / "tavern_cli.py", tavern_skill / "scripts/tavern_cli.py")
-    copy(CLAWCHAT / "scripts/bringup.sh", tavern_skill / "scripts/bringup.sh")
-    copy(CLAWCHAT / "scripts/provision.sh", tavern_skill / "scripts/provision.sh")
-    copy(
-        CLAWCHAT / "hooks/tavern-liveware-register",
-        tavern_skill / "hooks/tavern-liveware-register",
-    )
+        copy(SKILLS / name, SKILL_STAGE / "skills" / name)
     skill_files = {
         path.relative_to(SKILL_STAGE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(SKILL_STAGE.rglob("*"))

@@ -426,6 +426,15 @@ const I18N = (() => {
       acEntriesCount: "{n} 笔",
       acTimelineEmpty: "还没有故事记录。走几场、整理几次,这里就会慢慢长出来。",
       acFoot: "活件 · 酒馆 v{v}",
+      personalityOpen: "人格设定",
+      personalityTitle: "人格设定",
+      personalityHint: "这里决定主理人的性格、语气与相处方式。保存后，从下一条消息开始生效。",
+      personalityCancel: "取消", personalitySave: "保存",
+      personalityDiscard: "尚未保存，确定离开吗？",
+      personalityEmpty: "人格设定不能为空。", personalitySaving: "正在保存…",
+      personalitySaved: "已保存，下一条消息起生效。",
+      personalityConflict: "人格设定已在别处更新，请重新打开后再编辑。",
+      personalitySaveFailed: "保存失败：{err}",
       wan: "万",
     },
     en: {
@@ -833,6 +842,15 @@ const I18N = (() => {
       acEntriesCount: "{n} entries",
       acTimelineEmpty: "No career entries yet. Play a few scenes, run a debrief — I'll start growing.",
       acFoot: "Liveware · Tavern v{v}",
+      personalityOpen: "Personality",
+      personalityTitle: "Personality",
+      personalityHint: "Set the curator's personality, voice, and way of relating to you. Changes apply from the next message.",
+      personalityCancel: "Cancel", personalitySave: "Save",
+      personalityDiscard: "You have unsaved changes. Leave anyway?",
+      personalityEmpty: "The personality document cannot be empty.", personalitySaving: "Saving…",
+      personalitySaved: "Saved. It will apply from your next message.",
+      personalityConflict: "The personality changed elsewhere. Reopen it before editing.",
+      personalitySaveFailed: "Couldn't save: {err}",
       wan: "0k",  // 未用于 en(fmtWords 分语言),占位防回落
     },
   };
@@ -1249,6 +1267,15 @@ const I18N = (() => {
       "acEntriesCount": "{n} 筆",
       "acTimelineEmpty": "還沒有故事記錄。走幾場、整理幾次,這裡就會慢慢長出來。",
       "acFoot": "活件 · 酒館 v{v}",
+      "personalityOpen": "人格設定",
+      "personalityTitle": "人格設定",
+      "personalityHint": "這裡決定主理人的性格、語氣與相處方式。儲存後，從下一則訊息開始生效。",
+      "personalityCancel": "取消", "personalitySave": "儲存",
+      "personalityDiscard": "尚未儲存，確定離開嗎？",
+      "personalityEmpty": "人格設定不能為空。", "personalitySaving": "正在儲存…",
+      "personalitySaved": "已儲存，下一則訊息起生效。",
+      "personalityConflict": "人格設定已在別處更新，請重新開啟後再編輯。",
+      "personalitySaveFailed": "儲存失敗：{err}",
       "wan": "萬"
   };
 

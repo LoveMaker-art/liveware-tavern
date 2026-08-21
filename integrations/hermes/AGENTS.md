@@ -2,7 +2,7 @@
 
 ## Tavern
 
-Use `/opt/data/skills/creative/tavern/SKILL.md` only as the router for broad,
+Use `$HERMES_HOME/skills/creative/tavern/SKILL.md` only as the router for broad,
 ambiguous, or cross-domain Tavern requests. For a specific request, load only
 the matching specialist:
 
@@ -17,16 +17,16 @@ the matching specialist:
   Tavern Liveware.
 
 Before changing Tavern state, follow
-`/opt/data/skills/creative/tavern/references/shared-contract.md` and verify the
+`$HERMES_HOME/skills/creative/tavern/references/shared-contract.md` and verify the
 result. Preserve persistent worlds, user identity, credentials, sessions,
 assets, starter content, and custom skills unless the user explicitly requests
 that exact data change.
 
-Use `/opt/data/skills/system/tavern-updater/SKILL.md` for release checks,
+Use `$HERMES_HOME/skills/system/tavern-updater/SKILL.md` for release checks,
 review, installation, and rollback. Never improvise `git pull` or directly
 overwrite release-managed runtime, frontend, skill, or updater files.
 
-Use `/opt/data/skills/system/model-api-manager/SKILL.md` to add, test, switch,
+Use `$HERMES_HOME/skills/system/model-api-manager/SKILL.md` to add, test, switch,
 or repair model APIs for the Agent, Tavern, or both. Keep the two configuration
 scopes separate and never expose credentials in commands, logs, or replies.
 

@@ -1,7 +1,7 @@
 # 独立部署
 
-独立模式只运行 Tavern 核心 Web 应用，不要求 Hermes、ClawChat、Liveware 或
-`/opt/data` 目录。
+独立模式只运行 Tavern 核心 Web 应用，不要求 Hermes、ClawChat 或 Liveware，也不依赖
+任何 Hermes 目录布局。
 
 ## 前置条件
 

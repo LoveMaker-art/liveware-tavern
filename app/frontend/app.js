@@ -2661,7 +2661,9 @@ function wire() {
     if ((e.metaKey || e.ctrlKey) && (e.key === "i" || e.key === "I")) {
       e.preventDefault(); wrapAction(); return;
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Touch keyboards need Enter for an actual newline because they have no practical
+    // Shift+Enter path. Sending remains available through the adjacent arrow button.
+    if (e.key === "Enter" && !e.shiftKey && !isTouch()) {
       if (Date.now() - imeEndedAt < 120) return; // 刚确认候选词的那个回车(WebKit 排序),别当发送
       e.preventDefault(); submitOrStop();
     }

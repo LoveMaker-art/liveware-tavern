@@ -14,7 +14,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UPDATER = ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py"
+UPDATER = ROOT / "skills/tavern-updater/scripts/update.py"
 
 
 def sha256(path):
@@ -56,7 +56,12 @@ def extract_install(assets, data_root):
 
 
 def run_json(command, env):
-    result = subprocess.run(command, env=env, check=True, text=True, capture_output=True)
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic output"
+        raise RuntimeError(
+            f"command failed ({result.returncode}): {' '.join(command)}\n{detail}"
+        )
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     return json.loads(lines[-1])
 

@@ -18,7 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "tavern_updater_under_test",
-    ROOT / "integrations/hermes/skills/system/tavern-updater/scripts/update.py",
+    ROOT / "skills/tavern-updater/scripts/update.py",
 )
 UPDATER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPDATER)
@@ -197,11 +197,16 @@ class UpdaterMergeTests(unittest.TestCase):
         )
         self.assertEqual(
             UPDATER.runtime_files_for_version("1.23.18"),
+            UPDATER.STARTER_ASSET_RUNTIME_FILES,
+        )
+        self.assertEqual(
+            UPDATER.runtime_files_for_version("1.24.0"),
             UPDATER.RUNTIME_FILES,
         )
         self.assertIn("generation_service.py", UPDATER.RUNTIME_FILES)
         self.assertIn("qwen_audio_voices.json", UPDATER.RUNTIME_FILES)
         self.assertIn("card_preparation.py", UPDATER.RUNTIME_FILES)
+        self.assertIn("personality_service.py", UPDATER.RUNTIME_FILES)
         self.assertIn("assets/fixtures/starter/index.json", UPDATER.RUNTIME_FILES)
         self.assertFalse(
             UPDATER.STARTER_ASSET_FILES & UPDATER.CARD_PREPARATION_RUNTIME_FILES
