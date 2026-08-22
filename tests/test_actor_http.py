@@ -35,6 +35,34 @@ class ActorHttpTests(unittest.TestCase):
         self.assertEqual(controlled["thinking_mode"], False)
         self.assertNotIn("unknown", controlled)
 
+    def test_smart_reply_controls_are_strictly_whitelisted(self):
+        payload = actor._payload(
+            [],
+            0.75,
+            False,
+            request_options={
+                "reasoning_effort": "low",
+                "response_format": {"type": "json_object", "extra": "ignored"},
+                "unknown": "ignored",
+            },
+        )
+
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertNotIn("unknown", payload)
+
+        rejected = actor._payload(
+            [],
+            0.75,
+            False,
+            request_options={
+                "reasoning_effort": "none",
+                "response_format": {"type": "json_schema"},
+            },
+        )
+        self.assertNotIn("reasoning_effort", rejected)
+        self.assertNotIn("response_format", rejected)
+
     def test_content_filter_is_reported_as_upstream_rejection(self):
         response = io.BytesIO(json.dumps({
             "choices": [{"message": {"content": ""}, "finish_reason": "content_filter"}],

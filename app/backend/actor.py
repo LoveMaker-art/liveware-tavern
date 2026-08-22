@@ -829,6 +829,15 @@ def _payload(messages: list, temperature: float, stream: bool,
     options = request_options if isinstance(request_options, dict) else {}
     if isinstance(options.get("thinking_mode"), bool):
         p["thinking_mode"] = options["thinking_mode"]
+    reasoning_effort = options.get("reasoning_effort")
+    if reasoning_effort in ("low", "medium", "high"):
+        p["reasoning_effort"] = reasoning_effort
+    response_format = options.get("response_format")
+    if (
+        isinstance(response_format, dict)
+        and response_format.get("type") in ("json_object", "text")
+    ):
+        p["response_format"] = {"type": response_format["type"]}
     return p
 
 

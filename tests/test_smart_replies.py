@@ -81,17 +81,18 @@ class SmartReplyTests(unittest.TestCase):
             server._loadout = lambda _p: (_ for _ in ()).throw(
                 AssertionError("smart replies must not load cards or worldbooks")
             )
-            server._active_model = lambda: {"model": "test"}
+            server._active_model = lambda: None
 
-            def fake_chat(messages, temperature, model, max_tokens=None):
+            def fake_chat(messages, temperature, model, max_tokens=None,
+                          request_options=None):
                 calls.append(messages)
                 self.assertEqual(temperature, 0.75)
-                self.assertEqual(max_tokens, 600)
-                return (
-                    "<suggestion>回复一。</suggestion>"
-                    "<suggestion>回复二。</suggestion>"
-                    "<suggestion>回复三。</suggestion>"
-                )
+                self.assertEqual(max_tokens, 4000)
+                self.assertEqual(request_options, {
+                    "reasoning_effort": "low",
+                    "response_format": {"type": "json_object"},
+                })
+                return '{"suggestions":["回复一。","回复二。","回复三。"]}'
 
             server.actor.chat = fake_chat
             result = server.ev_suggest({
@@ -110,7 +111,84 @@ class SmartReplyTests(unittest.TestCase):
         self.assertIn("用户第2轮", prompt)
         self.assertNotIn("# 角色", prompt)
         self.assertNotIn("# 相关世界设定", prompt)
-        self.assertIn("<suggestion>", prompt)
+        self.assertIn('"suggestions"', prompt)
+        self.assertEqual(len(result["suggestions"]), 3)
+
+    def test_suggest_keeps_provider_specific_controls_off_custom_models(self):
+        production = {
+            "id": "prod_custom_model",
+            "story": [
+                {"role": "user", "text": "继续。"},
+                {"role": "char", "text": "故事继续。"},
+            ],
+            "response_language": "zh",
+            "language_mode": "manual",
+        }
+        custom_model = {
+            "model": "custom-chat",
+            "base": "https://custom.example/v1",
+            "key": "test-key",
+        }
+        original_load = server.load_production
+        original_chat = server.actor.chat
+        original_model = server._active_model
+        try:
+            server.load_production = lambda _pid: production
+            server._active_model = lambda: custom_model
+
+            def fake_chat(messages, temperature, model, max_tokens=None,
+                          request_options=None):
+                self.assertIs(model, custom_model)
+                self.assertIsNone(request_options)
+                return '{"suggestions":["回复一。","回复二。","回复三。"]}'
+
+            server.actor.chat = fake_chat
+            result = server.ev_suggest({
+                "production_id": production["id"],
+                "locale": "zh",
+            })
+        finally:
+            server.load_production = original_load
+            server.actor.chat = original_chat
+            server._active_model = original_model
+
+        self.assertEqual(len(result["suggestions"]), 3)
+
+    def test_suggest_retries_once_after_reasoning_exhausts_budget(self):
+        production = {
+            "id": "prod_retry",
+            "story": [
+                {"role": "user", "text": "继续。"},
+                {"role": "char", "text": "门外传来脚步声。"},
+            ],
+            "response_language": "zh",
+            "language_mode": "manual",
+        }
+        calls = []
+        original_load = server.load_production
+        original_chat = server.actor.chat
+        original_model = server._active_model
+        try:
+            server.load_production = lambda _pid: production
+            server._active_model = lambda: None
+
+            def fake_chat(*args, **kwargs):
+                calls.append((args, kwargs))
+                if len(calls) == 1:
+                    raise RuntimeError("模型输出达到长度上限，已拒绝保存不完整回复。")
+                return '{"suggestions":["回复一。","回复二。","回复三。"]}'
+
+            server.actor.chat = fake_chat
+            result = server.ev_suggest({
+                "production_id": production["id"],
+                "locale": "zh",
+            })
+        finally:
+            server.load_production = original_load
+            server.actor.chat = original_chat
+            server._active_model = original_model
+
+        self.assertEqual(len(calls), 2)
         self.assertEqual(len(result["suggestions"]), 3)
 
     def test_suggest_prefers_interface_language_over_manual_world_language(self):
@@ -131,13 +209,10 @@ class SmartReplyTests(unittest.TestCase):
             server.load_production = lambda _pid: production
             server._active_model = lambda: {"model": "test"}
 
-            def fake_chat(messages, temperature, model, max_tokens=None):
+            def fake_chat(messages, temperature, model, max_tokens=None,
+                          request_options=None):
                 captured.extend(messages)
-                return (
-                    "<suggestion>回复一。</suggestion>"
-                    "<suggestion>回复二。</suggestion>"
-                    "<suggestion>回复三。</suggestion>"
-                )
+                return '{"suggestions":["回复一。","回复二。","回复三。"]}'
 
             server.actor.chat = fake_chat
             server.ev_suggest({

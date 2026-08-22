@@ -2581,13 +2581,10 @@ Format rules:
 - Do not invent intimacy, shared history, physical contact, or facts that have not appeared.
 - Keep each option concise but complete, around 60–110 English words.
 - Write only the user's own actions, thoughts, or dialogue. Never write another character's speech, actions, or reaction.
-- Wrap every message in its own <suggestion>...</suggestion> block.
-- Output exactly three blocks and nothing else. Keep normal paragraph breaks inside each block.
-- Example: <suggestion>*I stop beside the stone steps and lower my voice.*
-
-「What would you like me to call you?」</suggestion>
+- Return only a JSON object with this shape: {{"suggestions":["first complete message","second complete message","third complete message"]}}.
+- The suggestions array must contain exactly three non-empty strings. Preserve normal paragraph breaks inside each string.
 """
-        system = "You generate smart reply options for a roleplay scene. Write only the user's next sendable messages, grounded in the current story, in English."
+        system = "You generate exactly three smart reply options for a roleplay scene. Write only three alternative messages the user could send next, grounded in the current story, in English."
     else:
         prompt = f"""# 最近五轮对话
 {ctx or '（暂无对话）'}
@@ -2605,23 +2602,46 @@ Format rules:
 - 不要假定未出现的亲密关系、共同过去、身体接触或剧情事实。
 - 每条控制在 80–150 个汉字，短而完整。
 - 只写用户角色自己的动作、心理或对白；不得替任何登场角色发言、行动或反应。
-- 每条回复分别放进一个 <suggestion>...</suggestion> 标签。
-- 只输出正好 3 个标签，不要输出标签以外的文字；标签内正常分段。
-- 示例：<suggestion>*我在石阶旁停下，放轻声音。*
-
-「那你希望我怎么称呼你？」</suggestion>
+- 只返回 JSON 对象，结构为 {{"suggestions":["第一条完整回复","第二条完整回复","第三条完整回复"]}}。
+- suggestions 数组必须正好包含三个非空字符串，每个字符串是一条彼此独立、内容完整的候选回复；字符串内可以正常分段。
 """
         chinese_variant = "繁體中文" if traditional else "简体中文"
-        system = f"你是角色扮演场景的智能回复建议器。你只帮用户写下一句可发送输入。必须结合当前剧情，全部使用{chinese_variant}，不要泛泛模板。"
+        system = f"你是角色扮演场景的智能回复建议器。你要生成三条彼此独立的用户下一步候选消息。必须结合当前剧情，全部使用{chinese_variant}，不要泛泛模板。"
     msgs = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
-    raw = actor.chat(
-        msgs, temperature=0.75, model=_active_model(), max_tokens=600,
+    model = _active_model()
+    supports_smart_reply_controls = model is None or (
+        model.get("model") in OFFICIAL_MODELS
+        and str(model.get("base") or "").rstrip("/")
+        == str(actor.MODEL_BASE or "").rstrip("/")
     )
-    suggestions = _parse_suggestions(raw)
-    return {"suggestions": suggestions[:3]}
+    request_options = ({
+        "reasoning_effort": "low",
+        "response_format": {"type": "json_object"},
+    } if supports_smart_reply_controls else None)
+    recoverable_error = None
+    for _attempt in range(2):
+        try:
+            raw = actor.chat(
+                msgs,
+                temperature=0.75,
+                model=model,
+                max_tokens=4000,
+                request_options=request_options,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            if "长度上限" not in message and "空内容" not in message:
+                raise
+            recoverable_error = exc
+            continue
+        suggestions = _parse_suggestions(raw)
+        if len(suggestions) == 3:
+            return {"suggestions": suggestions}
+        recoverable_error = RuntimeError("模型没有返回三条完整建议。")
+    raise recoverable_error or RuntimeError("智能回复生成失败。")
 
 
 def ev_swipe(ev):
